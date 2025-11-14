@@ -1,0 +1,145 @@
+# =========================================
+# PYTHON
+# =========================================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+ENV/
+env/
+.virtualenv/
+.ecomvenv
+
+# Byte-compiled / packaged
+*.so
+*.dylib
+*.dll
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+eggs/
+*.egg-info/
+.installed.cfg
+
+# =========================================
+# DJANGO
+# =========================================
+# Local settings
+settings_local.py
+local_settings.py
+
+# SQLite (just in case)
+*.sqlite3
+
+# Static & media (generated)
+staticfiles/
+static/
+media/
+
+# Django logs
+*.log
+logs/
+debug.log
+
+# =========================================
+# ENVIRONMENT VARIABLES
+# =========================================
+.env
+.env.*
+*.env
+
+
+# =========================================
+# DOCKER
+# =========================================
+# Docker files & folders that should not be committed
+docker-compose.override.yml
+docker-data/
+docker-volumes/
+.volumes/
+
+# Ignore PostgreSQL persistent volume if mapped locally
+pgdata/
+postgres-data/
+
+# Redis dump (if stored locally)
+dump.rdb
+*.rdb
+
+# =========================================
+# CELERY
+# =========================================
+celerybeat-schedule
+celerybeat.pid
+celerybeat.db
+*.pid
+
+# =========================================
+# CACHE / TEMP FILES
+# =========================================
+*.pid
+*.seed
+*.pid.lock
+
+# Django cache
+cache/
+tmp/
+temp/
+
+# =========================================
+# TEST & COVERAGE
+# =========================================
+.coverage
+coverage.xml
+htmlcov/
+*.cover
+nosetests.xml
+test_output/
+
+# pytest
+.cache/
+.pytest_cache/
+
+# =========================================
+# NGINX
+# =========================================
+nginx/*.temp
+nginx/cache/
+nginx/logs/
+nginx/error.log
+nginx/access.log
+
+# =========================================
+# EDITOR / OS JUNK
+# =========================================
+# VS Code
+.vscode/
+.code-workspace
+
+# PyCharm
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================================
+# NODE (IF USING)
+# =========================================
+node_modules/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================================
+# CLOUDINARY (nothing stored locally)
+# =========================================
+# No local media files should be committed
+uploads/
+cloudinary_backup/

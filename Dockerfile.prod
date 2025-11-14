@@ -1,0 +1,44 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# Install system dependencies required for building typical python packages
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      build-essential \
+      libpq-dev \
+      gcc \
+      netcat \
+      curl \
+      wget \
+      gettext \
+      ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy requirements & install
+COPY requirements.txt .
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# copy project
+COPY . .
+
+# create dirs for static
+RUN mkdir -p /vol/web/static
+VOLUME /vol/web/static
+
+# make entrypoint executable
+COPY deploy/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+RUN python manage.py collectstatic --noinput
+
+
+# Expose gunicorn port
+EXPOSE 8000
+
+# default entrypoint will run migrations, collectstatic and start gunicorn
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["gunicorn", "e_commerce_api.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--threads", "4", "--worker-class", "gthread"]
