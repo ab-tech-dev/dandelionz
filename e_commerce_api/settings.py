@@ -26,7 +26,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', default='localhost').split(',')
 INSTALLED_APPS = [
     'authentication',
     'store',
-    'transactions.apps.TransactionsConfig'
+    'transactions.apps.TransactionsConfig',
 
 
     'django.contrib.admin',

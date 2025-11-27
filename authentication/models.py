@@ -39,7 +39,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=150, blank=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
-    profile_picture = CloudinaryField('image')
+    profile_picture = CloudinaryField('image', null=True, blank=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.CUSTOMER)
 
     # System fields

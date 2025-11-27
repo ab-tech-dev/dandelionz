@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.permissions import AllowAny
+from rest_framework.exceptions import PermissionDenied
 from .models import Product
 from authentication.core.base_view import BaseAPIView
 from .serializers import  ProductSerializer
@@ -8,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework import generics
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter, SearchFilter
-from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample
+from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 
 from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -17,11 +18,14 @@ from django.shortcuts import get_object_or_404
 
 from .models import Product, Cart, CartItem, Favourite, Review
 from .serializers import (
-    ProductSerializer, CartSerializer, CartItemSerializer,
+    ProductSerializer, CreateProductSerializer, CartSerializer, CartItemSerializer,
     FavouriteSerializer, ReviewSerializer
 )
+
+from rest_framework import serializers
 from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
+from authentication.core.permissions import IsAdminOrVendor
 
 # ---------------------------
 # Products List & Filtering
@@ -77,6 +81,152 @@ class ProductDetailView(BaseAPIView):
         return Response(standardized_response(data=serializer.data))
 
 
+
+@extend_schema(
+    tags=["Products"],
+    description="Create a new product (authenticated users only). Vendor or admin automatically assigned as the store.",
+    request=ProductSerializer,
+    examples=[
+        OpenApiExample(
+            "Create product example",
+            summary="Add new product",
+            value={
+                "name": "Example Product",
+                "description": "Product description",
+                "price": 100.0,
+                "category": "electronics",
+                "stock": 10,
+                "image": None
+            }
+        )
+    ],
+    responses={201: CreateProductSerializer, 400: {"description": "Invalid input"}}
+)
+class CreateProductView(BaseAPIView, generics.CreateAPIView):
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
+    serializer_class = CreateProductSerializer
+
+    def perform_create(self, serializer):
+        # Get vendor object from logged-in user
+        vendor = getattr(self.request.user, 'vendor', None)
+        if not vendor:
+            raise serializers.ValidationError("You are not registered as a vendor.")
+        serializer.save(store=vendor)
+
+
+@extend_schema(
+    tags=["Products"],
+    description="Update specific fields of a product (authenticated vendor or admin only). Patchable fields: price, stock, description, category, image.",
+    parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
+    request=ProductSerializer,
+    examples=[
+        OpenApiExample(
+            "Patch product example",
+            summary="Update product stock",
+            value={"stock": 10}
+        )
+    ],
+    responses={
+        200: ProductSerializer,
+        404: {"description": "Product not found"},
+        403: {"description": "Permission denied"}
+    }
+)
+class PatchProductView(BaseAPIView, generics.UpdateAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ProductSerializer
+    lookup_field = 'slug'
+
+    def get_object(self):
+        slug = self.kwargs.get('slug')
+        product = get_object_or_404(Product, slug=slug)
+
+        # Permission check
+        user = self.request.user
+        if user.is_admin:
+            return product
+        elif user.is_vendor:
+            if hasattr(user, 'vendor_profile') and product.store == user.vendor_profile:
+                return product
+            else:
+                raise PermissionError("You cannot update a product you do not own.")
+        else:
+            raise PermissionError("You do not have permission to update this product.")
+
+    def patch(self, request, *args, **kwargs):
+        product = self.get_object()
+
+        # Only allow patching specific fields
+        allowed_fields = ['price', 'stock', 'description', 'category', 'image']
+        data = {k: v for k, v in request.data.items() if k in allowed_fields}
+
+        serializer = self.get_serializer(product, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(standardized_response(data=serializer.data, message="Product updated successfully"))
+
+
+
+
+@extend_schema(
+    tags=["store"],
+    summary="Delete a product",
+    description="Deletes a product. Only vendor-owner or admin can delete. Returns serialized result.",
+    responses={
+        200: OpenApiResponse(description="Product deleted successfully."),
+        403: OpenApiResponse(description="Not allowed to delete this product."),
+        404: OpenApiResponse(description="Product not found"),
+    },
+)
+class ProductDeleteView(generics.DestroyAPIView):
+    queryset = Product.objects.all()
+    lookup_field = "slug"
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
+
+    def delete(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Serialize before deletion
+        serialized = ProductSerializer(instance).data
+
+        # Perform vendor/admin validation + deletion
+        response = self.perform_destroy(instance)
+
+        # If perform_destroy returned an error Response, return it directly
+        if isinstance(response, Response):
+            return response
+
+        # Successful deletion
+        return Response(
+            {
+                "status": "success",
+                "message": "Product deleted successfully.",
+                "data": serialized,
+            },
+            status=status.HTTP_200_OK
+        )
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+
+        # Admin can delete anything
+        if user.is_staff or user.is_superuser:
+            instance.delete()
+            return
+
+        # Vendor must own the product — return serialized error response
+        if instance.vendor != user:
+            return Response(
+                {
+                    "status": "error",
+                    "message": "You are not allowed to delete this product.",
+                    "data": None,
+                },
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Vendor-owner can delete
+        instance.delete()
 
 
 # ======================================================
