@@ -1,6 +1,5 @@
 from rest_framework import serializers
-from .models import CustomUser, Vendor, Customer
-
+from .models import CustomUser
 
 # ------------------------------------------------------
 # BASE USER SERIALIZER
@@ -20,64 +19,6 @@ class UserBaseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['email', 'role', 'created_at', 'is_verified']
 
-
-# ------------------------------------------------------
-# VENDOR PROFILE SERIALIZER
-# ------------------------------------------------------
-class VendorProfileSerializer(serializers.ModelSerializer):
-    user = UserBaseSerializer(read_only=True)
-
-    class Meta:
-        model = Vendor
-        fields = [
-            'user',
-            'store_name',
-            'store_description',
-            'business_registration_number',
-            'address',
-            'bank_name',
-            'account_number',
-            'recipient_code',
-            'is_verified_vendor',
-        ]
-        read_only_fields = ['user']
-
-
-# ------------------------------------------------------
-# CUSTOMER PROFILE SERIALIZER
-# ------------------------------------------------------
-class CustomerProfileSerializer(serializers.ModelSerializer):
-    user = UserBaseSerializer(read_only=True)
-
-    class Meta:
-        model = Customer
-        fields = [
-            'user',
-            'shipping_address',
-            'city',
-            'country',
-            'postal_code',
-            'loyalty_points',
-        ]
-        read_only_fields = ['user']
-
-
-# ------------------------------------------------------
-# ADMIN PROFILE SERIALIZER (basic user details)
-# ------------------------------------------------------
-class AdminProfileSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id',
-            'email',
-            'full_name',
-            'phone_number',
-            'profile_picture',
-            'role',
-            'is_verified',
-            'created_at',
-        ]
 
 
 # ------------------------------------------------------
@@ -107,30 +48,6 @@ class AuthResponseSerializer(serializers.Serializer):
     message = serializers.CharField()
     data = TokenResponseSerializer(required=False)
     error = serializers.CharField(required=False)
-
-
-# ------------------------------------------------------
-# USER PROFILE SERIALIZERS
-# ------------------------------------------------------
-class UserProfileSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = [
-            'id',
-            'full_name',
-            'email',
-            'phone_number',
-            'profile_picture',
-            'role',
-            'created_at'
-        ]
-        read_only_fields = ['id', 'email', 'role', 'created_at']
-
-
-class UserProfileUpdateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomUser
-        fields = ['full_name', 'phone_number', 'profile_picture']
 
 
 # ------------------------------------------------------

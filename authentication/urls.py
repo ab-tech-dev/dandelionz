@@ -7,7 +7,6 @@ from .auth.views import (
     LogoutView
 )
 
-from .profile.views import UserProfileView
 from .verification.views import (
     VerifyEmailView,
     SendVerificationEmailView,
@@ -25,9 +24,6 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name = 'token_refresh'),
     path('token/validate/', ValidateTokenView.as_view(), name = 'validate_token'),
     path('logout/', LogoutView.as_view(), name = 'logout'),
-
-    # Profile routes
-    path('profile/', UserProfileView.as_view(), name = 'profile'),
 
     # Verification routes
     path('email-verify/', VerifyEmailView.as_view(), name='verify-email'),

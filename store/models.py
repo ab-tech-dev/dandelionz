@@ -1,5 +1,6 @@
 from django.db import models
-from authentication.models import CustomUser, Vendor
+from authentication.models import CustomUser
+from users.models import Vendor
 from django.utils.text import slugify
 from django.utils import timezone
 from cloudinary.models import CloudinaryField

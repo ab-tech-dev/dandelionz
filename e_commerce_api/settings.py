@@ -25,6 +25,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', default='localhost').split(',')
 
 INSTALLED_APPS = [
     'authentication',
+    'users',
     'store',
     'transactions.apps.TransactionsConfig',
 

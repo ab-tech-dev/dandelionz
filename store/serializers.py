@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Product, Cart, CartItem, Favourite, Review
-from authentication.models import CustomUser, Vendor
+from authentication.models import CustomUser
+from users.models import Vendor
 
 
 
