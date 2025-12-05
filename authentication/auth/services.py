@@ -154,7 +154,7 @@ class AuthenticationService:
 
             if not user:
                 #Increment failed login attempts
-                failed_attempts = cache.get(f"failed_logins:{email}") + 1
+                failed_attempts = cache.get(f"failed_logins:{email}", 0) + 1
                 cache.set(f"failed_logins:{email}", failed_attempts, timeout=1800)
 
                 # Lock account after 5 failed attempts
