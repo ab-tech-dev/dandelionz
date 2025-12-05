@@ -107,10 +107,22 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
     serializer_class = CreateProductSerializer
 
     def perform_create(self, serializer):
-        # Get vendor object from logged-in user
-        vendor = getattr(self.request.user, 'vendor', None)
-        if not vendor:
-            raise serializers.ValidationError("You are not registered as a vendor.")
+        # Extract vendor from authenticated user
+        vendor = getattr(self.request.user, "VENDOR", None)
+
+        # Check if vendor exists
+        if vendor is None:
+            raise serializers.ValidationError({
+                "detail": "You are not registered as a vendor."
+            })
+
+        # Check vendor verification status
+        if not vendor.is_verified_vendor:
+            raise serializers.ValidationError({
+                "detail": "Your vendor account is not verified. Please complete verification before adding products."
+            })
+
+        # If everything is OK, save the product under this vendor's store
         serializer.save(store=vendor)
 
 

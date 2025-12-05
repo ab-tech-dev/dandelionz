@@ -30,28 +30,6 @@ from django.db.utils import OperationalError
 import redis
 import os
 
-def healthz(request):
-    data = {"django": "ok"}
-    # DB check
-    try:
-        db_conn = connections['default']
-        db_conn.cursor()
-        data['db'] = 'ok'
-    except OperationalError:
-        data['db'] = 'error'
-
-    # Redis check
-    try:
-        r = redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://redis:6379/1"))
-        if r.ping():
-            data['redis'] = 'ok'
-        else:
-            data['redis'] = 'error'
-    except Exception:
-        data['redis'] = 'error'
-
-    status = 200 if data.get('db')=='ok' and data.get('redis')=='ok' else 500
-    return JsonResponse(data, status=status)
 
 
 
@@ -62,8 +40,6 @@ urlpatterns = [
     path('api/store/', include('store.urls')),
     path('api/user/', include('users.urls')),
     path('api/transactions/', include('transactions.urls')),
-
-    path("health/", healthz),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),

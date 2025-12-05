@@ -17,6 +17,11 @@ class UserManager(BaseUserManager):
         user.set_password(password)
         user.save(using=self._db)
         return user
+    
+    def create_business_admin(self, email, password=None, **extra_fields):
+        extra_fields.setdefault('role', CustomUser.Role.BUSINESS_ADMIN)
+        return self.create_user(email, password, **extra_fields)
+
 
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
@@ -32,8 +37,10 @@ class UserManager(BaseUserManager):
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
         ADMIN = 'ADMIN', 'Admin'
+        BUSINESS_ADMIN = 'BUSINESS_ADMIN', 'Business Admin'
         VENDOR = 'VENDOR', 'Vendor'
         CUSTOMER = 'CUSTOMER', 'Customer'
+
 
     # Core fields
     email = models.EmailField(unique=True)
@@ -61,6 +68,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     @property
     def is_admin(self):
         return self.role == self.Role.ADMIN
+    
+    @property
+    def is_business_admin(self):
+        return self.role == self.Role.BUSINESS_ADMIN
 
     @property
     def is_vendor(self):
