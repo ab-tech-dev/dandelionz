@@ -219,3 +219,16 @@ cloudinary.config(
     api_secret=os.getenv("CLOUDINARY_API_SECRET")
 )
 DEFAULT_FILE_STORAGE = os.getenv("CLOUDINARY_URL")
+
+
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT Authorization header using the Bearer scheme. Example: "Bearer {token}"'
+        }
+    },
+    'USE_SESSION_AUTH': False,
+}

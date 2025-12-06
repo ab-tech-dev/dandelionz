@@ -25,6 +25,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         operation_summary="Get Customer Profile",
         operation_description="Returns the authenticated customer's full profile data.",
         responses={200: CustomerProfileSerializer()},
+        security=[{'Bearer': []}]
     )
     def list(self, request):
         customer = self.get_customer(request)
@@ -42,6 +43,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             200: CustomerProfileSerializer(),
             400: "Invalid data format"
         },
+        security=[{'Bearer': []}]
     )
     def update(self, request):
         customer = self.get_customer(request)
@@ -59,6 +61,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         operation_description="Updates only the supplied fields.",
         request_body=CustomerProfileUpdateSerializer,
         responses={200: CustomerProfileSerializer()},
+        security=[{'Bearer': []}]
     )
     def partial_update(self, request):
         customer = self.get_customer(request)
@@ -79,6 +82,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             200: openapi.Response("Password changed successfully"),
             400: "Incorrect password"
         },
+        security=[{'Bearer': []}]
     )
     def change_password(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
@@ -130,6 +134,7 @@ class VendorViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_description="Retrieve vendor profile of the authenticated vendor.",
         responses={200: VendorProfileSerializer()},
+        security=[{'Bearer': []}]
     )
     def retrieve(self, request):
         if not request.user.is_vendor:
@@ -145,6 +150,7 @@ class VendorViewSet(viewsets.ViewSet):
         operation_description="Full vendor profile update.",
         request_body=VendorProfileSerializer,
         responses={200: VendorProfileSerializer()},
+        security=[{'Bearer': []}]
     )
     def update(self, request):
         success, data, code = ProfileService.update_profile(
@@ -159,6 +165,7 @@ class VendorViewSet(viewsets.ViewSet):
         operation_description="Partial vendor profile update.",
         request_body=VendorProfileSerializer,
         responses={200: VendorProfileSerializer()},
+        security=[{'Bearer': []}]
     )
     def partial_update(self, request):
         return self.update(request)
@@ -168,6 +175,7 @@ class VendorViewSet(viewsets.ViewSet):
         operation_description="Change vendor password.",
         request_body=ChangePasswordSerializer,
         responses={200: "Password changed successfully"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["post"])
     def change_password(self, request):
@@ -191,6 +199,7 @@ class VendorViewSet(viewsets.ViewSet):
         operation_description="Vendor adds a new product to their store.",
         request_body=ProductSerializer,
         responses={201: ProductSerializer()},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["post"])
     def add_product(self, request):
@@ -212,6 +221,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="get",
         operation_description="Vendor lists all products in their store.",
         responses={200: ProductSerializer(many=True)},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def list_products(self, request):
@@ -224,12 +234,14 @@ class VendorViewSet(viewsets.ViewSet):
         operation_description="Update an existing product.",
         request_body=ProductSerializer,
         responses={200: ProductSerializer()},
+        security=[{'Bearer': []}]
     )
     @swagger_auto_schema(
         method="patch",
         operation_description="Partial update to an existing product.",
         request_body=ProductSerializer,
         responses={200: ProductSerializer()},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["put", "patch"])
     def update_product(self, request, pk=None):
@@ -255,6 +267,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="delete",
         operation_description="Delete a product belonging to the vendor.",
         responses={200: "Product deleted"},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["delete"])
     def delete_product(self, request, pk=None):
@@ -276,6 +289,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="get",
         operation_description="Vendor orders grouped by status.",
         responses={200: "Order summary"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def orders(self, request):
@@ -305,6 +319,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="get",
         operation_description="Vendor revenue, total sold, and top products.",
         responses={200: "Analytics summary"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def analytics(self, request):
@@ -353,6 +368,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="get",
         operation_description="List vendor notifications.",
         responses={200: NotificationSerializer(many=True)},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def notifications(self, request):
@@ -401,6 +417,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Retrieve business admin profile",
         tags=["Admin Profile"],
         responses={200: AdminUserManagementSerializer()},
+        security=[{'Bearer': []}]
     )
     def retrieve(self, request):
         admin_profile = request.user.business_admin_profile
@@ -412,6 +429,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         tags=["Admin Profile"],
         request_body=ChangePasswordSerializer,
         responses={200: openapi.Response("Password changed successfully")},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["post"])
     def change_password(self, request):
@@ -434,6 +452,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Get all admin notifications",
         tags=["Notifications"],
         responses={200: NotificationSerializer(many=True)},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def notifications(self, request):
@@ -449,6 +468,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="List all vendors",
         tags=["Vendor Management"],
         responses={200: VendorProfileSerializer(many=True)},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def list_vendors(self, request):
@@ -463,6 +483,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
         ],
         responses={200: openapi.Response("Vendor approved/unapproved")},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def approve_vendor(self, request, pk=None):
@@ -481,6 +502,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="User ID", type=openapi.TYPE_INTEGER)
         ],
         responses={200: openapi.Response("User suspended or activated")},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def suspend_user(self, request, pk=None):
@@ -502,6 +524,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
         ],
         responses={200: openapi.Response("KYC verified")},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def verify_kyc(self, request, pk=None):
@@ -521,6 +544,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="List marketplace products",
         tags=["Marketplace"],
         responses={200: ProductSerializer(many=True)},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def list_products(self, request):
@@ -541,6 +565,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         tags=["Marketplace"],
         request_body=ProductSerializer,
         responses={200: ProductSerializer()},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["put", "patch"])
     def update_product(self, request, pk=None):
@@ -556,6 +581,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Get orders summary",
         tags=["Orders & Logistics"],
         responses={200: openapi.Response("Orders summary")},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def orders(self, request):
@@ -574,6 +600,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="Order ID", type=openapi.TYPE_INTEGER)
         ],
         responses={200: openapi.Response("Logistics assigned")},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def assign_logistics(self, request, pk=None):
@@ -592,6 +619,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="Order ID", type=openapi.TYPE_INTEGER)
         ],
         responses={200: openapi.Response("Refund processed")},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def process_refund(self, request, pk=None):
@@ -611,6 +639,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Get payments summary",
         tags=["Finance"],
         responses={200: "Payments summary"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def payments(self, request):
@@ -625,6 +654,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER),
         ],
         responses={200: "Payout triggered"},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["post"])
     def trigger_payout(self, request, pk=None):
@@ -638,6 +668,7 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Get settlements summary",
         tags=["Finance"],
         responses={200: "Settlement summary"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def settlements(self, request):
@@ -649,7 +680,8 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         operation_summary="Get settlements for a specific vendor",
         tags=["Finance"],
         manual_parameters=[openapi.Parameter("vendor_id", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)],
-        responses={200: "Vendor settlement details"}
+        responses={200: "Vendor settlement details"},
+        security=[{'Bearer': []}]
     )
     @action(detail=True, methods=["get"])
     def vendor_settlements(self, request, pk=None):
@@ -665,7 +697,8 @@ class BusinessAdminViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_summary="Admin sales & orders analytics",
         tags=["Analytics"],
-        responses={200: "Sales analytics"}
+        responses={200: "Sales analytics"},
+        security=[{'Bearer': []}]
     )
     @action(detail=False, methods=["get"])
     def analytics(self, request):
