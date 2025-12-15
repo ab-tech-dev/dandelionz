@@ -7,7 +7,8 @@ from django.db import transaction
 from django.core.exceptions import PermissionDenied
 from django.contrib.auth.password_validation import validate_password, ValidationError
 
-from users.models import Customer, Vendor, CustomUser, Notification
+from authentication.models import CustomUser
+from users.models import Customer, Vendor, Notification
 from users.serializers import (
     CustomerProfileSerializer,
     CustomerProfileUpdateSerializer,

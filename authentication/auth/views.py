@@ -15,14 +15,13 @@ from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
 from .services import AuthenticationService
 from drf_yasg.utils import swagger_auto_schema
-from authentication.serializers import UserRegistrationSerializer, UserLoginSerializer
-from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 from authentication.serializers import (
-    UserRegistrationSerializer, 
-    UserLoginSerializer, 
+    UserRegistrationSerializer,
+    UserLoginSerializer,
     AuthResponseSerializer
 )
-from drf_yasg import openapi
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,7 +33,6 @@ class UserRegistrationView(BaseAPIView):
         request_body=UserRegistrationSerializer,
         responses={201: AuthResponseSerializer, 400: AuthResponseSerializer}
     )
-    
     def post(self, request):
         try:
             email = request.data.get('email')
@@ -68,7 +66,6 @@ class UserRegistrationView(BaseAPIView):
 
                 if refresh_token and refresh_expires_in:
                     try:
-                        # Ensure numeric expiry value
                         refresh_expires_in = float(refresh_expires_in)
                         expires = timezone.now() + timedelta(seconds=refresh_expires_in)
                         response.set_cookie(
@@ -84,7 +81,6 @@ class UserRegistrationView(BaseAPIView):
                     except Exception as e:
                         logger.warning(f"Failed to set JWT cookie: {e}")
 
-            # Set CSRF token
             if success:
                 get_token(request)
 
@@ -107,7 +103,6 @@ class UserLoginView(BaseAPIView):
         request_body=UserLoginSerializer,
         responses={200: AuthResponseSerializer, 400: AuthResponseSerializer}
     )
-    
     def post(self, request):
         try:
             email = request.data.get('email')
@@ -162,7 +157,6 @@ class TokenRefreshView(BaseAPIView):
     permission_classes = [AllowAny]
     throttle_classes = [AnonRateThrottle]
 
-
     @swagger_auto_schema(
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
@@ -170,7 +164,6 @@ class TokenRefreshView(BaseAPIView):
         ),
         responses={200: AuthResponseSerializer, 400: AuthResponseSerializer}
     )
-
     def post(self, request):
         try:
             refresh_token = request.data.get('refresh_token')
@@ -219,11 +212,9 @@ class TokenRefreshView(BaseAPIView):
 class ValidateTokenView(BaseAPIView):
     permission_classes = [IsAuthenticated]
 
-
     @swagger_auto_schema(
         responses={200: AuthResponseSerializer, 400: AuthResponseSerializer, 401: AuthResponseSerializer}
     )
-
     def get(self, request):
         user = request.user
         auth_header = request.META.get('HTTP_AUTHORIZATION', '')
@@ -241,7 +232,7 @@ class ValidateTokenView(BaseAPIView):
 
 class LogoutView(BaseAPIView):
     permission_classes = [IsAuthenticated]
-    
+
     @swagger_auto_schema(
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
@@ -249,7 +240,6 @@ class LogoutView(BaseAPIView):
         ),
         responses={200: AuthResponseSerializer, 500: AuthResponseSerializer}
     )
-
     def post(self, request):
         try:
             user = request.user

@@ -1,13 +1,12 @@
 from django.db import models
 from django.conf import settings
-from authentication.models import CustomUser
 from django.utils import timezone
 
 User = settings.AUTH_USER_MODEL
 
 class Vendor(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="vendor_profile")
-    store_name = models.CharField(max_length=150)
+    store_name = models.CharField(max_length=150, default="Unnamed Store")
     store_description = models.TextField(blank=True)
     business_registration_number = models.CharField(max_length=50, blank=True)
     address = models.CharField(max_length=255, blank=True)
@@ -15,6 +14,7 @@ class Vendor(models.Model):
     account_number = models.CharField(max_length=20, blank=True)
     recipient_code = models.CharField(max_length=100, blank=True)
     is_verified_vendor = models.BooleanField(default=False)
+
 
 class Customer(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="customer_profile")
@@ -34,12 +34,14 @@ class BusinessAdmin(models.Model):
 
     def __str__(self):
         return self.user.full_name
+    
+    
 
 
 
 
 class Notification(models.Model):
-    recipient = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='notifications')
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
     message = models.TextField()
     is_read = models.BooleanField(default=False)

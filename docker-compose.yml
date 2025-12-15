@@ -35,15 +35,15 @@ services:
     build: .
     command: >
       sh -c "
-      python manage.py makemigrations authentication store transactions &&
+      python manage.py makemigrations authentication store transactions users &&
       python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
       python manage.py check &&
       python manage.py runserver 0.0.0.0:8000
       "
     environment:
       - REDIS_URL=redis://redis:6379/1
-    volumes:
-      - .:/app
+
     ports:
       - "8000:8000"
     depends_on:
