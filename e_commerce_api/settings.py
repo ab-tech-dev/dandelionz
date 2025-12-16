@@ -16,11 +16,15 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 
+
+REFERRAL_BONUS_AMOUNT = os.getenv('REFERRAL_BONUS_AMOUNT')  # Could be Naira, points, etc.
+
+
 # Application definition
 INSTALLED_APPS = [
     # Local apps
     'authentication',
-    'users',
+    'users.apps.UsersConfig',
     'store',
     'transactions.apps.TransactionsConfig',
 

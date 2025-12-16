@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
 from django.utils import timezone
 from cloudinary.models import CloudinaryField
+import uuid
 
 
 # =====================================================
@@ -17,22 +18,28 @@ class UserManager(BaseUserManager):
         user.set_password(password)
         user.save(using=self._db)
         return user
-    
+
     def create_business_admin(self, email, password=None, **extra_fields):
         extra_fields.setdefault('role', CustomUser.Role.BUSINESS_ADMIN)
         return self.create_user(email, password, **extra_fields)
-
 
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('role', CustomUser.Role.ADMIN)
-
         return self.create_user(email, password, **extra_fields)
 
 
+def generate_unique_referral_code():
+    from authentication.models import CustomUser
+    while True:
+        code = uuid.uuid4().hex[:12].upper()
+        if not CustomUser.objects.filter(referral_code=code).exists():
+            return code
+
+
 # =====================================================
-# USER MODEL
+# CUSTOM USER MODEL
 # =====================================================
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     class Role(models.TextChoices):
@@ -41,6 +48,8 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         VENDOR = 'VENDOR', 'Vendor'
         CUSTOMER = 'CUSTOMER', 'Customer'
 
+    # Primary key as UUID
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
 
     # Core fields
     email = models.EmailField(unique=True)
@@ -48,6 +57,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     profile_picture = CloudinaryField('image', null=True, blank=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.CUSTOMER)
+    referral_code = models.CharField(max_length=12, unique=True, default=generate_unique_referral_code)
 
     # System fields
     is_verified = models.BooleanField(default=False)
@@ -68,7 +78,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     @property
     def is_admin(self):
         return self.role == self.Role.ADMIN
-    
+
     @property
     def is_business_admin(self):
         return self.role == self.Role.BUSINESS_ADMIN
@@ -82,3 +92,20 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         return self.role == self.Role.CUSTOMER
 
 
+# =====================================================
+# REFERRAL MODEL (normal integer PK)
+# =====================================================
+class Referral(models.Model):
+    referrer = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='referrals_made'
+    )
+    referred_user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='referrals_received'
+    )
+    bonus_awarded = models.BooleanField(default=False)
+    bonus_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    created_at = models.DateTimeField(default=timezone.now)

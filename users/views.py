@@ -20,7 +20,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         """
         Returns a guaranteed customer profile or None if role is invalid.
         """
-        return ProfileResolver.get_customer(request.user)
+        return ProfileResolver.resolve(request.user)
 
     # -----------------------------
     # GET /api/customer/profile/
@@ -151,7 +151,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 
+from decimal import Decimal
 from users.models import Vendor, Notification
+from transactions.models import Wallet, TransactionLog, Refund
 from users.serializers import (
     VendorProfileSerializer,
     ChangePasswordSerializer,
@@ -174,7 +176,7 @@ class VendorViewSet(viewsets.ViewSet):
         """
         Returns a guaranteed vendor profile or None if role is invalid.
         """
-        return ProfileResolver.get_vendor(request.user)
+        return ProfileResolver.resolve(request.user)
 
     # ============================
     # PROFILE
@@ -508,45 +510,49 @@ class VendorViewSet(viewsets.ViewSet):
         return Response({"success": True, "data": serializer.data})
 
 
-from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
+import uuid
+from decimal import Decimal
+from django.db import transaction
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
-
-from users.models import Vendor, Customer, BusinessAdmin, Notification
-from store.models import Product
-from transactions.models import Order, Payment
-from store.serializers import ProductSerializer
-from users.serializers import (
+from drf_yasg.utils import swagger_auto_schema
+from users.services.profile_resolver import ProfileResolver
+from .serializers import (
     AdminUserManagementSerializer,
     ChangePasswordSerializer,
     VendorProfileSerializer,
     NotificationSerializer,
+    ProductSerializer,
+    PaymentSerializer,
 )
-from users.services.services import AdminService
-
+from .services import ProfileService, AdminService
+from users.models import Vendor, Customer, Wallet
+from transactions.models import Order, Refund
+from transactions.models import Payment, TransactionLog
+from users.models import Notification
+from store.models import Product
 from django.db import models
-import logging
-
-logger = logging.getLogger(__name__)
-from transactions.serializers import PaymentSerializer
 
 class BusinessAdminViewSet(viewsets.ViewSet):
     permission_classes = [IsAuthenticated]
 
+    # ================= UTILITIES =================
     def get_admin(self, request):
-        """
-        Returns the authenticated business admin user if role is BUSINESS_ADMIN.
-        """
-        from users.services.profile_resolver import ProfileResolver
+        """Return authenticated business admin user."""
         return ProfileResolver.get_admin(request.user)
 
-    # ===============================================================
-    # PROFILE
-    # ===============================================================
+    def get_vendor_by_uuid(self, vendor_uuid):
+        try:
+            return Vendor.objects.filter(uuid=vendor_uuid, is_active=True).first()
+        except ValueError:
+            return None
 
+    def get_user_by_uuid(self, user_uuid):
+        return Vendor.objects.filter(uuid=user_uuid).first() or Customer.objects.filter(uuid=user_uuid).first()
+
+    # ================= PROFILE =================
     @swagger_auto_schema(
         operation_summary="Retrieve business admin profile",
         tags=["Admin Profile"],
@@ -556,12 +562,8 @@ class BusinessAdminViewSet(viewsets.ViewSet):
     def retrieve(self, request):
         admin = self.get_admin(request)
         if not admin:
-            return Response(
-                {"success": False, "message": "You are not a business admin"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
-        serializer = AdminUserManagementSerializer(admin)
+            return Response({"success": False, "message": "You are not a business admin"}, status=403)
+        serializer = AdminUserManagementSerializer(request.user)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
@@ -575,29 +577,18 @@ class BusinessAdminViewSet(viewsets.ViewSet):
     def change_password(self, request):
         admin = self.get_admin(request)
         if not admin:
-            return Response(
-                {"success": False, "message": "Access denied"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+            return Response({"success": False, "message": "Access denied"}, status=403)
 
         serializer = ChangePasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         result = ProfileService.process_password_change(
             admin,
             serializer.validated_data["current_password"],
             serializer.validated_data["new_password"],
         )
+        return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
 
-        return Response(
-            result,
-            status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST,
-        )
-
-    # ===============================================================
-    # NOTIFICATIONS
-    # ===============================================================
-
+    # ================= NOTIFICATIONS =================
     @swagger_auto_schema(
         operation_summary="Get all admin notifications",
         tags=["Notifications"],
@@ -609,17 +600,11 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        notifications = Notification.objects.filter(
-            recipient=admin
-        ).order_by("-created_at")
+        notifications = Notification.objects.filter(recipient=admin).order_by("-created_at")
         serializer = NotificationSerializer(notifications, many=True)
         return Response({"success": True, "data": serializer.data})
 
-    # ===============================================================
-    # VENDOR MANAGEMENT
-    # ===============================================================
-
+    # ================= VENDOR MANAGEMENT =================
     @swagger_auto_schema(
         operation_summary="List all vendors",
         tags=["Vendor Management"],
@@ -631,91 +616,70 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        vendors = Vendor.objects.all()
+        vendors = Vendor.objects.filter(is_active=True)
         serializer = VendorProfileSerializer(vendors, many=True)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
         operation_summary="Approve or un-approve vendor",
         tags=["Vendor Management"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("vendor_uuid", openapi.IN_PATH, description="Vendor UUID", type=openapi.TYPE_STRING)],
         responses={200: openapi.Response("Vendor approved/unapproved")},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def approve_vendor(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='approve_vendor/(?P<vendor_uuid>[^/.]+)')
+    def approve_vendor(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        try:
-            vendor = Vendor.objects.get(pk=pk)
+        vendor = self.get_vendor_by_uuid(vendor_uuid)
+        if not vendor:
+            return Response({"success": False, "message": "Vendor not found"}, status=404)
+        with transaction.atomic():
             vendor.is_verified_vendor = not vendor.is_verified_vendor
             vendor.save()
-            return Response({
-                "success": True,
-                "message": f"Vendor {'approved' if vendor.is_verified_vendor else 'unapproved'}"
-            })
-        except Vendor.DoesNotExist:
-            return Response({"success": False, "message": "Vendor not found"}, status=404)
+        return Response({"success": True, "message": f"Vendor {'approved' if vendor.is_verified_vendor else 'unapproved'}"})
 
     @swagger_auto_schema(
         operation_summary="Suspend or activate user (vendor or customer)",
         tags=["Vendor Management"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="User ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("user_uuid", openapi.IN_PATH, description="User UUID", type=openapi.TYPE_STRING)],
         responses={200: openapi.Response("User suspended or activated")},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def suspend_user(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='suspend_user/(?P<user_uuid>[^/.]+)')
+    def suspend_user(self, request, user_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        user_obj = Vendor.objects.filter(pk=pk).first() or Customer.objects.filter(pk=pk).first()
+        user_obj = self.get_user_by_uuid(user_uuid)
         if not user_obj:
             return Response({"success": False, "message": "User not found"}, status=404)
-
         user_obj.user.is_active = not user_obj.user.is_active
         user_obj.user.save()
-
-        return Response({
-            "success": True,
-            "message": f"User {'suspended' if not user_obj.user.is_active else 'activated'}"
-        })
+        return Response({"success": True, "message": f"User {'suspended' if not user_obj.user.is_active else 'activated'}"})
 
     @swagger_auto_schema(
         operation_summary="Verify vendor KYC",
         tags=["Vendor Management"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("vendor_uuid", openapi.IN_PATH, description="Vendor UUID", type=openapi.TYPE_STRING)],
         responses={200: openapi.Response("KYC verified")},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def verify_kyc(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='verify_kyc/(?P<vendor_uuid>[^/.]+)')
+    def verify_kyc(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        try:
-            vendor = Vendor.objects.get(pk=pk)
+        vendor = self.get_vendor_by_uuid(vendor_uuid)
+        if not vendor:
+            return Response({"success": False, "message": "Vendor not found"}, status=404)
+        with transaction.atomic():
             vendor.is_verified_vendor = True
             vendor.save()
-            return Response({"success": True, "message": "Vendor KYC verified"})
-        except Vendor.DoesNotExist:
-            return Response({"success": False, "message": "Vendor not found"}, status=404)
+        return Response({"success": True, "message": "Vendor KYC verified"})
 
-    # ===============================================================
-    # MARKETPLACE MANAGEMENT
-    # ===============================================================
-
+    # ================= MARKETPLACE MANAGEMENT =================
     @swagger_auto_schema(
         operation_summary="List marketplace products",
         tags=["Marketplace"],
@@ -727,7 +691,6 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
         products = Product.objects.all()
         serializer = ProductSerializer(products, many=True)
         return Response({"success": True, "data": serializer.data})
@@ -748,20 +711,16 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         responses={200: ProductSerializer()},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["put", "patch"])
-    def update_product(self, request, pk=None):
+    @action(detail=True, methods=["put", "patch"], url_path='update_product/(?P<product_uuid>[^/.]+)')
+    def update_product(self, request, product_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        success, data = AdminService.update_product(pk, request.data)
+        success, data = AdminService.update_product(product_uuid, request.data)
         status_code = status.HTTP_200_OK if success else status.HTTP_400_BAD_REQUEST
         return Response({"success": success, "data": data}, status=status_code)
 
-    # ===============================================================
-    # ORDERS & LOGISTICS
-    # ===============================================================
-
+    # ================= ORDERS & LOGISTICS =================
     @swagger_auto_schema(
         operation_summary="Get orders summary",
         tags=["Orders & Logistics"],
@@ -773,7 +732,6 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
         orders = Order.objects.all()
         data = {
             "pending": orders.filter(status="pending").count(),
@@ -782,56 +740,53 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         }
         return Response({"success": True, "data": data})
 
+    def get_order_by_uuid(self, order_uuid):
+        try:
+            return Order.objects.filter(uuid=order_uuid).first()
+        except ValueError:
+            return None
+
     @swagger_auto_schema(
         operation_summary="Assign logistics to an order",
         tags=["Orders & Logistics"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="Order ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("order_uuid", openapi.IN_PATH, description="Order UUID", type=openapi.TYPE_STRING)],
         responses={200: openapi.Response("Logistics assigned")},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def assign_logistics(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='assign_logistics/(?P<order_uuid>[^/.]+)')
+    def assign_logistics(self, request, order_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        try:
-            order = Order.objects.get(pk=pk)
+        order = self.get_order_by_uuid(order_uuid)
+        if not order:
+            return Response({"success": False, "message": "Order not found"}, status=404)
+        with transaction.atomic():
             order.logistics_assigned = True
             order.save()
-            return Response({"success": True, "message": "Logistics assigned successfully"})
-        except Order.DoesNotExist:
-            return Response({"success": False, "message": "Order not found"}, status=404)
+        return Response({"success": True, "message": "Logistics assigned successfully"})
 
     @swagger_auto_schema(
         operation_summary="Process refund for an order",
         tags=["Orders & Logistics"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="Order ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("order_uuid", openapi.IN_PATH, description="Order UUID", type=openapi.TYPE_STRING)],
         responses={200: openapi.Response("Refund processed")},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def process_refund(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='process_refund/(?P<order_uuid>[^/.]+)')
+    def process_refund(self, request, order_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        try:
-            order = Order.objects.get(pk=pk)
+        order = self.get_order_by_uuid(order_uuid)
+        if not order:
+            return Response({"success": False, "message": "Order not found"}, status=404)
+        with transaction.atomic():
             order.status = "refunded"
             order.save()
-            return Response({"success": True, "message": "Refund processed successfully"})
-        except Order.DoesNotExist:
-            return Response({"success": False, "message": "Order not found"}, status=404)
+        return Response({"success": True, "message": "Refund processed successfully"})
 
-    # ===============================================================
-    # FINANCE
-    # ===============================================================
-
+    # ================= FINANCE =================
     @swagger_auto_schema(
         operation_summary="Get payments summary",
         tags=["Finance"],
@@ -843,31 +798,61 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
         payments = Payment.objects.all()
         serializer = PaymentSerializer(payments, many=True)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
-        operation_summary="Trigger vendor payout",
+        operation_summary="Trigger payout for vendor or customer",
         tags=["Finance"],
-        manual_parameters=[
-            openapi.Parameter("pk", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("user_uuid", openapi.IN_PATH, description="User UUID", type=openapi.TYPE_STRING)],
         responses={200: "Payout triggered"},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["post"])
-    def trigger_payout(self, request, pk=None):
+    @action(detail=True, methods=["post"], url_path='trigger_payout/(?P<user_uuid>[^/.]+)')
+    def trigger_payout(self, request, user_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
 
-        try:
-            vendor = Vendor.objects.get(pk=pk)
-            return Response({"success": True, "message": f"Payout triggered for vendor {vendor.store_name}"})
-        except Vendor.DoesNotExist:
-            return Response({"success": False, "message": "Vendor not found"}, status=404)
+        user_obj = self.get_user_by_uuid(user_uuid)
+        if not user_obj:
+            return Response({"success": False, "message": "User not found"}, status=404)
+
+        user = user_obj.user
+        total_payable = Decimal("0")
+        payout_type = ""
+
+        # Vendor payout
+        if isinstance(user_obj, Vendor):
+            pending_refunds = Refund.objects.filter(
+                payment__order__order_items__product__vendor=user_obj,
+                status="PENDING"
+            ).exists()
+            if pending_refunds:
+                return Response({"success": False, "message": "Cannot trigger payout: Vendor has orders with pending refunds."}, status=400)
+            vendor_orders = Order.objects.filter(order_items__product__vendor=user_obj, payment__status="SUCCESS").distinct()
+            for order in vendor_orders:
+                for item in order.order_items.all():
+                    if item.vendor == user_obj:
+                        total_payable += item.item_subtotal * Decimal("0.90")
+            payout_type = "Vendor Payout"
+
+        # Customer referral
+        elif isinstance(user_obj, Customer):
+            total_payable = getattr(user_obj.wallet, 'balance', Decimal("0"))
+            if total_payable <= 0:
+                return Response({"success": False, "message": "No referral bonus or balance available."}, status=400)
+            payout_type = "Referral Bonus Payout"
+
+        # Credit wallet and notify
+        wallet, _ = Wallet.objects.get_or_create(user=user)
+        if total_payable > 0:
+            wallet.credit(total_payable, source=payout_type)
+            Notification.objects.create(recipient=user, title=f"{payout_type} Credited", message=f"A payout of {total_payable} has been credited to your wallet.")
+            TransactionLog.objects.create(order=None, message=f"{payout_type} of {total_payable} triggered for user {user.email}", level="INFO")
+
+        return Response({"success": True, "message": f"{payout_type} of {total_payable} triggered for user {user.email}"})
 
     @swagger_auto_schema(
         operation_summary="Get settlements summary",
@@ -880,36 +865,28 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
         settlements = Payment.objects.values("vendor__store_name").annotate(total_paid=models.Sum("amount"))
         return Response({"success": True, "data": settlements})
 
     @swagger_auto_schema(
         operation_summary="Get settlements for a specific vendor",
         tags=["Finance"],
-        manual_parameters=[
-            openapi.Parameter("vendor_id", openapi.IN_PATH, description="Vendor ID", type=openapi.TYPE_INTEGER)
-        ],
+        manual_parameters=[openapi.Parameter("vendor_uuid", openapi.IN_PATH, description="Vendor UUID", type=openapi.TYPE_STRING)],
         responses={200: "Vendor settlement details"},
         security=[{"Bearer": []}],
     )
-    @action(detail=True, methods=["get"])
-    def vendor_settlements(self, request, pk=None):
+    @action(detail=True, methods=["get"], url_path='vendor_settlements/(?P<vendor_uuid>[^/.]+)')
+    def vendor_settlements(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
-        try:
-            vendor = Vendor.objects.get(pk=pk)
-            settlements = Payment.objects.filter(vendor=vendor).aggregate(total_paid=models.Sum("amount"))
-            return Response({"success": True, "data": settlements})
-        except Vendor.DoesNotExist:
+        vendor = self.get_vendor_by_uuid(vendor_uuid)
+        if not vendor:
             return Response({"success": False, "message": "Vendor not found"}, status=404)
+        settlements = Payment.objects.filter(vendor=vendor).aggregate(total_paid=models.Sum("amount"))
+        return Response({"success": True, "data": settlements})
 
-    # ===============================================================
-    # ANALYTICS
-    # ===============================================================
-
+    # ================= ANALYTICS =================
     @swagger_auto_schema(
         operation_summary="Admin sales & orders analytics",
         tags=["Analytics"],
@@ -921,7 +898,6 @@ class BusinessAdminViewSet(viewsets.ViewSet):
         admin = self.get_admin(request)
         if not admin:
             return Response({"success": False, "message": "Access denied"}, status=403)
-
         data = {
             "total_orders": Order.objects.count(),
             "total_revenue": Payment.objects.aggregate(total=models.Sum("amount"))["total"] or 0,
@@ -929,3 +905,4 @@ class BusinessAdminViewSet(viewsets.ViewSet):
             "delivered_orders": Order.objects.filter(status="delivered").count(),
         }
         return Response({"success": True, "data": data})
+

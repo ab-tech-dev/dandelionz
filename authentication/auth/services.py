@@ -20,7 +20,8 @@ class AuthenticationService:
     """Service class to handle authentication-related business logic"""
 
     @staticmethod
-    def register(email, password, phone_number=None, full_name=None, role='CUSTOMER', request_meta=None, request=None):
+    def register(email, password, phone_number=None, full_name=None, role='CUSTOMER',
+                 referral_code=None, request_meta=None, request=None):
         """Handle user registration with email and password"""
         if not email or not password:
             return False, {
@@ -33,18 +34,12 @@ class AuthenticationService:
 
         try:
             if CustomUser.objects.filter(email=email).exists():
-                return False, {
-                    "success": False,
-                    "error": "A user with this email already exists"
-                }, 400
+                return False, {"success": False, "error": "A user with this email already exists"}, 400
 
             try:
                 validate_password(password)
             except ValidationError as e:
-                return False, {
-                    "success": False,
-                    "error": ", ".join(e.messages)
-                }, 400
+                return False, {"success": False, "error": ", ".join(e.messages)}, 400
 
             user = CustomUser.objects.create_user(
                 email=email,
@@ -56,11 +51,25 @@ class AuthenticationService:
             if full_name:
                 user.full_name = full_name
                 user.save(update_fields=['full_name'])
-
             if phone_number:
                 user.phone_number = phone_number
                 user.save(update_fields=['phone_number'])
 
+            # REFERRAL CODE HANDLING
+            if referral_code:
+                try:
+                    referrer = CustomUser.objects.get(referral_code=referral_code)
+                    from authentication.models import Referral  # make sure you have this model
+                    Referral.objects.create(
+                        referrer=referrer,
+                        referred_user=user,
+                        bonus_amount=getattr(settings, 'REFERRAL_BONUS_AMOUNT', 0)
+                    )
+                    logger.info(f"Referral recorded: {referrer.email} referred {user.email}")
+                except CustomUser.DoesNotExist:
+                    logger.warning(f"Invalid referral code used by {user.email}")
+
+            # Queue verification email
             if user.email and settings.REQUIRE_EMAIL_VERIFICATION:
                 try:
                     send_verification_email_task.delay(user.id)
@@ -71,7 +80,6 @@ class AuthenticationService:
             context = {}
             if request:
                 context['request'] = request
-
             serializer = UserBaseSerializer(user, context=context)
             tokens = TokenManager.generate_tokens(user)
             logger.info(f"Registration successful for user: {user.email}")
@@ -88,10 +96,7 @@ class AuthenticationService:
 
         except Exception as e:
             logger.error(f"Registration error: {str(e)}")
-            return False, {
-                "success": False,
-                "error": "Registration failed. Please try again"
-            }, 400
+            return False, {"success": False, "error": "Registration failed. Please try again"}, 400
 
     @staticmethod
     def login(email, password, request_meta=None, request=None):

@@ -8,13 +8,18 @@ from django.core.exceptions import PermissionDenied
 from django.contrib.auth.password_validation import validate_password, ValidationError
 
 from authentication.models import CustomUser
-from users.models import Customer, Vendor, Notification
+from users.models import Customer, Vendor, BusinessAdmin
 from users.serializers import (
     CustomerProfileSerializer,
     CustomerProfileUpdateSerializer,
     VendorProfileSerializer,
     BusinessAdminProfileSerializer
 )
+from django.conf import settings
+
+
+User = settings.AUTH_USER_MODEL
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,24 +30,28 @@ class ProfileService:
     # GET PROFILE
     # ---------------------------
     @staticmethod
-    def get_profile(user, request=None):
-        if not user:
-            raise PermissionDenied("Authentication required")
-        context = {'request': request} if request else {}
-
-        # Role-based serializer selection
-        if user.is_customer:
-            profile = Customer.objects.get(user=user)
-            serializer = CustomerProfileSerializer(profile, context=context)
-        elif user.is_vendor:
-            profile = Vendor.objects.get(user=user)
-            serializer = VendorProfileSerializer(profile, context=context)
-        else:  # Admin or other
-            serializer = BusinessAdminProfileSerializer(user, context=context)
-
-        logger.info(f"Profile retrieved for {user.email} ({user.role})")
-        return serializer.data
-
+    def get_profile(self, obj):
+        """
+        Handle both User objects and profile objects (Vendor, Customer, BusinessAdmin).
+        """
+        # If obj is a profile object, get the user from it
+        if isinstance(obj, (Vendor, Customer, BusinessAdmin)):
+            user = getattr(obj, 'user', None)
+            if not user:
+                return None
+        elif isinstance(obj, User):
+            user = obj
+        else:
+            return None
+        
+        # Now safely check the role on the user object
+        if user.role == User.Role.VENDOR and hasattr(user, 'vendor_profile'):
+            return VendorProfileSerializer(user.vendor_profile).data
+        elif user.role == User.Role.CUSTOMER and hasattr(user, 'customer_profile'):
+            return CustomerProfileSerializer(user.customer_profile).data
+        elif user.role == User.Role.BUSINESS_ADMIN and hasattr(user, 'business_admin_profile'):
+            return BusinessAdminProfileSerializer(user.business_admin_profile).data
+        return None
     # ---------------------------
     # UPDATE PROFILE
     # ---------------------------

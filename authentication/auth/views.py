@@ -40,6 +40,7 @@ class UserRegistrationView(BaseAPIView):
             phone_number = request.data.get('phone_number')
             full_name = request.data.get('full_name')
             role = request.data.get('role', 'CUSTOMER').upper()
+            referral_code = request.data.get('referral_code')  # NEW FIELD
 
             if role not in ['CUSTOMER', 'VENDOR']:
                 return Response(
@@ -53,6 +54,7 @@ class UserRegistrationView(BaseAPIView):
                 phone_number=phone_number,
                 full_name=full_name,
                 role=role,
+                referral_code=referral_code,  # PASS TO SERVICE
                 request_meta=request.META,
                 request=request
             )
@@ -276,3 +278,19 @@ class LogoutView(BaseAPIView):
                 )
 
             return response
+
+
+class ReferralListView(BaseAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        referrals = request.user.referrals_made.all()
+        data = [
+            {
+                "referred_user": r.referred_user.email,
+                "bonus_awarded": r.bonus_awarded,
+                "bonus_amount": r.bonus_amount,
+                "created_at": r.created_at
+            } for r in referrals
+        ]
+        return Response(standardized_response(success=True, data=data), status=status.HTTP_200_OK)

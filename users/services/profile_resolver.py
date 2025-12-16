@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
-from users.models import Customer, BusinessAdmin, Vendor
+from store.models import Vendor
+from users.models import Customer, BusinessAdmin
 
 User = get_user_model()
 
@@ -27,7 +28,7 @@ class ProfileResolver:
         return customer
 
     @staticmethod
-    def get_business_admin(user):
+    def get_admin(user):
         if user.role != User.Role.BUSINESS_ADMIN:
             return None
 

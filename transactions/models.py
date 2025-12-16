@@ -160,3 +160,60 @@ class Refund(models.Model):
         self.status = 'APPROVED'
         self.processed_at = timezone.now()
         self.save()
+
+
+from django.db import models
+from django.utils import timezone
+from decimal import Decimal
+import uuid
+from authentication.models import CustomUser
+
+# ========================
+# WALLET SYSTEM
+# ========================
+class Wallet(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='wallet')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def credit(self, amount, source=None):
+        """Add funds to the wallet"""
+        self.balance += Decimal(amount)
+        self.save(update_fields=['balance', 'updated_at'])
+        WalletTransaction.objects.create(
+            wallet=self,
+            transaction_type=WalletTransaction.TransactionType.CREDIT,
+            amount=amount,
+            source=source
+        )
+
+    def debit(self, amount, source=None):
+        """Subtract funds from the wallet"""
+        if self.balance < Decimal(amount):
+            raise ValueError("Insufficient wallet balance")
+        self.balance -= Decimal(amount)
+        self.save(update_fields=['balance', 'updated_at'])
+        WalletTransaction.objects.create(
+            wallet=self,
+            transaction_type=WalletTransaction.TransactionType.DEBIT,
+            amount=amount,
+            source=source
+        )
+
+    def __str__(self):
+        return f"{self.user.email} Wallet - Balance: {self.balance}"
+
+
+class WalletTransaction(models.Model):
+    class TransactionType(models.TextChoices):
+        CREDIT = 'CREDIT', 'Credit'
+        DEBIT = 'DEBIT', 'Debit'
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=6, choices=TransactionType.choices)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    source = models.CharField(max_length=255, blank=True, null=True)  # e.g., 'REFERRAL BONUS', 'ORDER PAYMENT'
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.wallet.user.email} - {self.transaction_type} {self.amount} ({self.source})"

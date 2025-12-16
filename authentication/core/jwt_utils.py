@@ -68,7 +68,7 @@ class TokenManager:
         try:
             token = RefreshToken(refresh_token)
 
-            jti = token.get(jti)
+            jti = token.get('jti')
 
             if not jti or TokenManager.is_token_blacklisted(jti):
                 logger.warning(f"Attempt to use blacklisted token with JTI: {jti}")

@@ -43,6 +43,7 @@ class VerifyEmailView(BaseAPIView):
             500: "Server error during verification"
         }
     )
+
     def post(self, request):
         try:
             uidb64 = request.data.get('uid') or request.query_params.get('uid')
@@ -54,7 +55,43 @@ class VerifyEmailView(BaseAPIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            # Verify email
             success, response_data, status_code = EmailVerificationService.verify_email(uidb64=uidb64, token=token)
+
+            if success:
+                # Email verification succeeded, award referral bonus if exists
+                try:
+                    from authentication.models import Referral, Notification, CustomUser, Wallet
+
+                    user_data = response_data.get('data', {}).get('user')
+                    if user_data:
+                        user = CustomUser.objects.get(id=user_data['id'])
+
+                        # Get unawarded referrals
+                        referrals = Referral.objects.filter(referred_user=user, bonus_awarded=False)
+                        for r in referrals:
+                            # Mark bonus as awarded
+                            r.bonus_awarded = True
+                            r.save(update_fields=['bonus_awarded'])
+
+                            # Credit bonus to referrer's wallet
+                            referrer = r.referrer
+                            wallet, created = Wallet.objects.get_or_create(user=referrer)
+                            wallet.credit(r.bonus_amount, source=f"Referral bonus for {user.email}")
+
+                            # Create notification
+                            Notification.objects.create(
+                                recipient=referrer,
+                                title="Referral Bonus Credited",
+                                message=f"You have received a referral bonus of {r.bonus_amount} "
+                                        f"for referring {user.email}.",
+                            )
+
+                            logger.info(f"Referral bonus awarded and notification sent to {referrer.email}")
+
+                except Exception as referral_error:
+                    logger.error(f"Error awarding referral bonus: {str(referral_error)}")
+
             return Response(standardized_response(**response_data), status=status_code)
 
         except Exception as e:
@@ -64,6 +101,7 @@ class VerifyEmailView(BaseAPIView):
                 standardized_response(success=False, error="Email verification failed. Please try again."),
                 status=status.HTTP_400_BAD_REQUEST
             )
+
 
     @swagger_auto_schema(
         operation_summary="Alternative GET verification endpoint",
