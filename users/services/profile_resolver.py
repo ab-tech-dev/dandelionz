@@ -1,36 +1,25 @@
+from users.models import Vendor, Customer, BusinessAdmin
 from django.contrib.auth import get_user_model
-from store.models import Vendor
-from users.models import Customer, BusinessAdmin
 
 User = get_user_model()
 
 
 class ProfileResolver:
-    @staticmethod
-    def get_vendor(user):
-        if user.role != User.Role.VENDOR:
-            return None
-
-        vendor, _ = Vendor.objects.get_or_create(
-            user=user,
-            defaults={
-                "store_name": user.full_name or "Unnamed Store"
-            }
-        )
-        return vendor
 
     @staticmethod
-    def get_customer(user):
+    def resolve_customer(user):
         if user.role != User.Role.CUSTOMER:
             return None
-
-        customer, _ = Customer.objects.get_or_create(user=user)
-        return customer
+        return getattr(user, "customer_profile", None)
 
     @staticmethod
-    def get_admin(user):
+    def resolve_vendor(user):
+        if user.role != User.Role.VENDOR:
+            return None
+        return getattr(user, "vendor_profile", None)
+
+    @staticmethod
+    def resolve_admin(user):
         if user.role != User.Role.BUSINESS_ADMIN:
             return None
-
-        admin, _ = BusinessAdmin.objects.get_or_create(user=user)
-        return admin
+        return getattr(user, "business_admin_profile", None)

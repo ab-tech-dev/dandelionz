@@ -8,7 +8,7 @@ class UserBaseSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'id',
+            'uuid',
             'email',
             'full_name',
             'phone_number',
@@ -16,8 +16,9 @@ class UserBaseSerializer(serializers.ModelSerializer):
             'role',
             'is_verified',
             'created_at',
+            'referral_code'
         ]
-        read_only_fields = ['email', 'role', 'created_at', 'is_verified']
+        read_only_fields = ['uuid', 'email', 'role', 'created_at', 'is_verified', 'referral_code']
 
 
 

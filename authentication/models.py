@@ -30,14 +30,6 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
 
-def generate_unique_referral_code():
-    from authentication.models import CustomUser
-    while True:
-        code = uuid.uuid4().hex[:12].upper()
-        if not CustomUser.objects.filter(referral_code=code).exists():
-            return code
-
-
 # =====================================================
 # CUSTOM USER MODEL
 # =====================================================
@@ -57,7 +49,12 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     profile_picture = CloudinaryField('image', null=True, blank=True)
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.CUSTOMER)
-    referral_code = models.CharField(max_length=12, unique=True, default=generate_unique_referral_code)
+    referral_code = models.CharField(
+        max_length=12,
+        unique=True,
+        blank=True,
+        null=True
+    )
 
     # System fields
     is_verified = models.BooleanField(default=False)
@@ -71,6 +68,17 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
+
+    def save(self, *args, **kwargs):
+        if not self.referral_code:
+            self.referral_code = self._generate_unique_referral_code()
+        super().save(*args, **kwargs)
+
+    def _generate_unique_referral_code(self):
+        while True:
+            code = uuid.uuid4().hex[:12].upper()
+            if not CustomUser.objects.filter(referral_code=code).exists():
+                return code
 
     def __str__(self):
         return f"{self.email} ({self.role})"
@@ -93,7 +101,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 
 # =====================================================
-# REFERRAL MODEL (normal integer PK)
+# REFERRAL MODEL 
 # =====================================================
 class Referral(models.Model):
     referrer = models.ForeignKey(

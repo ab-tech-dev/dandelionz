@@ -15,43 +15,48 @@ from users.serializers import (
     VendorProfileSerializer,
     BusinessAdminProfileSerializer
 )
-from django.conf import settings
+from authentication.models import CustomUser
 
-
-User = settings.AUTH_USER_MODEL
 
 
 logger = logging.getLogger(__name__)
 
 class ProfileService:
-    """Generic service for profile operations for all roles (customer, vendor, admin)."""
+    """Generic service for profile operations for all roles."""
 
     # ---------------------------
     # GET PROFILE
     # ---------------------------
     @staticmethod
-    def get_profile(self, obj):
+    def get_profile(user, request=None):
         """
-        Handle both User objects and profile objects (Vendor, Customer, BusinessAdmin).
+        Returns serialized profile data based on user role.
         """
-        # If obj is a profile object, get the user from it
-        if isinstance(obj, (Vendor, Customer, BusinessAdmin)):
-            user = getattr(obj, 'user', None)
-            if not user:
-                return None
-        elif isinstance(obj, User):
-            user = obj
-        else:
+        if not user:
             return None
-        
-        # Now safely check the role on the user object
-        if user.role == User.Role.VENDOR and hasattr(user, 'vendor_profile'):
-            return VendorProfileSerializer(user.vendor_profile).data
-        elif user.role == User.Role.CUSTOMER and hasattr(user, 'customer_profile'):
-            return CustomerProfileSerializer(user.customer_profile).data
-        elif user.role == User.Role.BUSINESS_ADMIN and hasattr(user, 'business_admin_profile'):
-            return BusinessAdminProfileSerializer(user.business_admin_profile).data
+
+        context = {"request": request} if request else {}
+
+        if user.role == CustomUser.Role.VENDOR and hasattr(user, "vendor_profile"):
+            return VendorProfileSerializer(
+                user.vendor_profile,
+                context=context
+            ).data
+
+        if user.role == CustomUser.Role.CUSTOMER and hasattr(user, "customer_profile"):
+            return CustomerProfileSerializer(
+                user.customer_profile,
+                context=context
+            ).data
+
+        if user.role == CustomUser.Role.BUSINESS_ADMIN and hasattr(user, "business_admin_profile"):
+            return BusinessAdminProfileSerializer(
+                user.business_admin_profile,
+                context=context
+            ).data
+
         return None
+
     # ---------------------------
     # UPDATE PROFILE
     # ---------------------------
@@ -76,7 +81,7 @@ class ProfileService:
                 return False, result, 400
 
         # Restrict fields per role
-        restricted_fields = ['id', 'email', 'role', 'is_superuser', 'is_staff']
+        restricted_fields = ['uuid', 'email', 'role', 'is_superuser', 'is_staff']
         safe_data = {k: v for k, v in data.items() if k not in restricted_fields + ['profile_picture', 'image_data', 'current_password', 'new_password']}
 
         # Choose serializer based on role
@@ -127,22 +132,30 @@ class ProfileService:
     # ---------------------------
     @staticmethod
     def _process_image_data(user, image_data):
-        """Decode base64 image and save to profile picture"""
         if not image_data:
             return
+
         try:
             data_url = image_data if ';base64' in image_data else f"data:image/jpeg;base64,{image_data}"
             format_part, imgstr = data_url.split(';base64')
             ext = format_part.split('/')[-1].lower()
             if ext not in ['jpeg', 'jpg', 'png', 'gif', 'webp']:
                 ext = 'jpeg'
-            file_data = ContentFile(base64.b64decode(imgstr), name=f"profile_{user.id}.{ext}")
+
+            file_data = ContentFile(
+                base64.b64decode(imgstr),
+                name=f"profile_{str(user.uuid)}.{ext}"
+            )
+
             user.profile_picture = file_data
             user.save(update_fields=['profile_picture'])
+
             logger.info(f"Profile picture updated for {user.email}")
+
         except Exception as e:
             logger.error(f"Error updating profile picture: {str(e)}")
             raise
+
 
     @staticmethod
     def _process_profile_picture_file(user, file):
@@ -155,12 +168,12 @@ class ProfileService:
 
 class AdminService:
     @staticmethod
-    def update_product(product_id, data):
+    def update_product(slug, data):
         from store.models import Product
         from store.serializers import ProductSerializer
         
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return False, {"error": "Product not found"}
 
