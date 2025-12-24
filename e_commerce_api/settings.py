@@ -35,6 +35,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.sites',
+
 
     # Third-party apps
     'cloudinary',
@@ -80,6 +82,9 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'e_commerce_api.wsgi.application'
+
+SITE_ID = 1
+
 
 # Database (PostgreSQL on VPS)
 DATABASES = {
