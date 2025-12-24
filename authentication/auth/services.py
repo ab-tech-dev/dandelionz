@@ -72,10 +72,10 @@ class AuthenticationService:
             # Queue verification email
             if user.email and settings.REQUIRE_EMAIL_VERIFICATION:
                 try:
-                    send_verification_email_task.delay(user.id)
+                    send_verification_email_task.delay(user.pk)
                     logger.info(f"Queued verification email for new user: {user.email}")
                 except Exception as e:
-                    logger.error(f"Failed to queue verification email task for user {user.id}: {str(e)}")
+                    logger.error(f"Failed to queue verification email task for user {user.pk}: {str(e)}")
 
             context = {}
             if request:
@@ -220,10 +220,10 @@ class AuthenticationService:
     @staticmethod
     def validate_token(token, user):
         """Validate a token and check if it belongs to the user"""
-        is_valid, user_id, token_type = TokenManager.validate_token(token)
+        is_valid, user_uuid, token_type = TokenManager.validate_token(token)
 
-        if not is_valid or user_id != user.id:
-            logger.warning(f"Token validation failed: expected user {user.id}, got {user_id}")
+        if not is_valid or user_uuid != user.pk:
+            logger.warning(f"Token validation failed: expected user {user.pk}, got {user_uuid}")
             return False, {"success": False, "error": "Token validation failed"}, 401
 
         from authentication.verification.services import EmailVerificationService
@@ -233,11 +233,11 @@ class AuthenticationService:
         if success:
             is_verified = verification_response.get('data', {}).get('is_verified', is_verified)
         else:
-            logger.error(f"Error checking verification status for user {user.id}")
+            logger.error(f"Error checking verification status for user {user.pk}")
 
-        logger.info(f"Token validation retrieved verification status for user {user.id}: is_verified = {is_verified}")
+        logger.info(f"Token validation retrieved verification status for user {user.pk}: is_verified = {is_verified}")
 
-        return True, {"success": True, "data": {'valid': True, 'user_id': user.id, 'email_verified': is_verified}}, 200
+        return True, {"success": True, "data": {'valid': True, 'user_uuid': user.pk, 'email_verified': is_verified}}, 200
 
     @staticmethod
     def logout(user, refresh_token=None):
@@ -252,5 +252,5 @@ class AuthenticationService:
             except Exception as e:
                 logger.warning(f"Error blacklisting token during logout: {str(e)}")
 
-        logger.info(f"User logged out: {user.id}")
+        logger.info(f"User logged out: {user.pk}")
         return True, {"success": True, "message": "Successfully logged out"}, 200

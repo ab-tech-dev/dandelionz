@@ -5,6 +5,8 @@ from rest_framework.decorators import action
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
+from store.serializers import ProductSerializer, CreateProductSerializer
+
 from users.serializers import (
     CustomerProfileSerializer,
     CustomerProfileUpdateSerializer,
@@ -23,27 +25,49 @@ from users.serializers import (
     AdminVendorActionResponseSerializer,
     AdminVendorSuspendSerializer,
     AdminVendorKYCSerializer,
-    AdminProfileResponseSerializer
+    AdminProfileResponseSerializer,
+    NotificationSerializer,
+    VendorProfileSerializer,
+    VendorOrdersSummaryResponseSerializer,
+    VendorAnalyticsResponseSerializer,
+    AdminFinancePayoutResponseSerializer,
+    SuccessResponseSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
 from transactions.models import PayoutRecord
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CustomerProfileViewSet(viewsets.ViewSet):
+    """
+    ViewSet for managing customer profiles and account operations.
+    
+    Endpoints:
+    - GET /api/customer/profile/: Retrieve authenticated customer profile
+    - PUT /api/customer/profile/: Update entire customer profile
+    - PATCH /api/customer/profile/: Partially update customer profile
+    - POST /api/customer/change-password/: Change account password
+    """
     permission_classes = [IsAuthenticated]
 
     def get_customer(self, request):
-        """
-        Returns a guaranteed customer profile or None if role is invalid.
-        """
+        """Returns customer profile or None if user is not a customer."""
         return ProfileResolver.resolve_customer(request.user)
 
-    # -----------------------------
-    # GET /api/customer/profile/
-    # -----------------------------
     @swagger_auto_schema(
-        operation_summary="Get Customer Profile",
-        responses={200: CustomerProfileSerializer()},
+        operation_id="customer_profile_retrieve",
+        operation_summary="Retrieve Customer Profile",
+        operation_description="Get the authenticated customer's profile information including shipping address, city, country, postal code, and loyalty points.",
+        tags=["Customer Profile"],
+        responses={
+            200: openapi.Response(
+                "Customer profile retrieved successfully",
+                CustomerProfileSerializer()
+            ),
+            403: openapi.Response("Customer access only"),
+        },
         security=[{"Bearer": []}],
     )
     def list(self, request):
@@ -58,13 +82,20 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         serializer = CustomerProfileSerializer(customer)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    # -----------------------------
-    # PUT /api/customer/profile/
-    # -----------------------------
     @swagger_auto_schema(
-        operation_summary="Update Customer Profile",
+        operation_id="customer_profile_update",
+        operation_summary="Update Customer Profile (Full)",
+        operation_description="Update all fields of the customer profile. All fields must be provided (shipping_address, city, country, postal_code).",
+        tags=["Customer Profile"],
         request_body=CustomerProfileUpdateSerializer,
-        responses={200: CustomerProfileSerializer()},
+        responses={
+            200: openapi.Response(
+                "Profile updated successfully",
+                CustomerProfileSerializer()
+            ),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Customer access only"),
+        },
         security=[{"Bearer": []}],
     )
     def update(self, request):
@@ -89,13 +120,20 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             status=status.HTTP_200_OK,
         )
 
-    # -----------------------------
-    # PATCH /api/customer/profile/
-    # -----------------------------
     @swagger_auto_schema(
+        operation_id="customer_profile_partial_update",
         operation_summary="Partially Update Customer Profile",
+        operation_description="Update specific fields of the customer profile. Only provide the fields you want to update.",
+        tags=["Customer Profile"],
         request_body=CustomerProfileUpdateSerializer,
-        responses={200: CustomerProfileSerializer()},
+        responses={
+            200: openapi.Response(
+                "Profile updated successfully",
+                CustomerProfileSerializer()
+            ),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Customer access only"),
+        },
         security=[{"Bearer": []}],
     )
     def partial_update(self, request):
@@ -120,13 +158,17 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             status=status.HTTP_200_OK,
         )
 
-    # -----------------------------
-    # POST /api/customer/change-password/
-    # -----------------------------
     @swagger_auto_schema(
-        operation_summary="Change Account Password",
+        operation_id="customer_change_password",
+        operation_summary="Change Customer Account Password",
+        operation_description="Update the authenticated customer's password. Requires current password for verification.",
+        tags=["Customer Profile"],
         request_body=ChangePasswordSerializer,
-        responses={200: openapi.Response("Password changed successfully")},
+        responses={
+            200: openapi.Response("Password changed successfully"),
+            400: openapi.Response("Invalid current password or validation error"),
+            403: openapi.Response("Customer access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -161,46 +203,35 @@ class CustomerProfileViewSet(viewsets.ViewSet):
 
 
 
-from rest_framework import viewsets, status
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from drf_yasg.utils import swagger_auto_schema
-
-from decimal import Decimal
-from users.models import Vendor, Notification
-from transactions.models import Wallet, TransactionLog, Refund
-from users.serializers import (
-    VendorProfileSerializer,
-    ChangePasswordSerializer,
-    NotificationSerializer,
-)
-from store.models import Product
-from store.serializers import ProductSerializer, CreateProductSerializer
-from users.services.services import ProfileService
-
-from django.db.models import Sum, F
-import logging
-
-logger = logging.getLogger(__name__)
-
-
 class VendorViewSet(viewsets.ViewSet):
+    """
+    ViewSet for managing vendor profiles, products, orders, and analytics.
+    
+    Endpoints include profile management, product CRUD operations, order tracking,
+    sales analytics, and notification retrieval.
+    """
     permission_classes = [IsAuthenticated]
 
     def get_vendor(self, request):
-        """
-        Returns a guaranteed vendor profile or None if role is invalid.
-        """
+        """Returns vendor profile or None if user is not a vendor."""
         return ProfileResolver.resolve_vendor(request.user)
 
     # ============================
-    # PROFILE
+    # PROFILE MANAGEMENT
     # ============================
 
     @swagger_auto_schema(
-        operation_description="Retrieve vendor profile of the authenticated vendor.",
-        responses={200: VendorProfileSerializer()},
+        operation_id="vendor_profile_retrieve",
+        operation_summary="Retrieve Vendor Profile",
+        operation_description="Get the authenticated vendor's complete profile information including store details, bank information, and verification status.",
+        tags=["Vendor Profile"],
+        responses={
+            200: openapi.Response(
+                "Vendor profile retrieved successfully",
+                VendorProfileSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     def retrieve(self, request):
@@ -222,11 +253,20 @@ class VendorViewSet(viewsets.ViewSet):
             status=status.HTTP_200_OK,
         )
 
-
     @swagger_auto_schema(
-        operation_description="Full vendor profile update.",
+        operation_id="vendor_profile_update",
+        operation_summary="Update Vendor Profile (Full)",
+        operation_description="Update all vendor profile fields. All required fields must be provided.",
+        tags=["Vendor Profile"],
         request_body=VendorProfileSerializer,
-        responses={200: VendorProfileSerializer()},
+        responses={
+            200: openapi.Response(
+                "Profile updated successfully",
+                VendorProfileSerializer()
+            ),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     def update(self, request):
@@ -249,9 +289,19 @@ class VendorViewSet(viewsets.ViewSet):
         return Response(data, status=code)
 
     @swagger_auto_schema(
-        operation_description="Partial vendor profile update.",
+        operation_id="vendor_profile_partial_update",
+        operation_summary="Partially Update Vendor Profile",
+        operation_description="Update specific vendor profile fields. Only provide the fields you want to change.",
+        tags=["Vendor Profile"],
         request_body=VendorProfileSerializer,
-        responses={200: VendorProfileSerializer()},
+        responses={
+            200: openapi.Response(
+                "Profile updated successfully",
+                VendorProfileSerializer()
+            ),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     def partial_update(self, request):
@@ -275,9 +325,16 @@ class VendorViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         method="post",
-        operation_description="Change vendor password.",
+        operation_id="vendor_change_password",
+        operation_summary="Change Vendor Account Password",
+        operation_description="Update the vendor's password. Requires current password for verification.",
+        tags=["Vendor Profile"],
         request_body=ChangePasswordSerializer,
-        responses={200: "Password changed successfully"},
+        responses={
+            200: openapi.Response("Password changed successfully"),
+            400: openapi.Response("Invalid current password"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -305,14 +362,24 @@ class VendorViewSet(viewsets.ViewSet):
         )
 
     # ============================
-    # PRODUCTS
+    # PRODUCT MANAGEMENT
     # ============================
 
     @swagger_auto_schema(
         method="post",
-        operation_description="Vendor adds a new product to their store.",
+        operation_id="vendor_add_product",
+        operation_summary="Add New Product to Store",
+        operation_description="Create a new product listing for the vendor's store. Returns the created product with all details.",
+        tags=["Vendor Products"],
         request_body=CreateProductSerializer,
-        responses={201: CreateProductSerializer()},
+        responses={
+            201: openapi.Response(
+                "Product created successfully",
+                CreateProductSerializer()
+            ),
+            400: openapi.Response("Invalid product data"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -336,8 +403,17 @@ class VendorViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         method="get",
-        operation_description="Vendor lists all products in their store.",
-        responses={200: ProductSerializer(many=True)},
+        operation_id="vendor_list_products",
+        operation_summary="List Vendor's Products",
+        operation_description="Retrieve all products in the vendor's store with their details, pricing, and status.",
+        tags=["Vendor Products"],
+        responses={
+            200: openapi.Response(
+                "Products retrieved successfully",
+                ProductSerializer(many=True)
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -357,16 +433,36 @@ class VendorViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         method="put",
-        operation_description="Update an existing product.",
+        operation_summary="Update Product (Full)",
+        operation_description="Fully update a product's information. All fields must be provided.",
+        tags=["Vendor Products"],
         request_body=ProductSerializer,
-        responses={200: ProductSerializer()},
+        responses={
+            200: openapi.Response(
+                "Product updated successfully",
+                ProductSerializer()
+            ),
+            400: openapi.Response("Invalid product data"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @swagger_auto_schema(
         method="patch",
-        operation_description="Partial update to an existing product.",
+        operation_summary="Update Product (Partial)",
+        operation_description="Partially update a product's information. Only provide fields you want to change.",
+        tags=["Vendor Products"],
         request_body=ProductSerializer,
-        responses={200: ProductSerializer()},
+        responses={
+            200: openapi.Response(
+                "Product updated successfully",
+                ProductSerializer()
+            ),
+            400: openapi.Response("Invalid product data"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=True, methods=["put", "patch"])
@@ -399,8 +495,15 @@ class VendorViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         method="delete",
-        operation_description="Delete a product belonging to the vendor.",
-        responses={200: "Product deleted"},
+        operation_id="vendor_delete_product",
+        operation_summary="Delete Product",
+        operation_description="Remove a product from the vendor's store. Once deleted, the product is no longer available for purchase.",
+        tags=["Vendor Products"],
+        responses={
+            200: openapi.Response("Product deleted successfully"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=True, methods=["delete"])
@@ -428,12 +531,21 @@ class VendorViewSet(viewsets.ViewSet):
         )
 
     # ============================
-    # ORDERS
+    # ORDER MANAGEMENT
     # ============================
     @swagger_auto_schema(
         method="get",
-        operation_description="Vendor orders grouped by status.",
-        responses={200: "Order summary"},
+        operation_id="vendor_orders_summary",
+        operation_summary="Get Vendor Orders Summary",
+        operation_description="Get a count of vendor's orders grouped by status (pending, paid, shipped, delivered, canceled).",
+        tags=["Vendor Orders"],
+        responses={
+            200: openapi.Response(
+                "Orders summary retrieved successfully",
+                VendorOrdersSummaryResponseSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -462,15 +574,23 @@ class VendorViewSet(viewsets.ViewSet):
 
         return Response({"success": True, "data": data})
 
-
     # ============================
-    # ANALYTICS
+    # ANALYTICS & INSIGHTS
     # ============================
 
     @swagger_auto_schema(
         method="get",
-        operation_description="Vendor revenue and top products.",
-        responses={200: "Analytics summary"},
+        operation_id="vendor_analytics",
+        operation_summary="Get Vendor Sales Analytics",
+        operation_description="Retrieve vendor's total revenue and top 5 best-selling products with quantity sold.",
+        tags=["Vendor Analytics"],
+        responses={
+            200: openapi.Response(
+                "Analytics data retrieved successfully",
+                VendorAnalyticsResponseSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -517,8 +637,17 @@ class VendorViewSet(viewsets.ViewSet):
 
     @swagger_auto_schema(
         method="get",
-        operation_description="List vendor notifications.",
-        responses={200: NotificationSerializer(many=True)},
+        operation_id="vendor_notifications",
+        operation_summary="List Vendor Notifications",
+        operation_description="Retrieve all notifications for the vendor, ordered by most recent first.",
+        tags=["Vendor Notifications"],
+        responses={
+            200: openapi.Response(
+                "Notifications retrieved successfully",
+                NotificationSerializer(many=True)
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -529,6 +658,7 @@ class VendorViewSet(viewsets.ViewSet):
 
         serializer = NotificationSerializer(notifications, many=True)
         return Response({"success": True, "data": serializer.data})
+
 
 
 import uuid
@@ -566,24 +696,40 @@ from users.services.profile_resolver import ProfileResolver
 
 
 class AdminBaseViewSet(viewsets.ViewSet):
+    """
+    Base ViewSet for admin operations with common permission and admin validation.
+    """
     permission_classes = [IsAuthenticated]
 
     def get_admin(self, request):
+        """Verify user is admin and return admin profile."""
         admin = ProfileResolver.resolve_admin(request.user)
         if not admin:
             return None
         return admin
 
     def get_user_by_uuid(self, user_uuid):
+        """Retrieve user by UUID."""
         return User.objects.filter(uuid=user_uuid).first()
 
 
 class AdminProfileViewSet(AdminBaseViewSet):
+    """
+    ViewSet for managing admin profile and account settings.
+    """
 
     @swagger_auto_schema(
-        operation_summary="Retrieve business admin profile",
+        operation_id="admin_profile_retrieve",
+        operation_summary="Retrieve Business Admin Profile",
+        operation_description="Get the authenticated admin's profile information including position and management permissions.",
         tags=["Admin Profile"],
-        responses={200: BusinessAdminProfileSerializer()},
+        responses={
+            200: openapi.Response(
+                "Admin profile retrieved successfully",
+                BusinessAdminProfileSerializer()
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     def retrieve(self, request):
@@ -598,13 +744,17 @@ class AdminProfileViewSet(AdminBaseViewSet):
             "data": serializer.data
         })
 
-
-
     @swagger_auto_schema(
-        operation_summary="Change admin password",
+        operation_id="admin_change_password",
+        operation_summary="Change Admin Account Password",
+        operation_description="Update the admin's password. Requires current password for verification.",
         tags=["Admin Profile"],
         request_body=ChangePasswordSerializer,
-        responses={200: openapi.Response("Password changed successfully")},
+        responses={
+            200: openapi.Response("Password changed successfully"),
+            400: openapi.Response("Invalid current password"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -626,14 +776,23 @@ class AdminProfileViewSet(AdminBaseViewSet):
         return Response(result, status=status_code)
 
 
-
-
 class AdminVendorViewSet(AdminBaseViewSet):
+    """
+    ViewSet for admin vendor management operations including approval, suspension, and KYC verification.
+    """
 
     @swagger_auto_schema(
-        operation_summary="List all vendors",
+        operation_id="admin_list_vendors",
+        operation_summary="List All Vendors",
+        operation_description="Retrieve a list of all vendors on the platform with their store information and verification status.",
         tags=["Vendor Management"],
-        responses={200: AdminVendorListSerializer(many=True)},
+        responses={
+            200: openapi.Response(
+                "Vendors retrieved successfully",
+                AdminVendorListSerializer(many=True)
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -647,10 +806,20 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
-        operation_summary="Approve or unapprove vendor",
+        operation_id="admin_approve_vendor",
+        operation_summary="Approve or Unapprove Vendor",
+        operation_description="Approve or revoke approval for a vendor. Requires vendor UUID and approval boolean flag.",
         tags=["Vendor Management"],
         request_body=AdminVendorApprovalSerializer,
-        responses={200: AdminVendorActionResponseSerializer()},
+        responses={
+            200: openapi.Response(
+                "Vendor approval status updated",
+                AdminVendorActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Vendor not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -677,10 +846,20 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
-        operation_summary="Suspend or activate a user",
+        operation_id="admin_suspend_user",
+        operation_summary="Suspend or Activate User",
+        operation_description="Suspend (deactivate) or activate a user account. Suspended users cannot access the platform.",
         tags=["Vendor Management"],
         request_body=AdminVendorSuspendSerializer,
-        responses={200: AdminVendorActionResponseSerializer()},
+        responses={
+            200: openapi.Response(
+                "User status updated",
+                AdminVendorActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("User not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -704,10 +883,20 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
-        operation_summary="Verify vendor KYC",
+        operation_id="admin_verify_kyc",
+        operation_summary="Verify Vendor KYC",
+        operation_description="Mark a vendor's KYC (Know Your Customer) documentation as verified.",
         tags=["Vendor Management"],
         request_body=AdminVendorKYCSerializer,
-        responses={200: AdminVendorActionResponseSerializer()},
+        responses={
+            200: openapi.Response(
+                "KYC verification completed",
+                AdminVendorActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Vendor not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -733,13 +922,23 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
 
-
 class AdminMarketplaceViewSet(AdminBaseViewSet):
+    """
+    ViewSet for admin management of marketplace products including listing, updating, and deletion.
+    """
 
     @swagger_auto_schema(
-        operation_summary="List all marketplace products",
-        tags=["Marketplace"],
-        responses={200: AdminProductListSerializer(many=True)},
+        operation_id="admin_list_products",
+        operation_summary="List All Marketplace Products",
+        operation_description="Retrieve all products available on the marketplace with vendor information.",
+        tags=["Marketplace Management"],
+        responses={
+            200: openapi.Response(
+                "Products retrieved successfully",
+                AdminProductListSerializer(many=True)
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -754,15 +953,33 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
 
     @swagger_auto_schema(
         method='put',
-        operation_summary="Update product (PUT)",
+        operation_id="admin_update_product_full",
+        operation_summary="Update Product (Full)",
+        operation_description="Fully update a product's details. All fields must be provided.",
+        tags=["Marketplace Management"],
         request_body=AdminProductUpdateSerializer,
-        responses={200: openapi.Response("Updated successfully")}
+        responses={
+            200: openapi.Response("Product updated successfully"),
+            400: openapi.Response("Invalid product data"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
     )
     @swagger_auto_schema(
         method='patch',
-        operation_summary="Update product (PATCH)",
+        operation_id="admin_update_product_partial",
+        operation_summary="Update Product (Partial)",
+        operation_description="Partially update a product's details. Only provide fields you want to change.",
+        tags=["Marketplace Management"],
         request_body=AdminProductUpdateSerializer,
-        responses={200: openapi.Response("Updated successfully")}
+        responses={
+            200: openapi.Response("Product updated successfully"),
+            400: openapi.Response("Invalid product data"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["put", "patch"])
     def update_product(self, request):
@@ -779,11 +996,22 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
         )
 
         return Response({"success": success, "data": data}, status=200 if success else 400)
+
     @swagger_auto_schema(
-        operation_summary="Delete a product",
-        tags=["Marketplace"],
-        manual_parameters=[openapi.Parameter("slug", openapi.IN_PATH, description="Product slug", type=openapi.TYPE_STRING)],
-        responses={200: AdminProductActionResponseSerializer()},
+        operation_id="admin_delete_product",
+        operation_summary="Delete Product",
+        operation_description="Remove a product from the marketplace. Deleted products cannot be restored.",
+        tags=["Marketplace Management"],
+        manual_parameters=[openapi.Parameter("slug", openapi.IN_PATH, description="Product slug identifier", type=openapi.TYPE_STRING)],
+        responses={
+            200: openapi.Response(
+                "Product deleted successfully",
+                AdminProductActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request"),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=True, methods=["delete"], url_path='delete_product/(?P<slug>[^/.]+)')
@@ -807,13 +1035,23 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
 
-
 class AdminOrdersViewSet(AdminBaseViewSet):
+    """
+    ViewSet for admin management of orders, including order logistics and refund processing.
+    """
 
     @swagger_auto_schema(
-        operation_summary="Get orders summary",
+        operation_id="admin_orders_summary",
+        operation_summary="Get Orders Summary",
+        operation_description="Retrieve a summary of all platform orders grouped by status (pending, shipped, delivered).",
         tags=["Orders & Logistics"],
-        responses={200: AdminOrdersSummarySerializer()},
+        responses={
+            200: openapi.Response(
+                "Orders summary retrieved successfully",
+                AdminOrdersSummarySerializer()
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -831,10 +1069,20 @@ class AdminOrdersViewSet(AdminBaseViewSet):
         return Response({"success": True, "data": data})
 
     @swagger_auto_schema(
-        operation_summary="Assign logistics to an order",
+        operation_id="admin_assign_logistics",
+        operation_summary="Assign Logistics to Order",
+        operation_description="Mark an order as having logistics assigned and ready for shipment.",
         tags=["Orders & Logistics"],
         request_body=AdminOrderActionSerializer,
-        responses={200: AdminOrderActionResponseSerializer()},
+        responses={
+            200: openapi.Response(
+                "Logistics assigned successfully",
+                AdminOrderActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -857,10 +1105,20 @@ class AdminOrdersViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
-        operation_summary="Process refund for an order",
+        operation_id="admin_process_refund",
+        operation_summary="Process Order Refund",
+        operation_description="Process a refund for an order and update its status to refunded.",
         tags=["Orders & Logistics"],
         request_body=AdminOrderActionSerializer,
-        responses={200: AdminOrderActionResponseSerializer()},
+        responses={
+            200: openapi.Response(
+                "Refund processed successfully",
+                AdminOrderActionResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -883,52 +1141,23 @@ class AdminOrdersViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
 
-
 class AdminFinanceViewSet(AdminBaseViewSet):
-
-    @action(detail=False, methods=["get"])
-    def payments(self, request):
-        admin = self.get_admin(request)
-        if not admin:
-            return Response({"message": "Access denied"}, status=403)
-
-        payments = Payment.objects.all()
-        serializer = PaymentSerializer(payments, many=True)
-        return Response({"success": True, "data": serializer.data})
-
-    @action(detail=False, methods=["post"])
-    def trigger_payout(self, request):
-        admin = self.get_admin(request)
-        if not admin:
-            return Response({"message": "Access denied"}, status=403)
-
-        serializer = TriggerPayoutSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
-        if not user:
-            return Response({"message": "User not found"}, status=404)
-
-        total_payable = PayoutService.calculate_payout(user)
-        if total_payable <= 0:
-            return Response({"message": "Nothing to payout"}, status=400)
-
-        PayoutService.execute_payout(user, total_payable)
-
-        return Response({"success": True, "amount": total_payable})
-
-
-
-
-from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
-
-class AdminFinanceViewSet(AdminBaseViewSet):
+    """
+    ViewSet for admin financial management including payments and vendor payouts.
+    """
 
     @swagger_auto_schema(
-        operation_summary="Get all payments",
+        operation_id="admin_list_payments",
+        operation_summary="Get All Payments",
+        operation_description="Retrieve all payment records from the platform with customer and amount information.",
         tags=["Finance"],
-        responses={200: AdminFinancePaymentSerializer(many=True)},
+        responses={
+            200: openapi.Response(
+                "Payments retrieved successfully",
+                AdminFinancePaymentSerializer(many=True)
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])
@@ -942,10 +1171,20 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
-        operation_summary="Trigger payout for vendor or customer",
+        operation_id="admin_trigger_payout",
+        operation_summary="Trigger Vendor/Customer Payout",
+        operation_description="Calculate and execute a payout for a vendor or customer based on their available balance.",
         tags=["Finance"],
         request_body=AdminFinancePayoutSerializer,
-        responses={200: openapi.Response("Payout triggered")},
+        responses={
+            200: openapi.Response(
+                "Payout triggered successfully",
+                AdminFinancePayoutResponseSerializer()
+            ),
+            400: openapi.Response("Invalid user UUID or nothing to payout"),
+            404: openapi.Response("User not found"),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
@@ -970,14 +1209,23 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         return Response({"success": True, "amount": total_payable})
 
 
-
-
 class AdminAnalyticsViewSet(AdminBaseViewSet):
+    """
+    ViewSet for admin analytics and reporting on platform performance.
+    """
 
     @swagger_auto_schema(
-        operation_summary="Admin sales & orders analytics overview",
+        operation_id="admin_analytics_overview",
+        operation_summary="Admin Sales & Orders Analytics Overview",
+        operation_description="Get platform-wide analytics including total orders, revenue, pending and delivered orders.",
         tags=["Analytics"],
-        responses={200: AdminAnalyticsSerializer()},
+        responses={
+            200: openapi.Response(
+                "Analytics data retrieved successfully",
+                AdminAnalyticsSerializer()
+            ),
+            403: openapi.Response("Admin access only"),
+        },
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["get"])

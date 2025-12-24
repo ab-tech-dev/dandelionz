@@ -6,6 +6,57 @@ from authentication.models import CustomUser
 
 
 # ========================
+# WALLET SYSTEM (Defined first for dependencies)
+# ========================
+class Wallet(models.Model):
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='wallet')
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def credit(self, amount, source=None):
+        """Add funds to the wallet"""
+        self.balance += Decimal(amount)
+        self.save(update_fields=['balance', 'updated_at'])
+        WalletTransaction.objects.create(
+            wallet=self,
+            transaction_type=WalletTransaction.TransactionType.CREDIT,
+            amount=amount,
+            source=source
+        )
+
+    def debit(self, amount, source=None):
+        """Subtract funds from the wallet"""
+        if self.balance < Decimal(amount):
+            raise ValueError("Insufficient wallet balance")
+        self.balance -= Decimal(amount)
+        self.save(update_fields=['balance', 'updated_at'])
+        WalletTransaction.objects.create(
+            wallet=self,
+            transaction_type=WalletTransaction.TransactionType.DEBIT,
+            amount=amount,
+            source=source
+        )
+
+    def __str__(self):
+        return f"{self.user.email} Wallet - Balance: {self.balance}"
+
+
+class WalletTransaction(models.Model):
+    class TransactionType(models.TextChoices):
+        CREDIT = 'CREDIT', 'Credit'
+        DEBIT = 'DEBIT', 'Debit'
+
+    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=6, choices=TransactionType.choices)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    source = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.wallet.user.email} - {self.transaction_type} {self.amount} ({self.source})"
+
+
+# ========================
 # ORDER SYSTEM
 # ========================
 class Order(models.Model):
@@ -87,12 +138,13 @@ class OrderItem(models.Model):
 # ========================
 class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payment')
-    reference = models.CharField(max_length=100, unique=True)
+    reference = models.CharField(max_length=100, unique=True, default=uuid.uuid4)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=20, default='PENDING')  # PENDING, SUCCESS, FAILED
     gateway = models.CharField(max_length=50, default='Paystack')
     paid_at = models.DateTimeField(null=True, blank=True)
     verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def mark_as_successful(self):
         self.status = 'SUCCESS'
@@ -134,7 +186,7 @@ class ShippingAddress(models.Model):
 
 
 class TransactionLog(models.Model):
-    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='logs')
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='logs', null=True, blank=True)
     message = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
     level = models.CharField(max_length=10, default='INFO')  # INFO, WARNING, ERROR
@@ -143,6 +195,7 @@ class TransactionLog(models.Model):
         permissions = [
             ("view_transactionlog_admin", "Can view transaction logs (admin only)"),
         ]
+        ordering = ['-created_at']
 
     def __str__(self):
         return f"[{self.level}] {self.order.order_id}: {self.message[:50]}"
@@ -156,67 +209,8 @@ class Refund(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
 
-    def mark_as_approved(self):
-        self.status = 'APPROVED'
-        self.processed_at = timezone.now()
-        self.save()
-
-
-from django.db import models
-from django.utils import timezone
-from decimal import Decimal
-import uuid
-from authentication.models import CustomUser
-
-# ========================
-# WALLET SYSTEM
-# ========================
-class Wallet(models.Model):
-    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='wallet')
-    balance = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def credit(self, amount, source=None):
-        """Add funds to the wallet"""
-        self.balance += Decimal(amount)
-        self.save(update_fields=['balance', 'updated_at'])
-        WalletTransaction.objects.create(
-            wallet=self,
-            transaction_type=WalletTransaction.TransactionType.CREDIT,
-            amount=amount,
-            source=source
-        )
-
-    def debit(self, amount, source=None):
-        """Subtract funds from the wallet"""
-        if self.balance < Decimal(amount):
-            raise ValueError("Insufficient wallet balance")
-        self.balance -= Decimal(amount)
-        self.save(update_fields=['balance', 'updated_at'])
-        WalletTransaction.objects.create(
-            wallet=self,
-            transaction_type=WalletTransaction.TransactionType.DEBIT,
-            amount=amount,
-            source=source
-        )
-
     def __str__(self):
-        return f"{self.user.email} Wallet - Balance: {self.balance}"
-
-
-class WalletTransaction(models.Model):
-    class TransactionType(models.TextChoices):
-        CREDIT = 'CREDIT', 'Credit'
-        DEBIT = 'DEBIT', 'Debit'
-
-    wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='transactions')
-    transaction_type = models.CharField(max_length=6, choices=TransactionType.choices)
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
-    source = models.CharField(max_length=255, blank=True, null=True)  # e.g., 'REFERRAL BONUS', 'ORDER PAYMENT'
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    def __str__(self):
-        return f"{self.wallet.user.email} - {self.transaction_type} {self.amount} ({self.source})"
+        return f"Refund {self.id} - {self.status} ({self.refunded_amount})"
 
 
 from django.contrib.auth import get_user_model

@@ -15,23 +15,43 @@ from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
 from .services import AuthenticationService
 from drf_yasg.utils import swagger_auto_schema
-from drf_yasg import openapi
 from authentication.serializers import (
     UserRegistrationSerializer,
     UserLoginSerializer,
-    AuthResponseSerializer
+    AuthResponseSerializer,
+    TokenRefreshSerializer,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class UserRegistrationView(BaseAPIView):
+    """
+    User registration endpoint for creating new accounts.
+    
+    Supports registration for both CUSTOMER and VENDOR roles.
+    Handles email verification token generation and optional referral code.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [AnonRateThrottle]
 
     @swagger_auto_schema(
+        operation_id="user_register",
+        operation_summary="Register New User Account",
+        operation_description="""Create a new user account with email, password, and optional profile information.
+        
+Supported roles: CUSTOMER, VENDOR
+
+Returns JWT tokens (access and refresh) for immediate authentication.
+Optionally accepts referral_code for affiliate tracking.
+Email verification may be required before full account access.""",
+        tags=["Authentication"],
         request_body=UserRegistrationSerializer,
-        responses={201: AuthResponseSerializer, 400: AuthResponseSerializer}
+        responses={
+            201: AuthResponseSerializer(),
+            400: AuthResponseSerializer(),
+        },
+        security=[],
     )
     def post(self, request):
         try:
@@ -40,7 +60,7 @@ class UserRegistrationView(BaseAPIView):
             phone_number = request.data.get('phone_number')
             full_name = request.data.get('full_name')
             role = request.data.get('role', 'CUSTOMER').upper()
-            referral_code = request.data.get('referral_code')  # NEW FIELD
+            referral_code = request.data.get('referral_code')
 
             if role not in ['CUSTOMER', 'VENDOR']:
                 return Response(
@@ -54,7 +74,7 @@ class UserRegistrationView(BaseAPIView):
                 phone_number=phone_number,
                 full_name=full_name,
                 role=role,
-                referral_code=referral_code,  # PASS TO SERVICE
+                referral_code=referral_code,
                 request_meta=request.META,
                 request=request
             )
@@ -98,12 +118,33 @@ class UserRegistrationView(BaseAPIView):
 
 
 class UserLoginView(BaseAPIView):
+    """
+    User login endpoint for authentication.
+    
+    Authenticates users by email and password.
+    Returns JWT tokens for use in subsequent API requests.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [AnonRateThrottle]
 
     @swagger_auto_schema(
+        operation_id="user_login",
+        operation_summary="User Login",
+        operation_description="""Authenticate a user with email and password.
+
+Returns access and refresh JWT tokens for subsequent API requests.
+Access token is used in Authorization header: Bearer {access_token}
+Refresh token can be used to obtain new access tokens when expired.
+
+For unverified email accounts, full functionality may be limited until email verification is completed.""",
+        tags=["Authentication"],
         request_body=UserLoginSerializer,
-        responses={200: AuthResponseSerializer, 400: AuthResponseSerializer}
+        responses={
+            200: AuthResponseSerializer(),
+            400: AuthResponseSerializer(),
+            401: AuthResponseSerializer(),
+        },
+        security=[],
     )
     def post(self, request):
         try:
@@ -156,15 +197,32 @@ class UserLoginView(BaseAPIView):
 
 
 class TokenRefreshView(BaseAPIView):
+    """
+    Token refresh endpoint for obtaining new access tokens.
+    
+    Uses refresh token to issue a new access token without requiring login credentials.
+    Useful when access token has expired but refresh token is still valid.
+    """
     permission_classes = [AllowAny]
     throttle_classes = [AnonRateThrottle]
 
     @swagger_auto_schema(
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={'refresh_token': openapi.Schema(type=openapi.TYPE_STRING)}
-        ),
-        responses={200: AuthResponseSerializer, 400: AuthResponseSerializer}
+        operation_id="token_refresh",
+        operation_summary="Refresh Access Token",
+        operation_description="""Obtain a new access token using a valid refresh token.
+
+The refresh token can be provided in the request body or will be retrieved from cookies if JWT_COOKIE_SECURE is enabled.
+
+Use this endpoint when your access token expires but you still have a valid refresh token.
+A new access token will be returned for use in subsequent API requests.""",
+        tags=["Authentication"],
+        request_body=TokenRefreshSerializer,
+        responses={
+            200: AuthResponseSerializer(),
+            400: AuthResponseSerializer(),
+            401: AuthResponseSerializer(),
+        },
+        security=[],
     )
     def post(self, request):
         try:
@@ -212,10 +270,30 @@ class TokenRefreshView(BaseAPIView):
 
 
 class ValidateTokenView(BaseAPIView):
+    """
+    Token validation endpoint for verifying access token validity.
+    
+    Checks if the provided access token is valid and returns user information.
+    Useful for front-end to validate if current token is still active.
+    """
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        responses={200: AuthResponseSerializer, 400: AuthResponseSerializer, 401: AuthResponseSerializer}
+        operation_id="token_validate",
+        operation_summary="Validate Access Token",
+        operation_description="""Verify the validity of an access token and retrieve user information.
+
+Requires a valid Bearer token in the Authorization header.
+Returns user details if the token is valid and not expired.
+
+Use this endpoint to verify token status on application startup or periodically.""",
+        tags=["Authentication"],
+        responses={
+            200: AuthResponseSerializer(),
+            400: AuthResponseSerializer(),
+            401: AuthResponseSerializer(),
+        },
+        security=[{"Bearer": []}],
     )
     def get(self, request):
         user = request.user
@@ -233,14 +311,31 @@ class ValidateTokenView(BaseAPIView):
 
 
 class LogoutView(BaseAPIView):
+    """
+    User logout endpoint for session termination.
+    
+    Invalidates the provided refresh token and clears session cookies.
+    Requires authenticated user with valid access token.
+    """
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={'refresh_token': openapi.Schema(type=openapi.TYPE_STRING)}
-        ),
-        responses={200: AuthResponseSerializer, 500: AuthResponseSerializer}
+        operation_id="user_logout",
+        operation_summary="Logout User",
+        operation_description="""Terminate the user session and invalidate tokens.
+
+Requires authentication with a valid access token.
+The refresh token can be provided in request body or will be read from cookies if JWT_COOKIE_SECURE is enabled.
+After logout, the refresh token is invalidated and cannot be used to obtain new access tokens.
+
+JWT cookies will be cleared from the response if cookie-based authentication is enabled.""",
+        tags=["Authentication"],
+        request_body=TokenRefreshSerializer,
+        responses={
+            200: AuthResponseSerializer(),
+            500: AuthResponseSerializer(),
+        },
+        security=[{"Bearer": []}],
     )
     def post(self, request):
         try:
@@ -257,7 +352,7 @@ class LogoutView(BaseAPIView):
                 response.delete_cookie(
                     key=settings.JWT_COOKIE_NAME,
                     path='/',
-                    domain=settings.JWT_COOKIE_DOMAIN
+                    domain=settings.SESSION_COOKIE_DOMAIN
                 )
 
             return response
@@ -274,7 +369,7 @@ class LogoutView(BaseAPIView):
                 response.delete_cookie(
                     key=settings.JWT_COOKIE_NAME,
                     path='/',
-                    domain=settings.JWT_COOKIE_DOMAIN
+                    domain=settings.SESSION_COOKIE_DOMAIN
                 )
 
             return response

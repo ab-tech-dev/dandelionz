@@ -10,12 +10,13 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.utils import timezone
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet 
+from transactions.models import Wallet, WalletTransaction
 from users.models import Notification
 
-from .models import Order, OrderItem, Payment, TransactionLog
+from .models import Order, OrderItem, Payment, TransactionLog, Refund
 from .serializers import (
-    OrderSerializer, OrderItemSerializer, TransactionLogSerializer, PaymentSerializer
+    OrderSerializer, OrderItemSerializer, TransactionLogSerializer, PaymentSerializer,
+    RefundSerializer, WalletSerializer, WalletTransactionSerializer
 )
 from .paystack import Paystack
 
@@ -135,7 +136,13 @@ class SecureInitializePaymentView(APIView):
         calculated_total = order.calculate_total()
 
         # create or get Payment record (idempotent behavior)
-        payment, created = Payment.objects.get_or_create(order=order, defaults={"amount": calculated_total})
+        payment, created = Payment.objects.get_or_create(
+            order=order,
+            defaults={
+                "amount": calculated_total,
+                "reference": str(order.order_id)  # Use order ID as reference base
+            }
+        )
         # if exists but amount mismatch, fix it (or create a new reference by re-creating; here we update safely)
         if not created and payment.amount != calculated_total:
             payment.amount = calculated_total
@@ -441,3 +448,52 @@ class RefundDetailView(generics.RetrieveUpdateAPIView):
                 level="ERROR"
             )
             return Response({"detail": "Refund processing failed"}, status=500)
+
+
+# ----------------------
+# Wallet Management
+# ----------------------
+class CustomerWalletView(generics.RetrieveAPIView):
+    """
+    Retrieve current customer's wallet balance and recent transactions.
+    """
+    serializer_class = WalletSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        wallet, _ = Wallet.objects.get_or_create(user=self.request.user)
+        return wallet
+
+
+class WalletTransactionListView(generics.ListAPIView):
+    """
+    List wallet transactions for the authenticated customer.
+    """
+    serializer_class = WalletTransactionSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        wallet = get_object_or_404(Wallet, user=self.request.user)
+        return wallet.transactions.all().order_by('-created_at')
+
+
+class AdminWalletListView(generics.ListAPIView):
+    """
+    Admin endpoint to list all wallets (for monitoring/reporting).
+    """
+    queryset = Wallet.objects.select_related('user').order_by('-updated_at')
+    serializer_class = WalletSerializer
+    permission_classes = [permissions.IsAdminUser]
+    filterset_fields = ['user__email']
+    search_fields = ['user__email', 'user__username']
+
+
+# Export for URL inclusion
+__all__ = [
+    'OrderListCreateView', 'OrderDetailView',
+    'OrderItemListCreateView', 'OrderItemDetailView',
+    'TransactionLogListView',
+    'SecureInitializePaymentView', 'SecureVerifyPaymentView', 'PaystackWebhookView',
+    'RefundListView', 'RefundDetailView',
+    'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView'
+]

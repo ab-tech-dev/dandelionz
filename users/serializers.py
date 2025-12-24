@@ -423,3 +423,37 @@ class AdminVendorActionResponseSerializer(serializers.Serializer):
 class AdminProfileResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
     data = AdminUserManagementSerializer()
+
+
+# =====================================================
+# RESPONSE WRAPPER SERIALIZERS
+# =====================================================
+class SuccessResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    message = serializers.CharField(required=False, allow_blank=True)
+
+
+class VendorOrdersSummaryResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    data = serializers.DictField(
+        child=serializers.IntegerField(),
+        help_text="Order counts: pending, paid, shipped, delivered, canceled"
+    )
+
+
+class VendorAnalyticsResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    data = serializers.DictField(
+        help_text="Analytics data with total_revenue and top_products"
+    )
+
+
+class AdminFinancePayoutResponseSerializer(serializers.Serializer):
+    success = serializers.BooleanField()
+    amount = serializers.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        required=False,
+        help_text="Payout amount"
+    )
+    message = serializers.CharField(required=False, allow_blank=True)

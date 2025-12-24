@@ -16,24 +16,24 @@ logger = logging.getLogger("authentication.verification")
     retry_jitter=True,
     name="authentication.verification.send_verification_email"
 )
-def send_verification_email_task(self, user_id: int):
+def send_verification_email_task(self, user_uuid: int):
     """Celery task to send verification email"""
     try:
-        user = User.objects.get(id=user_id)
+        user = User.objects.get(uuid=user_uuid)
         if not user.is_verified:
             logger.info(f"[VerificationEmailTask] Sending verification email to: {user.email}")
             EmailService.send_verification_email(user)
-            return {"status": "success", "email": user.email, "user_id": user.id}
+            return {"status": "success", "email": user.email, "user_uuid": user.pk}
         else:
             logger.info(f"[VerificationEmailTask] Skipped: user already verified ({user.email})")
             return {"status": "skipped", "reason": "already_verified"}
 
     except User.DoesNotExist:
-        logger.warning(f"[VerificationEmailTask] User with ID {user_id} not found.")
+        logger.warning(f"[VerificationEmailTask] User with uuid {user_uuid} not found.")
         return {"status": "failed", "reason": "user_not_found"}
 
     except Exception as e:
-        logger.error(f"[VerificationEmailTask] Failed for user {user_id} (attempt {self.request.retries}): {str(e)}")
+        logger.error(f"[VerificationEmailTask] Failed for user {user_uuid} (attempt {self.request.retries}): {str(e)}")
         raise e
 
 
@@ -46,22 +46,22 @@ def send_verification_email_task(self, user_id: int):
     retry_jitter=True,
     name="authentication.verification.send_password_reset_email"
 )
-def send_password_reset_email_task(self, user_id: int):
+def send_password_reset_email_task(self, user_uuid: int):
     """Celery task to send password reset email"""
     try:
-        user = User.objects.get(id=user_id)
+        user = User.objects.get(uuid=user_uuid)
         if user.is_verified:
             logger.info(f"[PasswordResetTask] Sending password reset email to: {user.email}")
             EmailService.send_password_reset_email(user)
-            return {"status": "success", "email": user.email, "user_id": user.id}
+            return {"status": "success", "email": user.email, "user_uuid": user.pk}
         else:
             logger.warning(f"[PasswordResetTask] Skipped: unverified user {user.email}")
             return {"status": "skipped", "reason": "user_not_verified"}
 
     except User.DoesNotExist:
-        logger.warning(f"[PasswordResetTask] User with ID {user_id} not found.")
+        logger.warning(f"[PasswordResetTask] User with uuid {user_uuid} not found.")
         return {"status": "failed", "reason": "user_not_found"}
 
     except Exception as e:
-        logger.error(f"[PasswordResetTask] Failed for user {user_id} (attempt {self.request.retries}): {str(e)}")
+        logger.error(f"[PasswordResetTask] Failed for user {user_uuid} (attempt {self.request.retries}): {str(e)}")
         raise e

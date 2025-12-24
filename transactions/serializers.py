@@ -1,7 +1,8 @@
 from rest_framework import serializers
-from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund
+from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, WalletTransaction
 from store.models import Product
 from decimal import Decimal
+
 
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
@@ -9,6 +10,7 @@ class ProductSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'price', 'description']
         read_only_fields = fields
         ref_name = "TransactionProductSerializer"
+
 
 class OrderItemSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)
@@ -26,11 +28,11 @@ class OrderItemSerializer(serializers.ModelSerializer):
         return obj.item_subtotal
 
     def create(self, validated_data):
-        # ensure price_at_purchase is current product price if not provided
         product = validated_data.get('product')
         if not validated_data.get('price_at_purchase'):
             validated_data['price_at_purchase'] = product.price
         return super().create(validated_data)
+
 
 class ShippingAddressSerializer(serializers.ModelSerializer):
     class Meta:
@@ -38,16 +40,15 @@ class ShippingAddressSerializer(serializers.ModelSerializer):
         fields = ['id', 'order', 'full_name', 'address', 'city', 'state', 'country', 'postal_code', 'phone_number']
         read_only_fields = ['id']
 
+
 class PaymentSerializer(serializers.ModelSerializer):
     order_id = serializers.UUIDField(source='order.order_id', read_only=True)
 
     class Meta:
         model = Payment
-        fields = ['id', 'order_id', 'reference', 'amount', 'status', 'gateway', 'paid_at', 'verified']
-        read_only_fields = ['id', 'order_id', 'paid_at', 'verified', 'reference']
+        fields = ['id', 'order_id', 'reference', 'amount', 'status', 'gateway', 'paid_at', 'verified', 'created_at']
+        read_only_fields = ['id', 'order_id', 'paid_at', 'verified', 'reference', 'created_at']
 
-from rest_framework import serializers
-from .models import Refund
 
 class RefundSerializer(serializers.ModelSerializer):
     payment_reference = serializers.CharField(source='payment.reference', read_only=True)
@@ -71,11 +72,30 @@ class RefundSerializer(serializers.ModelSerializer):
 
 
 class TransactionLogSerializer(serializers.ModelSerializer):
-    order_id = serializers.UUIDField(source='order.order_id', read_only=True)
+    order_id = serializers.UUIDField(source='order.order_id', read_only=True, allow_null=True)
+
     class Meta:
         model = TransactionLog
         fields = ['id', 'order_id', 'message', 'level', 'created_at']
         read_only_fields = fields
+
+
+class WalletTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WalletTransaction
+        fields = ['id', 'transaction_type', 'amount', 'source', 'created_at']
+        read_only_fields = fields
+
+
+class WalletSerializer(serializers.ModelSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    transactions = WalletTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Wallet
+        fields = ['id', 'user_email', 'balance', 'updated_at', 'transactions']
+        read_only_fields = fields
+
 
 class OrderSerializer(serializers.ModelSerializer):
     customer_email = serializers.EmailField(source='customer.email', read_only=True)
