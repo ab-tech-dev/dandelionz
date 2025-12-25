@@ -194,7 +194,6 @@ from pathlib import Path
 
 
 # Email & Verification
-FORCE_SCRIPT_NAME = '/api'
 
 
 EMAIL_BACKEND = os.getenv('EMAIL_BACKEND')

@@ -44,9 +44,9 @@ urlpatterns = [
     path('abtechdev/', admin.site.urls),
 
     # App URLs
-    path('store/', include('store.urls')),
-    path('user/', include('users.urls')),
-    path('transactions/', include('transactions.urls')),
+    path('api/store/', include('store.urls')),
+    path('api/user/', include('users.urls')),
+    path('api/transactions/', include('transactions.urls')),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
