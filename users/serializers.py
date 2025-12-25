@@ -31,6 +31,9 @@ class UserBaseSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
+        ref_name = "UsersUserBase"
+
+
 
 # --------------------------------------
 # CUSTOMER PROFILE & CUSTOMER-SIDE Serializer

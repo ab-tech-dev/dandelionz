@@ -19,6 +19,9 @@ class UserBaseSerializer(serializers.ModelSerializer):
             'referral_code'
         ]
         read_only_fields = ['uuid', 'email', 'role', 'created_at', 'is_verified', 'referral_code']
+        ref_name = "AuthUserBase"
+
+
 
 
 # ------------------------------------------------------
