@@ -36,17 +36,17 @@ import os
 
 urlpatterns = [
     # Fake admin traps
-    path('api/admin/', include('django_admin_trap.urls')),
-    path('api/wp-admin/', include('django_admin_trap.urls')),
-    path('api/administrator/', include('django_admin_trap.urls')),
+    path('admin/', include('django_admin_trap.urls')),
+    path('wp-admin/', include('django_admin_trap.urls')),
+    path('administrator/', include('django_admin_trap.urls')),
 
     # Real admin (hidden)
-    path('api/abtechdev/', admin.site.urls),
+    path('abtechdev/', admin.site.urls),
 
     # App URLs
-    path('api/store/', include('store.urls')),
-    path('api/user/', include('users.urls')),
-    path('api/transactions/', include('transactions.urls')),
+    path('store/', include('store.urls')),
+    path('user/', include('users.urls')),
+    path('transactions/', include('transactions.urls')),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
