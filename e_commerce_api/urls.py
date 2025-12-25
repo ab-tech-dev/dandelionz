@@ -44,6 +44,7 @@ urlpatterns = [
     path('abtechdev/', admin.site.urls),
 
     # App URLs
+    path('api/auth/', include('authentication.urls')),
     path('api/store/', include('store.urls')),
     path('api/user/', include('users.urls')),
     path('api/transactions/', include('transactions.urls')),
