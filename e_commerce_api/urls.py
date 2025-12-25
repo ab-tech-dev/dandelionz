@@ -35,9 +35,11 @@ import os
 
 
 urlpatterns = [
-    # Fake admin login page
-    path('admin/', include('admin_honeypot.urls', namespace='admin_honeypot')),
-    # Real admin panel
+    # Fake admin trap
+    path('admin/', include('django_admin_trap.urls')),
+    path('wp-admin/', include('django_admin_trap.urls')),  # common WordPress path
+    path('administrator/', include('django_admin_trap.urls')),  # another common path
+    # Real admin (hidden)
     path('abtechdev/', admin.site.urls),
     path('api/store/', include('store.urls')),
     path('api/user/', include('users.urls')),

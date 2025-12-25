@@ -23,7 +23,7 @@ REFERRAL_BONUS_AMOUNT = os.getenv('REFERRAL_BONUS_AMOUNT')  # Could be Naira, po
 # Application definition
 INSTALLED_APPS = [
     # Local apps
-    'admin_honeypot',
+    'django_admin_trap',
     'authentication',
     'users.apps.UsersConfig',
     'store',
