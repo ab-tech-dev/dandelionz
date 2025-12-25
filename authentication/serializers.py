@@ -4,7 +4,11 @@ from .models import CustomUser
 # ------------------------------------------------------
 # BASE USER SERIALIZER
 # ------------------------------------------------------
+from rest_framework import serializers
+
 class UserBaseSerializer(serializers.ModelSerializer):
+    profile_picture = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomUser
         fields = [
@@ -20,6 +24,13 @@ class UserBaseSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['uuid', 'email', 'role', 'created_at', 'is_verified', 'referral_code']
         ref_name = "AuthUserBase"
+
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            # Prepend your Cloudinary base URL
+            return f"https://res.cloudinary.com/dhpny4uce/{obj.profile_picture}"
+        return None
+
 
 
 
