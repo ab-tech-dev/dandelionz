@@ -35,8 +35,10 @@ import os
 
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('api/auth/', include('authentication.urls')),
+    # Fake admin login page
+    path('admin/', include('admin_honeypot.urls', namespace='admin_honeypot')),
+    # Real admin panel
+    path('abtechdev/', admin.site.urls),
     path('api/store/', include('store.urls')),
     path('api/user/', include('users.urls')),
     path('api/transactions/', include('transactions.urls')),
