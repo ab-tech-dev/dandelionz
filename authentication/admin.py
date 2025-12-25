@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import CustomUser
+from .models import CustomUser, Referral
 
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
@@ -20,6 +20,11 @@ class CustomUserAdmin(UserAdmin):
 
         ('Permissions', {
             'fields': ('role', 'is_verified', 'is_active', 'is_staff', 'is_superuser')
+        }),
+
+        ('Referral', {
+            'fields': ('referral_code',),
+            'classes': ('collapse',)
         }),
 
         ('Important Dates', {
@@ -46,3 +51,23 @@ class CustomUserAdmin(UserAdmin):
 
 
 admin.site.register(CustomUser, CustomUserAdmin)
+
+
+@admin.register(Referral)
+class ReferralAdmin(admin.ModelAdmin):
+    list_display = ('referrer', 'referred_user', 'bonus_awarded', 'bonus_amount', 'created_at')
+    list_filter = ('bonus_awarded', 'created_at')
+    search_fields = ('referrer__email', 'referred_user__email')
+    readonly_fields = ('created_at',)
+    fieldsets = (
+        ('Referral Information', {
+            'fields': ('referrer', 'referred_user')
+        }),
+        ('Bonus Details', {
+            'fields': ('bonus_awarded', 'bonus_amount')
+        }),
+        ('Metadata', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )

@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, WalletTransaction
+from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, WalletTransaction, PayoutRecord
 
 
 @admin.register(Order)
@@ -71,3 +71,29 @@ class WalletTransactionAdmin(admin.ModelAdmin):
     def has_delete_permission(self, request, obj=None):
         """Prevent transaction deletion to maintain audit trail."""
         return False
+
+
+@admin.register(ShippingAddress)
+class ShippingAddressAdmin(admin.ModelAdmin):
+    list_display = ('order', 'full_name', 'city', 'state', 'country')
+    search_fields = ('order__order_id', 'full_name', 'email')
+    list_filter = ('country', 'state')
+    fieldsets = (
+        ('Order', {
+            'fields': ('order',)
+        }),
+        ('Recipient Information', {
+            'fields': ('full_name', 'phone_number')
+        }),
+        ('Address Details', {
+            'fields': ('address', 'city', 'state', 'country', 'postal_code')
+        }),
+    )
+
+
+@admin.register(PayoutRecord)
+class PayoutRecordAdmin(admin.ModelAdmin):
+    list_display = ('user', 'amount', 'reference', 'created_at')
+    search_fields = ('user__email', 'reference')
+    list_filter = ('created_at',)
+    readonly_fields = ('user', 'reference', 'created_at')
