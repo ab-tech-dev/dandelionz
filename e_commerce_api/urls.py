@@ -35,12 +35,15 @@ import os
 
 
 urlpatterns = [
-    # Fake admin trap
-    path('admin/', include('django_admin_trap.urls')),
-    path('wp-admin/', include('django_admin_trap.urls')),  # common WordPress path
-    path('administrator/', include('django_admin_trap.urls')),  # another common path
+    # Fake admin traps
+    path('api/admin/', include('django_admin_trap.urls')),
+    path('api/wp-admin/', include('django_admin_trap.urls')),
+    path('api/administrator/', include('django_admin_trap.urls')),
+
     # Real admin (hidden)
-    path('abtechdev/', admin.site.urls),
+    path('api/abtechdev/', admin.site.urls),
+
+    # App URLs
     path('api/store/', include('store.urls')),
     path('api/user/', include('users.urls')),
     path('api/transactions/', include('transactions.urls')),
