@@ -18,7 +18,8 @@ from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction
 from users.models import Notification
 
-from .models import Order, OrderItem, Payment, TransactionLog, Refund, Cart, CartItem
+from .models import Order, OrderItem, Payment, TransactionLog, Refund
+from store.models import Cart, CartItem
 from .serializers import (
     OrderSerializer,
     OrderItemSerializer,
