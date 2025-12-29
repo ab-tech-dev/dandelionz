@@ -6,10 +6,18 @@ from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 class IsAdmin(BasePermission):
     """
-    Allows access only to users with role ADMIN
+    Allows access only to users with role ADMIN or BUSINESS_ADMIN
     """
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.is_admin
+        if not request.user.is_authenticated:
+            return False
+        # Allow if user is main admin
+        if request.user.is_admin:
+            return True
+        # Allow if user is business admin
+        if hasattr(request.user, 'business_admin_profile'):
+            return True
+        return False
 
 
 class IsVendor(BasePermission):

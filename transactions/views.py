@@ -18,7 +18,7 @@ from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction
 from users.models import Notification
 
-from .models import Order, OrderItem, Payment, TransactionLog, Refund
+from .models import Order, OrderItem, Payment, TransactionLog, Refund, Cart, CartItem
 from .serializers import (
     OrderSerializer,
     OrderItemSerializer,
@@ -29,11 +29,10 @@ from .serializers import (
     WalletTransactionSerializer
 )
 from .paystack import Paystack
-
+from authentication.core.response import standardized_response
 
 PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
-
 
 # ----------------------
 # Custom permissions
@@ -59,7 +58,6 @@ class OrderListCreateView(generics.ListCreateAPIView):
     def perform_create(self, serializer):
         order = serializer.save(customer=self.request.user)
         order.update_total()
-
         vendors = {item.vendor for item in order.order_items.all() if item.vendor}
         for vendor in vendors:
             Notification.objects.create(
@@ -67,8 +65,6 @@ class OrderListCreateView(generics.ListCreateAPIView):
                 title="New Order Received",
                 message=f"You received a new order {order.order_id}."
             )
-
-
 
 class OrderDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = OrderSerializer
@@ -98,8 +94,6 @@ class OrderItemListCreateView(generics.ListCreateAPIView):
         order = get_object_or_404(Order, order_id=self.kwargs.get("order_id"))
         order_item = serializer.save(order=order)
         order.update_total()
-
-        # Notify the vendor of this product
         vendor = order_item.vendor
         if vendor:
             Notification.objects.create(
@@ -108,7 +102,6 @@ class OrderItemListCreateView(generics.ListCreateAPIView):
                 message=f"You have a new order item: {order_item.product.name} x {order_item.quantity} "
                         f"in order {order.order_id} from {order.customer.email}."
             )
-
 
 class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = OrderItemSerializer
@@ -124,62 +117,99 @@ class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
 # Transaction logs (admin only)
 # ----------------------
 class TransactionLogListView(generics.ListAPIView):
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
     serializer_class = TransactionLogSerializer
     queryset = TransactionLog.objects.all().order_by('-created_at')
 
 # ----------------------
-# Payment initialization
+# Checkout Endpoint (New)
 # ----------------------
-class SecureInitializePaymentView(APIView):
+class CheckoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, order_id):
-        order = get_object_or_404(Order, order_id=order_id, customer=request.user)
+    def post(self, request):
+        user = request.user
+        cart = Cart.objects.filter(customer=user).first()
+        if not cart:
+            return Response(
+                standardized_response(success=False, error="Cart is empty"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if order.status != Order.Status.PENDING:
-            return Response({"detail": "Order already processed"}, status=400)
+        cart_items = CartItem.objects.select_related("product").filter(cart=cart)
+        if not cart_items.exists():
+            return Response(
+                standardized_response(success=False, error="Cart has no items"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        calculated_total = order.calculate_total()
+        with transaction.atomic():
+            # 1. Create Order
+            order = Order.objects.create(customer=user)
 
-        reference = f"{order.order_id}-{uuid.uuid4().hex[:12]}"
+            # 2. Convert CartItems → OrderItems
+            for item in cart_items:
+                OrderItem.objects.create(
+                    order=order,
+                    product=item.product,
+                    quantity=item.quantity,
+                    price=item.product.price,
+                    vendor=item.product.store
+                )
 
-        payment, created = Payment.objects.get_or_create(
-            order=order,
-            defaults={
-                "amount": calculated_total,
-                "reference": reference,
-                "currency": EXPECTED_CURRENCY
-            }
-        )
+            # 3. Calculate total
+            order.update_total()
 
-        if not created:
-            payment.amount = calculated_total
+            # 4. Create or reset Payment
+            reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
+            payment, _ = Payment.objects.get_or_create(
+                order=order,
+                defaults={
+                    "amount": order.total_price,
+                    "reference": reference,
+                    "currency": EXPECTED_CURRENCY
+                }
+            )
+            payment.amount = order.total_price
+            payment.reference = reference
             payment.currency = EXPECTED_CURRENCY
             payment.verified = False
             payment.status = Payment.Status.PENDING
-            payment.save(update_fields=["amount", "currency", "verified", "status"])
+            payment.save()
 
-        paystack = Paystack()
-        resp = paystack.initialize_payment(
-            request.user.email,
-            payment.amount,
-            payment.reference,
-            settings.PAYSTACK_CALLBACK_URL
+            # 5. Initialize Paystack
+            paystack = Paystack()
+            response = paystack.initialize_payment(
+                email=user.email,
+                amount=payment.amount,
+                reference=payment.reference,
+                callback_url=settings.PAYSTACK_CALLBACK_URL
+            )
+
+            # 6. Notify vendors
+            vendors = {item.vendor for item in order.order_items.all() if item.vendor}
+            for vendor in vendors:
+                Notification.objects.create(
+                    recipient=vendor,
+                    title="New Order Received",
+                    message=f"You received a new order {order.order_id}."
+                )
+
+            # 7. Clear cart
+            cart_items.delete()
+
+        return Response(
+            standardized_response(
+                data={
+                    "order_id": order.order_id,
+                    "authorization_url": response["data"]["authorization_url"],
+                    "reference": payment.reference,
+                    "amount": float(payment.amount)
+                },
+                message="Checkout initialized successfully"
+            ),
+            status=status.HTTP_201_CREATED
         )
-
-        TransactionLog.objects.create(
-            order=order,
-            message=f"Payment initialized ref={payment.reference}",
-            level="INFO"
-        )
-
-        return Response({
-            "authorization_url": resp["data"]["authorization_url"],
-            "reference": payment.reference,
-            "amount": float(payment.amount)
-        })
-
 
 # ----------------------
 # Payment verification
@@ -225,13 +255,11 @@ class SecureVerifyPaymentView(APIView):
             for item in payment.order.order_items.all():
                 if not item.vendor:
                     continue
-
                 vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
                 wallet, _ = Wallet.objects.select_for_update().get_or_create(user=item.vendor)
                 wallet.credit(vendor_share, source=f"Order {payment.order.order_id}")
 
         return Response({"detail": "Payment verified"})
-
 
 # ----------------------
 # Paystack webhook
@@ -281,9 +309,6 @@ class PaystackWebhookView(APIView):
                 payment.mark_as_successful()
 
         return Response({"status": "ok"})
-
-
-
 
 # ----------------------
 # Refund management
@@ -360,7 +385,7 @@ class AdminWalletListView(generics.ListAPIView):
     """
     queryset = Wallet.objects.select_related('user').order_by('-updated_at')
     serializer_class = WalletSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdmin]
     filterset_fields = ['user__email']
     search_fields = ['user__email', 'user__username']
 
@@ -370,7 +395,7 @@ __all__ = [
     'OrderListCreateView', 'OrderDetailView',
     'OrderItemListCreateView', 'OrderItemDetailView',
     'TransactionLogListView',
-    'SecureInitializePaymentView', 'SecureVerifyPaymentView', 'PaystackWebhookView',
+    'CheckoutView', 'SecureVerifyPaymentView', 'PaystackWebhookView',
     'RefundListView', 'RefundDetailView',
     'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView'
 ]

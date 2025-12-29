@@ -3,7 +3,7 @@ from .views import (
     OrderListCreateView, OrderDetailView,
     OrderItemListCreateView, OrderItemDetailView,
     TransactionLogListView,
-    SecureInitializePaymentView, SecureVerifyPaymentView, PaystackWebhookView,
+    CheckoutView, SecureVerifyPaymentView, PaystackWebhookView,
     RefundListView, RefundDetailView,
     CustomerWalletView, WalletTransactionListView, AdminWalletListView
 )
@@ -16,8 +16,10 @@ urlpatterns = [
     path('order-items/<int:pk>/', OrderItemDetailView.as_view(), name='order-item-detail'),
     path('logs/', TransactionLogListView.as_view(), name='transaction-log-list'),
 
-    # Payment endpoints
-    path('orders/<uuid:order_id>/pay/', SecureInitializePaymentView.as_view(), name='initialize-payment'),
+    # Checkout endpoint (creates order + initializes payment)
+    path('checkout/', CheckoutView.as_view(), name='checkout'),
+
+    # Payment verification endpoint
     path('verify-payment/', SecureVerifyPaymentView.as_view(), name='verify-payment'),
     path('webhook/', PaystackWebhookView.as_view(), name='paystack-webhook'),
 
