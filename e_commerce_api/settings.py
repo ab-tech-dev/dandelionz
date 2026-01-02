@@ -195,16 +195,20 @@ from pathlib import Path
 
 # Email & Verification
 
-
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND')
+EMAIL_BACKEND = 'authentication.core.email_backend.RobustSMTPEmailBackend'
 EMAIL_HOST = os.getenv('EMAIL_HOST')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT'))
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 
 EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'False').lower() in ('true', '1', 'yes')
 EMAIL_USE_SSL = os.getenv('EMAIL_USE_SSL', 'False').lower() in ('true', '1', 'yes')
 
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+
+# SMTP Connection Settings
+EMAIL_TIMEOUT = 60  # 60 seconds timeout for SMTP operations (increased to prevent read timeouts)
+EMAIL_CONNECTION_RETRY_ATTEMPTS = 3
+EMAIL_CONNECTION_RETRY_DELAY = 2  # seconds between retries
 
 
 # Logging

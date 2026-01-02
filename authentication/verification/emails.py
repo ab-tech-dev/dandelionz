@@ -41,53 +41,57 @@ class EmailService:
             return None
 
     @staticmethod
-    def send_verification_email(user):
+    def send_verification_email(user, max_retries=3):
         """Send verification email to user with verification link"""
-        try:
-            # Encode user ID for verification link
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
-            token = default_token_generator.make_token(user)
+        for attempt in range(max_retries):
+            try:
+                # Encode user ID for verification link
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                token = default_token_generator.make_token(user)
 
-            verify_url = f"{settings.FRONTEND_URL}/auth/email-verify?uid={uid}&token={token}"
-            
-            # Get logo (will be None if file not found)
-            logo_base64 = EmailService.get_logo_base64()
+                verify_url = f"{settings.FRONTEND_URL}/auth/email-verify?uid={uid}&token={token}"
+                
+                # Get logo (will be None if file not found)
+                logo_base64 = EmailService.get_logo_base64()
 
-            subject = f"{settings.APP_NAME} - Verify Your Email Address"
+                subject = f"{settings.APP_NAME} - Verify Your Email Address"
 
-            context = {
-                'user': user,
-                'verify_url': verify_url,
-                'app_name': settings.APP_NAME,
-                'logo_base64': logo_base64 or '',  # Empty string if logo failed to load
-            }
+                context = {
+                    'user': user,
+                    'verify_url': verify_url,
+                    'app_name': settings.APP_NAME,
+                    'logo_base64': logo_base64 or '',  # Empty string if logo failed to load
+                }
 
-            html_message = render_to_string('emails/verify_email.html', context)
-            plain_message = (
-                f"Hello {user.email},\n\n"
-                f"Please verify your email address by clicking the link below:\n"
-                f"{verify_url}\n\n"
-                f"Thank you,\n{settings.APP_NAME} Team"
-            )
+                html_message = render_to_string('emails/verify_email.html', context)
+                plain_message = (
+                    f"Hello {user.email},\n\n"
+                    f"Please verify your email address by clicking the link below:\n"
+                    f"{verify_url}\n\n"
+                    f"Thank you,\n{settings.APP_NAME} Team"
+                )
 
-            from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
+                from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
 
-            send_mail(
-                subject=subject,
-                message=plain_message,
-                html_message=html_message,
-                from_email=from_email,
-                recipient_list=[user.email],
-                fail_silently=False,
-            )
+                send_mail(
+                    subject=subject,
+                    message=plain_message,
+                    html_message=html_message,
+                    from_email=from_email,
+                    recipient_list=[user.email],
+                    fail_silently=False,
+                )
 
-            logger.info(f"Verification email sent to {user.email}")
-            return True
+                logger.info(f"Verification email sent to {user.email}")
+                return True
 
-        except Exception as e:
-            logger.error(f"Error sending verification email to {user.email}: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Error sending verification email to {user.email} (attempt {attempt + 1}/{max_retries}): {str(e)}")
+                else:
+                    logger.error(f"Failed to send verification email to {user.email} after {max_retries} attempts: {str(e)}")
+                    logger.error(traceback.format_exc())
+                raise
 
     @staticmethod
     def send_password_reset_email(user):
