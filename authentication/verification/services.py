@@ -119,8 +119,8 @@ class EmailVerificationService:
                     "error": "Please wait before requesting another verification email."
                 }, 429
 
-            # ✅ FIXED: Pass user.id (integer), not user object
-            send_verification_email_task.delay(user.id)
+            # ✅ FIXED: Pass user.uuid as string for JSON serialization, not user object
+            send_verification_email_task.delay(str(user.uuid))
 
             cache.set(rate_key, True, timeout=300)
             logger.info(f"Verification email task queued for {user.email}")
@@ -159,7 +159,7 @@ class PasswordResetService:
 
             try:
                 user = User.objects.get(email=email)
-                send_password_reset_email_task.delay(user.id)
+                send_password_reset_email_task.delay(str(user.uuid))
                 logger.info(f"Password reset email task queued for {user.email}")
             except User.DoesNotExist:
                 # Security best practice: don't reveal existence of email

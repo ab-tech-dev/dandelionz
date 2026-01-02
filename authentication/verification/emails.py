@@ -73,7 +73,10 @@ class EmailService:
 
                 from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
 
-                send_mail(
+                logger.info(f"Attempting to send verification email to {user.email} (attempt {attempt + 1}/{max_retries})")
+                logger.debug(f"From: {from_email}, Subject: {subject}")
+                
+                result = send_mail(
                     subject=subject,
                     message=plain_message,
                     html_message=html_message,
@@ -82,7 +85,7 @@ class EmailService:
                     fail_silently=False,
                 )
 
-                logger.info(f"Verification email sent to {user.email}")
+                logger.info(f"Verification email sent to {user.email}, result: {result}")
                 return True
 
             except Exception as e:
@@ -140,7 +143,10 @@ class EmailService:
             # Send email
             from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
 
-            send_mail(
+            logger.info(f"Attempting to send password reset email to {user.email}")
+            logger.debug(f"From: {from_email}, Subject: {subject}")
+
+            result = send_mail(
                 subject=subject,
                 message=plain_message,
                 html_message=html_message,
@@ -149,7 +155,7 @@ class EmailService:
                 fail_silently=False,
             )
 
-            logger.info(f"Password reset email sent to {user.email}")
+            logger.info(f"Password reset email sent to {user.email}, result: {result}")
             return True
         
         except Exception as e:

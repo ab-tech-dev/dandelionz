@@ -72,7 +72,8 @@ class AuthenticationService:
             # Queue verification email
             if user.email and settings.REQUIRE_EMAIL_VERIFICATION:
                 try:
-                    send_verification_email_task.delay(user.pk)
+                    # Convert UUID to string for Celery JSON serialization
+                    send_verification_email_task.delay(str(user.uuid))
                     logger.info(f"Queued verification email for new user: {user.email}")
                 except Exception as e:
                     logger.error(f"Failed to queue verification email task for user {user.pk}: {str(e)}")

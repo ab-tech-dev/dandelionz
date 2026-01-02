@@ -19,9 +19,10 @@ logger = logging.getLogger("authentication.verification")
     retry_jitter=True,
     name="authentication.verification.send_verification_email"
 )
-def send_verification_email_task(self, user_uuid: int):
+def send_verification_email_task(self, user_uuid: str):
     """Celery task to send verification email with improved retry logic"""
     try:
+        # user_uuid is a string representation of the UUID
         user = User.objects.get(uuid=user_uuid)
         if not user.is_verified:
             logger.info(f"[VerificationEmailTask] Sending verification email to: {user.email}")
@@ -55,9 +56,10 @@ def send_verification_email_task(self, user_uuid: int):
     retry_jitter=True,
     name="authentication.verification.send_password_reset_email"
 )
-def send_password_reset_email_task(self, user_uuid: int):
+def send_password_reset_email_task(self, user_uuid: str):
     """Celery task to send password reset email with improved retry logic"""
     try:
+        # user_uuid is a string representation of the UUID
         user = User.objects.get(uuid=user_uuid)
         if user.is_verified:
             logger.info(f"[PasswordResetTask] Sending password reset email to: {user.email}")

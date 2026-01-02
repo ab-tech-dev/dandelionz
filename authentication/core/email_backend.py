@@ -1,5 +1,5 @@
 """
-Custom email backend with connection pooling and retry logic
+Custom email backend with better logging
 """
 import logging
 import smtplib
@@ -13,143 +13,85 @@ logger = logging.getLogger(__name__)
 class RobustSMTPEmailBackend(DjangoEmailBackend):
     """
     Custom SMTP email backend with:
-    - Connection pooling
-    - Automatic retry on connection failures
-    - Proper timeout handling
-    - Better error logging
+    - Better logging for debugging
+    - Timeout handling
+    - Proper error reporting
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.max_retries = getattr(settings, 'EMAIL_CONNECTION_RETRY_ATTEMPTS', 3)
-        self.retry_delay = getattr(settings, 'EMAIL_CONNECTION_RETRY_DELAY', 2)
         self.timeout = getattr(settings, 'EMAIL_TIMEOUT', 30)
 
     def open(self):
         """
-        Open SMTP connection with retry logic
+        Open SMTP connection with better error logging
         """
         if self.connection is not None:
             return False
-
-        for attempt in range(self.max_retries):
-            try:
-                self.connection = self.connection_class(
-                    self.host,
-                    self.port,
-                    local_hostname=getattr(settings, 'EMAIL_LOCAL_HOSTNAME', None),
-                    timeout=self.timeout,
-                )
+        
+        try:
+            logger.info(f"Attempting to open SMTP connection to {self.host}:{self.port}")
+            logger.info(f"  EMAIL_USE_TLS: {self.use_tls}, EMAIL_USE_SSL: {self.use_ssl}")
+            
+            self.connection = self.connection_class(
+                self.host,
+                self.port,
+                timeout=self.timeout,
+            )
+            
+            if self.use_tls:
+                logger.info("Starting TLS...")
+                self.connection.starttls()
                 
-                if self.use_tls:
-                    self.connection.starttls()
-                if self.use_ssl:
-                    # If use_ssl is True, connection_class will be SMTP_SSL,
-                    # and starttls should not be called
-                    pass
-                    
-                if self.username and self.password:
-                    self.connection.login(self.username, self.password)
+            if self.username and self.password:
+                logger.info(f"Authenticating as {self.username}...")
+                self.connection.login(self.username, self.password)
+            
+            logger.info("SMTP connection established and authenticated successfully")
+            return True
                 
-                logger.info(f"SMTP connection established successfully on attempt {attempt + 1}")
-                return True
-                
-            except smtplib.SMTPConnectionError as e:
-                logger.warning(
-                    f"SMTP connection error on attempt {attempt + 1}/{self.max_retries}: {str(e)}"
-                )
-                if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay)
-                else:
-                    logger.error(f"Failed to establish SMTP connection after {self.max_retries} attempts")
-                    raise
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP Authentication Error: {str(e)}")
+            logger.error("Check EMAIL_HOST_USER and EMAIL_HOST_PASSWORD in settings")
+            self.connection = None
+            raise
                     
-            except smtplib.SMTPException as e:
-                logger.error(f"SMTP error during connection: {str(e)}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay)
-                else:
-                    raise
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP Error: {str(e)}")
+            self.connection = None
+            raise
                     
-            except OSError as e:
-                logger.warning(
-                    f"Network error on attempt {attempt + 1}/{self.max_retries}: {str(e)}"
-                )
-                if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay)
-                else:
-                    logger.error(f"Failed to connect to SMTP server after {self.max_retries} attempts")
-                    raise
-                    
-        return False
+        except OSError as e:
+            logger.error(f"Network/Connection Error: {str(e)}")
+            self.connection = None
+            raise
+        
+        except Exception as e:
+            logger.error(f"Unexpected error opening SMTP connection: {str(e)}")
+            self.connection = None
+            raise
 
     def send_messages(self, email_messages):
         """
-        Send messages with connection handling and retry logic
+        Send messages using parent Django implementation with logging
         """
         if not email_messages:
+            logger.warning("send_messages called with empty email_messages list")
             return 0
 
+        logger.info(f"Attempting to send {len(email_messages)} message(s)")
         msg_count = 0
-        retry_count = 0
-        max_retries = 2
-
-        while retry_count < max_retries:
-            try:
-                new_conn_created = self.open()
-                if not self.connection:
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        time.sleep(self.retry_delay)
-                        continue
-                    else:
-                        logger.error("Could not establish SMTP connection for sending messages")
-                        return 0
-
-                for message in email_messages:
-                    try:
-                        sent = self._send(message)
-                        if sent:
-                            msg_count += 1
-                    except (smtplib.SMTPServerDisconnected, OSError, TimeoutError) as e:
-                        logger.error(f"Connection error sending message to {message.to}: {str(e)}")
-                        # Close connection on SMTP error and retry
-                        self.close()
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            time.sleep(self.retry_delay * 2)  # Longer delay for network errors
-                            break
-                        else:
-                            raise
-                    except smtplib.SMTPException as e:
-                        logger.error(f"SMTP error sending message to {message.to}: {str(e)}")
-                        # Close connection on SMTP error and retry
-                        self.close()
-                        retry_count += 1
-                        if retry_count < max_retries:
-                            time.sleep(self.retry_delay)
-                            break
-                        else:
-                            raise
-                    except Exception as e:
-                        logger.error(f"Error sending message to {message.to}: {str(e)}")
-                        raise
-
-                # Successfully sent all messages
-                if new_conn_created:
-                    self.close()
-                return msg_count
-
-            except Exception as e:
-                logger.error(f"Error in send_messages (attempt {retry_count + 1}): {str(e)}")
-                self.close()
-                if retry_count < max_retries - 1:
-                    retry_count += 1
-                    time.sleep(self.retry_delay)
-                else:
-                    raise
-
-        return msg_count
+        
+        try:
+            msg_count = super().send_messages(email_messages)
+            logger.info(f"Successfully sent {msg_count} out of {len(email_messages)} messages")
+            return msg_count
+            
+        except Exception as e:
+            logger.error(f"Error sending messages: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
 
     def close(self):
         """Close SMTP connection with error handling"""
