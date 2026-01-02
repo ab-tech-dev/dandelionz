@@ -1,14 +1,20 @@
 import os
-
 from celery import Celery
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set the default Django settings module for the 'celery' program.
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'e_commerce_api.settings')
 
+broker_url = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
+backend_url = os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0')
+
 app = Celery(
     "e_commerce_api",
-    broker="redis://redis:6379/0",
-    backend="redis://redis:6379/0"
+    broker=broker_url,
+    backend=backend_url
 )
 
 # Using a string here means the worker doesn't have to serialize

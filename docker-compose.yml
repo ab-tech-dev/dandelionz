@@ -42,6 +42,8 @@ services:
       python manage.py runserver 0.0.0.0:8000
       "
     environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
       - REDIS_URL=redis://redis:6379/1
 
     ports:
@@ -64,6 +66,10 @@ services:
     build: .
     command: >
       sh -c "celery -A e_commerce_api worker -l info"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
     volumes:
       - .:/app
     depends_on:
@@ -80,6 +86,10 @@ services:
     build: .
     command: >
       sh -c "celery -A e_commerce_api beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - REDIS_URL=redis://redis:6379/1
     volumes:
       - .:/app
     depends_on:
