@@ -1,12 +1,10 @@
 import logging
 import traceback
-import os
 from django.conf import settings
 from django.core.mail import send_mail
-import base64
 
 from django.template.loader import render_to_string
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.utils.http import urlsafe_base64_encode
 from django.utils.encoding import force_bytes
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.auth import get_user_model
@@ -19,28 +17,6 @@ class EmailService:
     """Service for sending user-related emails"""
 
     @staticmethod
-    def get_logo_base64():
-        """Get base64 encoded logo with proper error handling"""
-        try:
-            # Use absolute path - adjust this to your project structure
-            logo_path = os.path.join(settings.BASE_DIR, 'static', 'logo', 'Dandelion.png')
-            
-            # Alternative: if logo is in the same directory as this file
-            # logo_path = os.path.join(os.path.dirname(__file__), 'Dandelion.png')
-            
-            if not os.path.exists(logo_path):
-                logger.warning(f"Logo not found at {logo_path}")
-                return None
-                
-            with open(logo_path, 'rb') as image_file:
-                encoded = base64.b64encode(image_file.read()).decode('utf-8')
-                logger.info(f"Logo encoded successfully, size: {len(encoded)} chars")
-                return encoded
-        except Exception as e:
-            logger.error(f"Error encoding logo: {str(e)}")
-            return None
-
-    @staticmethod
     def send_verification_email(user, max_retries=3):
         """Send verification email to user with verification link"""
         for attempt in range(max_retries):
@@ -50,9 +26,6 @@ class EmailService:
                 token = default_token_generator.make_token(user)
 
                 verify_url = f"{settings.FRONTEND_URL}/auth/email-verify?uid={uid}&token={token}"
-                
-                # Get logo (will be None if file not found)
-                logo_base64 = EmailService.get_logo_base64()
 
                 subject = f"{settings.APP_NAME} - Verify Your Email Address"
 
@@ -60,7 +33,6 @@ class EmailService:
                     'user': user,
                     'verify_url': verify_url,
                     'app_name': settings.APP_NAME,
-                    'logo_base64': logo_base64 or '',  # Empty string if logo failed to load
                 }
 
                 html_message = render_to_string('emails/verify_email.html', context)
@@ -107,38 +79,29 @@ class EmailService:
             # Create verification link
             reset_url = f"{settings.FRONTEND_URL}/auth/password-reset-confirm?uid={uid}&token={token}"
 
-            # Get logo
-            logo_base64 = EmailService.get_logo_base64()
-
             subject = f"{settings.APP_NAME} - Reset your Password"
 
             context = {
                 'user': user,
                 'reset_url': reset_url,
                 'app_name': settings.APP_NAME,
-                'logo_base64': logo_base64 or '',
             }
 
-            try:
-                html_message = render_to_string('emails/password_reset.html', context)
+            html_message = render_to_string('emails/password_reset.html', context)
 
-                plain_message = f"""
-                                    Hello {user.email},
+            plain_message = f"""
+                                Hello {user.email},
 
-                                    You requested to reset your password for your {settings.APP_NAME} account.
-                                    Please click the link below to reset your password:
+                                You requested to reset your password for your {settings.APP_NAME} account.
+                                Please click the link below to reset your password:
 
-                                    {reset_url}
+                                {reset_url}
 
-                                    If you didn't request this, please ignore this email.
+                                If you didn't request this, please ignore this email.
 
-                                    Thank you,
-                                    {settings.APP_NAME} Team
-                                """
-
-            except Exception as template_error:
-                logger.error(f"Template rendering error: {str(template_error)}")
-                raise
+                                Thank you,
+                                {settings.APP_NAME} Team
+                            """
 
             # Send email
             from_email = settings.DEFAULT_FROM_EMAIL or settings.EMAIL_HOST_USER
