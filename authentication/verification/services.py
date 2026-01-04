@@ -82,13 +82,13 @@ class EmailVerificationService:
                 if not user.is_verified:
                     user.is_verified = True
                     user.save(update_fields=["is_verified"])
-                    logger.info(f"Email verified for user {user.id} ({user.email})")
+                    logger.info(f"Email verified for user {user.uuid} ({user.email})")
                 else:
-                    logger.info(f"Email verification attempt for already verified user: {user.id} ({user.email})")
+                    logger.info(f"Email verification attempt for already verified user: {user.uuid} ({user.email})")
 
-            cache_key = EmailVerificationService.get_verification_cache_key(user.id)
+            cache_key = EmailVerificationService.get_verification_cache_key(user.uuid)
             cache.set(cache_key, True, timeout=3600)
-            logger.info(f"Updated verification cache for user {user.id} to True")
+            logger.info(f"Updated verification cache for user {user.uuid} to True")
 
             return True, {
                 "success": True,
@@ -112,7 +112,7 @@ class EmailVerificationService:
                     "message": "Email is already verified."
                 }, 200
 
-            rate_key = f"verification_email_{user.id}"
+            rate_key = f"verification_email_{user.uuid}"
             if cache.get(rate_key):
                 return False, {
                     "success": False,
@@ -198,9 +198,9 @@ class PasswordResetService:
 
         user.set_password(new_password)
         user.save(update_fields=["password"])
-        TokenManager.blacklist_all_user_tokens(user.id)
+        TokenManager.blacklist_all_user_tokens(user.uuid)
 
-        logger.info(f"Password reset completed for user {user.id}")
+        logger.info(f"Password reset completed for user {user.uuid}")
         return True, {
             "success": True,
             "message": "Password has been reset successfully. You can now log in with your new password."
