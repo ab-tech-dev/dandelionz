@@ -61,11 +61,12 @@ class VerifyEmailView(BaseAPIView):
             if success:
                 # Email verification succeeded, award referral bonus if exists
                 try:
-                    from authentication.models import Referral, CustomUser, Wallet
+                    from authentication.models import Referral, CustomUser
+                    from transactions.models import Wallet
                     from users.models import Notification
                     user_data = response_data.get('data', {}).get('user')
                     if user_data:
-                        user = CustomUser.objects.get(id=user_data['id'])
+                        user = CustomUser.objects.get(uuid=user_data['uuid'])
 
                         # Get unawarded referrals
                         referrals = Referral.objects.filter(referred_user=user, bonus_awarded=False)

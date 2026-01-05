@@ -46,7 +46,11 @@ class WalletAdmin(admin.ModelAdmin):
     list_display = ('user', 'balance', 'updated_at')
     search_fields = ('user__email', 'user__username')
     list_filter = ('updated_at',)
-    readonly_fields = ('user', 'updated_at')
+    readonly_fields = ('user', 'balance', 'updated_at')
+    
+    def has_delete_permission(self, request, obj=None):
+        """Prevent direct deletion of wallets; they should cascade delete with users."""
+        return False
 
     def has_add_permission(self, request):
         """Wallets are created automatically on signal; prevent manual creation."""
