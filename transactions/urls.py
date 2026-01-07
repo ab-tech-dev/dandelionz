@@ -5,7 +5,9 @@ from .views import (
     TransactionLogListView,
     CheckoutView, SecureVerifyPaymentView, PaystackWebhookView,
     RefundListView, RefundDetailView,
-    CustomerWalletView, WalletTransactionListView, AdminWalletListView
+    CustomerWalletView, WalletTransactionListView, AdminWalletListView,
+    InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
+    InstallmentPaymentListView, VerifyInstallmentPaymentView, InstallmentWebhookView
 )
 
 urlpatterns = [
@@ -16,12 +18,20 @@ urlpatterns = [
     path('order-items/<int:pk>/', OrderItemDetailView.as_view(), name='order-item-detail'),
     path('logs/', TransactionLogListView.as_view(), name='transaction-log-list'),
 
-    # Checkout endpoint (creates order + initializes payment)
+    # Checkout endpoints
     path('checkout/', CheckoutView.as_view(), name='checkout'),
+    path('checkout/installment/', InstallmentCheckoutView.as_view(), name='installment-checkout'),
 
     # Payment verification endpoint
     path('verify-payment/', SecureVerifyPaymentView.as_view(), name='verify-payment'),
     path('webhook/', PaystackWebhookView.as_view(), name='paystack-webhook'),
+
+    # Installment plan endpoints
+    path('installment-plans/', InstallmentPlanListView.as_view(), name='installment-plan-list'),
+    path('installment-plans/<int:id>/', InstallmentPlanDetailView.as_view(), name='installment-plan-detail'),
+    path('installment-plans/<int:plan_id>/payments/', InstallmentPaymentListView.as_view(), name='installment-payment-list'),
+    path('verify-installment-payment/', VerifyInstallmentPaymentView.as_view(), name='verify-installment-payment'),
+    path('installment-webhook/', InstallmentWebhookView.as_view(), name='installment-webhook'),
 
     # Refund endpoints
     path('refunds/', RefundListView.as_view(), name='refund-list'),

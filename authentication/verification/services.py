@@ -90,9 +90,16 @@ class EmailVerificationService:
             cache.set(cache_key, True, timeout=3600)
             logger.info(f"Updated verification cache for user {user.uuid} to True")
 
+            # Include user data in response for referral bonus processing
+            from authentication.serializers import UserBaseSerializer
+            user_serializer = UserBaseSerializer(user)
+            
             return True, {
                 "success": True,
-                "message": "Email verification successful."
+                "message": "Email verification successful.",
+                "data": {
+                    "user": user_serializer.data
+                }
             }, 200
 
         except Exception as e:

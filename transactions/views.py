@@ -2,6 +2,7 @@ import hmac
 import hashlib
 import uuid
 from decimal import Decimal
+from datetime import timedelta
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
@@ -15,7 +16,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
 from users.models import Notification
 
 from .models import Order, OrderItem, Payment, TransactionLog, Refund
@@ -27,13 +28,36 @@ from .serializers import (
     PaymentSerializer,
     RefundSerializer,
     WalletSerializer,
-    WalletTransactionSerializer
+    WalletTransactionSerializer,
+    InstallmentPlanSerializer,
+    InstallmentPaymentSerializer,
+    InstallmentCheckoutSerializer
 )
 from .paystack import Paystack
 from authentication.core.response import standardized_response
 
 PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
+
+# ----------------------
+# Helper functions
+# ----------------------
+def credit_vendors_for_order(order, source_prefix="Order"):
+    """
+    Credit all vendors for an order based on their items' subtotals.
+    Deducts platform commission (10%) from vendor share.
+    
+    Args:
+        order: Order instance
+        source_prefix: Prefix for the wallet transaction source (default: "Order")
+    """
+    for item in order.order_items.all():
+        vendor = item.product.store
+        if not vendor:
+            continue
+        vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
+        wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
 
 # ----------------------
 # Custom permissions
@@ -154,8 +178,7 @@ class CheckoutView(APIView):
                     order=order,
                     product=item.product,
                     quantity=item.quantity,
-                    price=item.product.price,
-                    vendor=item.product.store
+                    price_at_purchase=item.product.price
                 )
 
             # 3. Calculate total
@@ -168,14 +191,12 @@ class CheckoutView(APIView):
                 defaults={
                     "amount": order.total_price,
                     "reference": reference,
-                    "currency": EXPECTED_CURRENCY
                 }
             )
             payment.amount = order.total_price
             payment.reference = reference
-            payment.currency = EXPECTED_CURRENCY
             payment.verified = False
-            payment.status = Payment.Status.PENDING
+            payment.status = 'PENDING'
             payment.save()
 
             # 5. Initialize Paystack
@@ -211,6 +232,327 @@ class CheckoutView(APIView):
             ),
             status=status.HTTP_201_CREATED
         )
+
+
+# ----------------------
+# Installment Checkout Endpoint
+# ----------------------
+class InstallmentCheckoutView(APIView):
+    """
+    Checkout with installment payment plan.
+    Creates order and installment plan, then initializes payment for first installment.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        cart = Cart.objects.filter(customer=user).first()
+        
+        if not cart:
+            return Response(
+                standardized_response(success=False, error="Cart is empty"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        cart_items = CartItem.objects.select_related("product").filter(cart=cart)
+        if not cart_items.exists():
+            return Response(
+                standardized_response(success=False, error="Cart has no items"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate installment duration
+        serializer = InstallmentCheckoutSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        duration = serializer.validated_data['duration']
+
+        with transaction.atomic():
+            # 1. Create Order
+            order = Order.objects.create(customer=user)
+
+            # 2. Convert CartItems → OrderItems
+            for item in cart_items:
+                OrderItem.objects.create(
+                    order=order,
+                    product=item.product,
+                    quantity=item.quantity,
+                    price_at_purchase=item.product.price,
+                )
+
+            # 3. Calculate total
+            order.update_total()
+
+            # 4. Create Installment Plan
+            num_installments = InstallmentPlan.DURATION_INSTALLMENTS.get(duration, 1)
+            # Calculate base amount, rounded down to avoid overcharge
+            base_amount = (order.total_price / Decimal(num_installments)).quantize(
+                Decimal("0.01"), rounding='ROUND_DOWN'
+            )
+            remainder = order.total_price - (base_amount * num_installments)
+            
+            installment_plan = InstallmentPlan.objects.create(
+                order=order,
+                duration=duration,
+                total_amount=order.total_price,
+                installment_amount=base_amount,
+                number_of_installments=num_installments,
+                status='ACTIVE',
+                vendors_credited=False
+            )
+
+            # 5. Create individual installment payment records
+            current_date = timezone.now()
+            interval = timedelta(days=30)  # 30 days between each installment
+
+            for i in range(1, num_installments + 1):
+                due_date = current_date + (interval * i)
+                # Add remainder to last installment to ensure total equals order total
+                amount = base_amount + remainder if i == num_installments else base_amount
+                InstallmentPayment.objects.create(
+                    installment_plan=installment_plan,
+                    payment_number=i,
+                    amount=amount,
+                    due_date=due_date,
+                    reference=f"{order.order_id}-installment-{i}"
+                )
+
+            # 6. Initialize payment for first installment
+            first_installment = installment_plan.installments.first()
+            paystack = Paystack()
+            response = paystack.initialize_payment(
+                email=user.email,
+                amount=first_installment.amount,
+                reference=first_installment.reference,
+                callback_url=settings.PAYSTACK_CALLBACK_URL
+            )
+
+            # 7. Notify vendors
+            vendors = {item.product.store for item in cart_items if item.product.store}
+            for vendor in vendors:
+                Notification.objects.create(
+                    recipient=vendor,
+                    title="New Order Received (Installment)",
+                    message=f"You received a new order {order.order_id} with installment plan ({duration})."
+                )
+
+            # 8. Clear cart
+            cart_items.delete()
+
+        return Response(
+            standardized_response(
+                data={
+                    "order_id": order.order_id,
+                    "installment_plan_id": installment_plan.id,
+                    "duration": duration,
+                    "total_amount": float(order.total_price),
+                    "number_of_installments": num_installments,
+                    "installment_amount": float(base_amount),
+                    "first_installment_reference": first_installment.reference,
+                    "authorization_url": response["data"]["authorization_url"],
+                },
+                message="Installment checkout initialized successfully"
+            ),
+            status=status.HTTP_201_CREATED
+        )
+
+
+# ----------------------
+# Installment Plan Views
+# ----------------------
+class InstallmentPlanListView(generics.ListAPIView):
+    """List all installment plans for authenticated user or all for admin"""
+    serializer_class = InstallmentPlanSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return InstallmentPlan.objects.all().order_by("-created_at")
+        return InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
+
+
+class InstallmentPlanDetailView(generics.RetrieveAPIView):
+    """Get details of a specific installment plan"""
+    serializer_class = InstallmentPlanSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = "id"
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return InstallmentPlan.objects.all()
+        return InstallmentPlan.objects.filter(order__customer=user)
+
+
+class InstallmentPaymentListView(generics.ListAPIView):
+    """List installment payments for a specific plan"""
+    serializer_class = InstallmentPaymentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        plan_id = self.kwargs.get("plan_id")
+        user = self.request.user
+        
+        if user.is_staff:
+            return InstallmentPayment.objects.filter(
+                installment_plan_id=plan_id
+            ).order_by("payment_number")
+        
+        return InstallmentPayment.objects.filter(
+            installment_plan_id=plan_id,
+            installment_plan__order__customer=user
+        ).order_by("payment_number")
+
+
+class VerifyInstallmentPaymentView(APIView):
+    """Verify and process an installment payment"""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [UserRateThrottle]
+
+    def get(self, request):
+        reference = request.query_params.get("reference")
+        if not reference:
+            return Response(
+                standardized_response(success=False, error="Reference required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            installment = InstallmentPayment.objects.select_related(
+                "installment_plan__order"
+            ).get(reference=reference)
+        except InstallmentPayment.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Payment not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if installment.installment_plan.order.customer != request.user and not request.user.is_staff:
+            return Response(
+                standardized_response(success=False, error="Forbidden"),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        paystack = Paystack()
+        resp = paystack.verify_payment(reference)
+        data = resp.get("data", {})
+
+        if data.get("status") != "success":
+            return Response(
+                standardized_response(success=False, error="Payment not successful"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if data.get("currency") != EXPECTED_CURRENCY:
+            return Response(
+                standardized_response(success=False, error="Invalid currency"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        paid_amount = Decimal(data["amount"]) / Decimal(100)
+        if paid_amount != installment.amount:
+            return Response(
+                standardized_response(success=False, error="Amount mismatch"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            installment = InstallmentPayment.objects.select_for_update().get(pk=installment.pk)
+            
+            if installment.status == InstallmentPayment.PaymentStatus.PAID:
+                return Response(
+                    standardized_response(
+                        data=InstallmentPaymentSerializer(installment).data,
+                        message="Payment already verified"
+                    )
+                )
+
+            # Mark installment as paid
+            installment.mark_as_paid()
+            
+            # Credit vendor wallet for completed installments (when final payment is made)
+            plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
+            if plan.is_fully_paid() and not plan.vendors_credited:
+                for item in plan.order.order_items.all():
+                    vendor = item.product.store
+                    if vendor:
+                        vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
+                        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
+                        wallet.credit(vendor_share, source=f"Order {plan.order.order_id} (Installment)")
+                # Mark vendors as credited to prevent duplicate credits
+                plan.vendors_credited = True
+                plan.save(update_fields=['vendors_credited'])
+
+        return Response(
+            standardized_response(
+                data=InstallmentPaymentSerializer(installment).data,
+                message="Installment payment verified successfully"
+            )
+        )
+
+
+# ----------------------
+# Installment Webhook
+# ----------------------
+@method_decorator(csrf_exempt, name="dispatch")
+class InstallmentWebhookView(APIView):
+    """Handle Paystack webhook for installment payments"""
+    permission_classes = []
+
+    def post(self, request):
+        signature = request.headers.get("x-paystack-signature", "")
+        computed = hmac.new(
+            settings.PAYSTACK_SECRET_KEY.encode(),
+            request.body,
+            hashlib.sha512
+        ).hexdigest()
+
+        if not hmac.compare_digest(computed, signature):
+            return Response(status=403)
+
+        data = request.data.get("data", {})
+        reference = data.get("reference")
+
+        if not reference:
+            return Response({"status": "ok"})
+
+        try:
+            installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
+        except InstallmentPayment.DoesNotExist:
+            return Response({"status": "ok"})
+
+        paystack = Paystack()
+        verify = paystack.verify_payment(reference)
+        pdata = verify.get("data", {})
+
+        if pdata.get("status") != "success":
+            return Response({"status": "ok"})
+
+        if pdata.get("currency") != EXPECTED_CURRENCY:
+            return Response({"status": "ok"})
+
+        paid_amount = Decimal(pdata["amount"]) / Decimal(100)
+        if paid_amount != installment.amount:
+            return Response({"status": "ok"})
+
+        with transaction.atomic():
+            if installment.status != InstallmentPayment.PaymentStatus.PAID:
+                installment.mark_as_paid()
+                
+                # Credit vendor wallet if plan is completed
+                plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
+                if plan.is_fully_paid() and not plan.vendors_credited:
+                    credit_vendors_for_order(plan.order, source_prefix="Order (Installment)")
+                    plan.vendors_credited = True
+                    plan.save(update_fields=['vendors_credited'])
+
+        return Response({"status": "ok"})
+
 
 # ----------------------
 # Payment verification
@@ -252,13 +594,7 @@ class SecureVerifyPaymentView(APIView):
                 return Response({"detail": "Already verified"})
 
             payment.mark_as_successful()
-
-            for item in payment.order.order_items.all():
-                if not item.vendor:
-                    continue
-                vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
-                wallet, _ = Wallet.objects.select_for_update().get_or_create(user=item.vendor)
-                wallet.credit(vendor_share, source=f"Order {payment.order.order_id}")
+            credit_vendors_for_order(payment.order)
 
         return Response({"detail": "Payment verified"})
 
@@ -308,6 +644,7 @@ class PaystackWebhookView(APIView):
         with transaction.atomic():
             if not payment.verified:
                 payment.mark_as_successful()
+                credit_vendors_for_order(payment.order)
 
         return Response({"status": "ok"})
 
@@ -398,5 +735,7 @@ __all__ = [
     'TransactionLogListView',
     'CheckoutView', 'SecureVerifyPaymentView', 'PaystackWebhookView',
     'RefundListView', 'RefundDetailView',
-    'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView'
+    'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView',
+    'InstallmentCheckoutView', 'InstallmentPlanListView', 'InstallmentPlanDetailView',
+    'InstallmentPaymentListView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView'
 ]

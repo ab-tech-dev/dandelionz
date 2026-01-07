@@ -1,5 +1,8 @@
 from django.contrib import admin
-from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, WalletTransaction, PayoutRecord
+from .models import (
+    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, 
+    WalletTransaction, PayoutRecord, InstallmentPlan, InstallmentPayment
+)
 
 
 @admin.register(Order)
@@ -101,3 +104,57 @@ class PayoutRecordAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'reference')
     list_filter = ('created_at',)
     readonly_fields = ('user', 'reference', 'created_at')
+
+
+# ========================
+# INSTALLMENT PAYMENT ADMIN
+# ========================
+class InstallmentPaymentInline(admin.TabularInline):
+    model = InstallmentPayment
+    extra = 0
+    fields = ('payment_number', 'amount', 'status', 'due_date', 'paid_at', 'reference')
+    readonly_fields = ('payment_number', 'amount', 'reference', 'created_at')
+    can_delete = False
+
+
+@admin.register(InstallmentPlan)
+class InstallmentPlanAdmin(admin.ModelAdmin):
+    list_display = ('order', 'duration', 'total_amount', 'installment_amount', 'number_of_installments', 'status', 'created_at')
+    list_filter = ('duration', 'status', 'created_at')
+    search_fields = ('order__order_id', 'order__customer__email')
+    readonly_fields = ('order', 'total_amount', 'installment_amount', 'number_of_installments', 'start_date', 'created_at', 'updated_at')
+    inlines = [InstallmentPaymentInline]
+    fieldsets = (
+        ('Order Information', {
+            'fields': ('order', 'status')
+        }),
+        ('Plan Details', {
+            'fields': ('duration', 'total_amount', 'number_of_installments', 'installment_amount')
+        }),
+        ('Dates', {
+            'fields': ('start_date', 'created_at', 'updated_at')
+        }),
+    )
+
+
+@admin.register(InstallmentPayment)
+class InstallmentPaymentAdmin(admin.ModelAdmin):
+    list_display = ('payment_number', 'installment_plan', 'amount', 'status', 'due_date', 'paid_at', 'created_at')
+    list_filter = ('status', 'due_date', 'created_at')
+    search_fields = ('reference', 'installment_plan__order__order_id')
+    readonly_fields = ('reference', 'created_at', 'updated_at')
+    fieldsets = (
+        ('Payment Information', {
+            'fields': ('installment_plan', 'payment_number', 'reference')
+        }),
+        ('Amount & Status', {
+            'fields': ('amount', 'status')
+        }),
+        ('Dates', {
+            'fields': ('due_date', 'paid_at', 'created_at', 'updated_at')
+        }),
+        ('Gateway', {
+            'fields': ('gateway', 'verified')
+        }),
+    )
+

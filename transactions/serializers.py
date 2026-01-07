@@ -1,5 +1,8 @@
 from rest_framework import serializers
-from .models import Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, WalletTransaction
+from .models import (
+    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, 
+    Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
+)
 from store.models import Product
 from decimal import Decimal
 
@@ -124,3 +127,107 @@ class OrderSerializer(serializers.ModelSerializer):
             qs = obj.logs.all().order_by('-created_at')
             return TransactionLogSerializer(qs, many=True).data
         return []
+
+
+# ========================
+# INSTALLMENT PAYMENT SERIALIZERS
+# ========================
+class InstallmentPaymentSerializer(serializers.ModelSerializer):
+    is_overdue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InstallmentPayment
+        fields = [
+            'id', 'payment_number', 'amount', 'status', 'due_date', 'payment_date',
+            'reference', 'gateway', 'paid_at', 'verified', 'created_at', 'is_overdue'
+        ]
+        read_only_fields = ['id', 'reference', 'paid_at', 'verified', 'created_at', 'updated_at', 'is_overdue']
+
+    def get_is_overdue(self, obj):
+        return obj.is_overdue()
+
+
+class InstallmentPlanSerializer(serializers.ModelSerializer):
+    installments = InstallmentPaymentSerializer(many=True, read_only=True)
+    order_id = serializers.UUIDField(source='order.order_id', read_only=True)
+    paid_installments_count = serializers.SerializerMethodField()
+    pending_installments_count = serializers.SerializerMethodField()
+    is_fully_paid = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InstallmentPlan
+        fields = [
+            'id', 'order_id', 'duration', 'total_amount', 'installment_amount',
+            'number_of_installments', 'paid_installments_count', 'pending_installments_count',
+            'status', 'is_fully_paid', 'start_date', 'created_at', 'updated_at', 'installments'
+        ]
+        read_only_fields = [
+            'id', 'order_id', 'installment_amount', 'number_of_installments',
+            'start_date', 'created_at', 'updated_at', 'installments',
+            'paid_installments_count', 'pending_installments_count', 'is_fully_paid'
+        ]
+
+    def get_paid_installments_count(self, obj):
+        return obj.get_paid_installments_count()
+
+    def get_pending_installments_count(self, obj):
+        return obj.get_pending_installments_count()
+
+    def get_is_fully_paid(self, obj):
+        return obj.is_fully_paid()
+
+    def create(self, validated_data):
+        """Create installment plan with related installment payments"""
+        duration = validated_data.get('duration')
+        total_amount = validated_data.get('total_amount')
+        
+        # Get number of installments from duration
+        num_installments = InstallmentPlan.DURATION_INSTALLMENTS.get(duration, 1)
+        installment_amount = total_amount / Decimal(num_installments)
+        
+        # Create the plan
+        plan = InstallmentPlan.objects.create(
+            number_of_installments=num_installments,
+            installment_amount=installment_amount,
+            **validated_data
+        )
+        
+        # Create individual installment payments
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        current_date = timezone.now()
+        
+        # Determine interval based on duration
+        if duration == '1_month':
+            interval = timedelta(days=30)
+        elif duration == '3_months':
+            interval = timedelta(days=30)
+        elif duration == '6_months':
+            interval = timedelta(days=30)
+        elif duration == '1_year':
+            interval = timedelta(days=30)
+        else:
+            interval = timedelta(days=30)
+        
+        for i in range(1, num_installments + 1):
+            due_date = current_date + (interval * i)
+            InstallmentPayment.objects.create(
+                installment_plan=plan,
+                payment_number=i,
+                amount=installment_amount,
+                due_date=due_date,
+                reference=f"{plan.order.order_id}-installment-{i}"
+            )
+        
+        return plan
+
+
+class InstallmentCheckoutSerializer(serializers.Serializer):
+    """Serializer for creating an order with installment plan"""
+    duration = serializers.ChoiceField(choices=InstallmentPlan.DurationChoice.choices)
+    
+    def validate_duration(self, value):
+        if value not in InstallmentPlan.DURATION_INSTALLMENTS:
+            raise serializers.ValidationError("Invalid installment duration.")
+        return value

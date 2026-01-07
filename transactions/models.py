@@ -127,7 +127,7 @@ class OrderItem(models.Model):
 
     @property
     def vendor(self):
-        return getattr(self.product, 'vendor', None)
+        return self.product.store
 
     def __str__(self):
         return f"{self.product.name} x {self.quantity}"
@@ -147,12 +147,17 @@ class Payment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def mark_as_successful(self):
+        """Mark payment as successful (idempotent - safe to call multiple times)"""
+        # Return early if already successful to prevent duplicate processing
+        if self.verified:
+            return
+        
         self.status = 'SUCCESS'
         self.verified = True
         self.paid_at = timezone.now()
         self.order.payment_status = 'PAID'
-        self.order.status = Order.Status.PAID
-        self.order.save(update_fields=['payment_status', 'status'])
+        # Note: Do not change order.status - it stays PENDING until shipped
+        self.order.save(update_fields=['payment_status'])
         self.save(update_fields=['status', 'verified', 'paid_at'])
 
     class Meta:
@@ -211,6 +216,122 @@ class Refund(models.Model):
 
     def __str__(self):
         return f"Refund {self.id} - {self.status} ({self.refunded_amount})"
+
+
+# ========================
+# INSTALLMENT PAYMENT SYSTEM
+# ========================
+class InstallmentPlan(models.Model):
+    class DurationChoice(models.TextChoices):
+        ONE_MONTH = '1_month', '1 Month'
+        THREE_MONTHS = '3_months', '3 Months'
+        SIX_MONTHS = '6_months', '6 Months'
+        ONE_YEAR = '1_year', '1 Year'
+
+    # Mapping of duration to number of installments
+    DURATION_INSTALLMENTS = {
+        '1_month': 1,
+        '3_months': 3,
+        '6_months': 6,
+        '1_year': 12,
+    }
+
+    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='installment_plan')
+    duration = models.CharField(max_length=20, choices=DurationChoice.choices)
+    total_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    installment_amount = models.DecimalField(max_digits=10, decimal_places=2)
+    number_of_installments = models.PositiveIntegerField()
+    start_date = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, default='ACTIVE')  # ACTIVE, COMPLETED, CANCELLED
+    vendors_credited = models.BooleanField(default=False)  # Track if vendors have been credited
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def calculate_installment_amount(self):
+        """Calculate the amount per installment"""
+        return self.total_amount / Decimal(self.number_of_installments)
+
+    def get_paid_installments_count(self):
+        """Get count of successfully paid installments"""
+        return self.installments.filter(status='PAID').count()
+
+    def get_pending_installments_count(self):
+        """Get count of pending installments"""
+        return self.installments.filter(status='PENDING').count()
+
+    def is_fully_paid(self):
+        """Check if all installments are paid"""
+        return self.get_paid_installments_count() == self.number_of_installments
+
+    def mark_as_completed(self):
+        """Mark installment plan as completed (idempotent - safe to call multiple times)"""
+        if self.is_fully_paid():
+            self.status = 'COMPLETED'
+            self.order.payment_status = 'PAID'
+            self.order.status = Order.Status.PAID
+            self.order.save(update_fields=['payment_status', 'status'])
+            self.save(update_fields=['status', 'updated_at', 'vendors_credited'])
+            return True
+        return False
+
+    def __str__(self):
+        return f"Installment Plan - {self.order.order_id} ({self.duration})"
+
+    class Meta:
+        ordering = ['-created_at']
+
+
+class InstallmentPayment(models.Model):
+    class PaymentStatus(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PAID = 'PAID', 'Paid'
+        FAILED = 'FAILED', 'Failed'
+        OVERDUE = 'OVERDUE', 'Overdue'
+
+    installment_plan = models.ForeignKey(InstallmentPlan, on_delete=models.CASCADE, related_name='installments')
+    payment_number = models.PositiveIntegerField()  # 1st, 2nd, 3rd installment, etc.
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    status = models.CharField(max_length=20, choices=PaymentStatus.choices, default=PaymentStatus.PENDING)
+    due_date = models.DateTimeField()
+    payment_date = models.DateTimeField(null=True, blank=True)
+    reference = models.CharField(max_length=100, unique=True, default=uuid.uuid4)
+    gateway = models.CharField(max_length=50, default='Paystack')
+    paid_at = models.DateTimeField(null=True, blank=True)
+    verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def mark_as_paid(self):
+        """Mark this installment payment as paid (idempotent - safe to call multiple times)"""
+        # Return early if already paid to prevent duplicate processing
+        if self.status == self.PaymentStatus.PAID:
+            return
+        
+        self.status = self.PaymentStatus.PAID
+        self.verified = True
+        self.paid_at = timezone.now()
+        self.payment_date = timezone.now()
+        self.save(update_fields=['status', 'verified', 'paid_at', 'payment_date', 'updated_at'])
+        
+        # Check if entire plan is completed
+        self.installment_plan.mark_as_completed()
+
+    def is_overdue(self):
+        """Check if payment is overdue"""
+        if self.status == self.PaymentStatus.PENDING and timezone.now() > self.due_date:
+            return True
+        return False
+
+    def __str__(self):
+        return f"Installment #{self.payment_number} - {self.amount} ({self.status})"
+
+    class Meta:
+        ordering = ['payment_number']
+        unique_together = ['installment_plan', 'payment_number']
+        indexes = [
+            models.Index(fields=['status']),
+            models.Index(fields=['reference']),
+        ]
 
 
 from django.contrib.auth import get_user_model
