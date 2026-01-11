@@ -62,7 +62,9 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
-    "https://dandelionz.com.ng"
+    "https://dandelionz.com.ng",
+    "https://app.dandelionz.com.ng",
+    "https://api.dandelionz.com.ng"
 ]
 
 ROOT_URLCONF = 'e_commerce_api.urls'
@@ -178,7 +180,7 @@ CACHES = {
 }
 
 # Frontend URL
-FRONTEND_URL = 'http://dandelionz.com.ng/api'
+FRONTEND_URL = 'http://app.dandelionz.com.ng'
 
 # Email & Verification
 REQUIRE_EMAIL_VERIFICATION = True
@@ -225,11 +227,11 @@ PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
 PAYSTACK_BASE_URL = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")
 PAYSTACK_CALLBACK_URL = os.getenv(
     "PAYSTACK_CALLBACK_URL",
-    "https://dandelionz.com.ng/api/transactions/paystack/callback/"
+    "https://api.dandelionz.com.ng/transactions/paystack/callback/"
 )
 PAYSTACK_WEBHOOK_URL = os.getenv(
     "PAYSTACK_WEBHOOK_URL",
-    "https://dandelionz.com.ng/api/transactions/paystack/webhook/"
+    "https://api.dandelionz.com.ng/transactions/paystack/webhook/"
 )
 
 # Cloudinary

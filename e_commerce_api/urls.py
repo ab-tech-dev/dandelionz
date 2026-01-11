@@ -15,8 +15,8 @@ schema_view = get_schema_view(
         title="Dandelionz Ecommerce API",
         default_version='v1',
         description="API documentation for Multi-Vendor Ecommerce Platform",
-        terms_of_service="https://danelionz.net/terms/",
-        contact=openapi.Contact(email="support@danelionz.net"),
+        terms_of_service="https://danelionz.com.ng/terms/",
+        contact=openapi.Contact(email="support@danelionz.com.ng"),
         license=openapi.License(name="BSD License"),
     ),
     public=True,
@@ -44,10 +44,10 @@ urlpatterns = [
     path('abtechdev/', admin.site.urls),
 
     # App URLs
-    path('api/auth/', include('authentication.urls')),
-    path('api/store/', include('store.urls')),
-    path('api/user/', include('users.urls')),
-    path('api/transactions/', include('transactions.urls')),
+    path('auth/', include('authentication.urls')),
+    path('store/', include('store.urls')),
+    path('user/', include('users.urls')),
+    path('transactions/', include('transactions.urls')),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
