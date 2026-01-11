@@ -14,6 +14,8 @@ from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
@@ -74,6 +76,34 @@ class OrderListCreateView(generics.ListCreateAPIView):
     serializer_class = OrderSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="list_orders",
+        operation_summary="List Orders",
+        operation_description="Retrieve list of orders. Customers see their own orders; admins see all orders.",
+        tags=["Orders"],
+        responses={
+            200: OrderSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="create_order",
+        operation_summary="Create Order",
+        operation_description="Create a new order from cart items.",
+        tags=["Orders"],
+        request_body=OrderSerializer,
+        responses={
+            201: OrderSerializer,
+            400: openapi.Response("Bad Request"),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         if user.is_staff:
@@ -96,6 +126,53 @@ class OrderDetailView(generics.RetrieveUpdateDestroyAPIView):
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
     lookup_field = "order_id"
 
+    @swagger_auto_schema(
+        operation_id="retrieve_order",
+        operation_summary="Get Order Details",
+        operation_description="Retrieve details of a specific order.",
+        tags=["Orders"],
+        responses={
+            200: OrderSerializer,
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="update_order",
+        operation_summary="Update Order",
+        operation_description="Update order details (partial update).",
+        tags=["Orders"],
+        request_body=OrderSerializer,
+        responses={
+            200: OrderSerializer,
+            400: openapi.Response("Bad Request"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def patch(self, request, *args, **kwargs):
+        return super().patch(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="delete_order",
+        operation_summary="Delete Order",
+        operation_description="Delete a specific order.",
+        tags=["Orders"],
+        responses={
+            204: openapi.Response("No Content"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def delete(self, request, *args, **kwargs):
+        return super().delete(request, *args, **kwargs)
+
     def get_queryset(self):
         if self.request.user.is_staff:
             return Order.objects.all()
@@ -107,6 +184,36 @@ class OrderDetailView(generics.RetrieveUpdateDestroyAPIView):
 class OrderItemListCreateView(generics.ListCreateAPIView):
     serializer_class = OrderItemSerializer
     permission_classes = [permissions.IsAuthenticated, IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="list_order_items",
+        operation_summary="List Order Items",
+        operation_description="Retrieve items in a specific order.",
+        tags=["Order Items"],
+        responses={
+            200: OrderItemSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="create_order_item",
+        operation_summary="Create Order Item",
+        operation_description="Add an item to an order.",
+        tags=["Order Items"],
+        request_body=OrderItemSerializer,
+        responses={
+            201: OrderItemSerializer,
+            400: openapi.Response("Bad Request"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
 
     def get_queryset(self):
         order_id = self.kwargs.get("order_id")
@@ -132,6 +239,53 @@ class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = OrderItemSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="retrieve_order_item",
+        operation_summary="Get Order Item Details",
+        operation_description="Retrieve details of a specific order item.",
+        tags=["Order Items"],
+        responses={
+            200: OrderItemSerializer,
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="update_order_item",
+        operation_summary="Update Order Item",
+        operation_description="Update details of an order item.",
+        tags=["Order Items"],
+        request_body=OrderItemSerializer,
+        responses={
+            200: OrderItemSerializer,
+            400: openapi.Response("Bad Request"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def patch(self, request, *args, **kwargs):
+        return super().patch(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="delete_order_item",
+        operation_summary="Delete Order Item",
+        operation_description="Remove an item from an order.",
+        tags=["Order Items"],
+        responses={
+            204: openapi.Response("No Content"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def delete(self, request, *args, **kwargs):
+        return super().delete(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         if user.is_staff:
@@ -146,12 +300,45 @@ class TransactionLogListView(generics.ListAPIView):
     serializer_class = TransactionLogSerializer
     queryset = TransactionLog.objects.all().order_by('-created_at')
 
+    @swagger_auto_schema(
+        operation_id="list_transaction_logs",
+        operation_summary="List Transaction Logs",
+        operation_description="Retrieve all transaction logs (admin only).",
+        tags=["Transactions"],
+        responses={
+            200: TransactionLogSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
 # ----------------------
 # Checkout Endpoint (New)
 # ----------------------
 class CheckoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="checkout_single_payment",
+        operation_summary="Checkout with Single Payment",
+        operation_description="Process checkout and initialize Paystack payment for cart items.",
+        tags=["Checkout"],
+        responses={
+            201: openapi.Response("Payment initialized", schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'order_id': openapi.Schema(type=openapi.TYPE_STRING),
+                    'authorization_url': openapi.Schema(type=openapi.TYPE_STRING),
+                    'reference': openapi.Schema(type=openapi.TYPE_STRING),
+                    'amount': openapi.Schema(type=openapi.TYPE_NUMBER),
+                }
+            )),
+            400: openapi.Response("Cart is empty or invalid"),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
     def post(self, request):
         user = request.user
         cart = Cart.objects.filter(customer=user).first()
@@ -244,6 +431,32 @@ class InstallmentCheckoutView(APIView):
     """
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="checkout_installment",
+        operation_summary="Checkout with Installment Plan",
+        operation_description="""Create an order with installment payment plan and initialize first payment via Paystack.
+        
+Duration options: 1_month, 3_months, 6_months, 1_year""",
+        tags=["Installments"],
+        request_body=InstallmentCheckoutSerializer,
+        responses={
+            201: openapi.Response("Installment plan created", schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'order_id': openapi.Schema(type=openapi.TYPE_STRING),
+                    'installment_plan_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'duration': openapi.Schema(type=openapi.TYPE_STRING),
+                    'total_amount': openapi.Schema(type=openapi.TYPE_NUMBER),
+                    'number_of_installments': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'installment_amount': openapi.Schema(type=openapi.TYPE_NUMBER),
+                    'first_installment_reference': openapi.Schema(type=openapi.TYPE_STRING),
+                    'authorization_url': openapi.Schema(type=openapi.TYPE_STRING),
+                }
+            )),
+            400: openapi.Response("Cart is empty or invalid duration"),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
     def post(self, request):
         user = request.user
         cart = Cart.objects.filter(customer=user).first()
@@ -369,6 +582,19 @@ class InstallmentPlanListView(generics.ListAPIView):
     serializer_class = InstallmentPlanSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="list_installment_plans",
+        operation_summary="List Installment Plans",
+        operation_description="Retrieve all installment plans. Customers see their own; admins see all.",
+        tags=["Installments"],
+        responses={
+            200: InstallmentPlanSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         if user.is_staff:
@@ -382,6 +608,21 @@ class InstallmentPlanDetailView(generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated]
     lookup_field = "id"
 
+    @swagger_auto_schema(
+        operation_id="retrieve_installment_plan",
+        operation_summary="Get Installment Plan Details",
+        operation_description="Retrieve details of a specific installment plan including all payments.",
+        tags=["Installments"],
+        responses={
+            200: InstallmentPlanSerializer,
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
     def get_queryset(self):
         user = self.request.user
         if user.is_staff:
@@ -393,6 +634,21 @@ class InstallmentPaymentListView(generics.ListAPIView):
     """List installment payments for a specific plan"""
     serializer_class = InstallmentPaymentSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="list_installment_payments",
+        operation_summary="List Installment Payments",
+        operation_description="Retrieve all payment records for a specific installment plan.",
+        tags=["Installments"],
+        responses={
+            200: InstallmentPaymentSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
         plan_id = self.kwargs.get("plan_id")
@@ -409,11 +665,132 @@ class InstallmentPaymentListView(generics.ListAPIView):
         ).order_by("payment_number")
 
 
+class InitializeInstallmentPaymentView(APIView):
+    """Initialize payment for a specific installment (for subsequent payments 2, 3, etc.)"""
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="init_installment_payment",
+        operation_summary="Initialize Installment Payment",
+        operation_description="""Initialize payment for a subsequent installment (payment 2, 3, etc.).
+        
+Only works for PENDING installments that haven't been paid yet.""",
+        tags=["Installments"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'plan_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Installment plan ID'),
+                'payment_number': openapi.Schema(type=openapi.TYPE_INTEGER, description='Which installment (2, 3, etc.)'),
+            },
+            required=['plan_id', 'payment_number']
+        ),
+        responses={
+            201: openapi.Response("Payment initialized", schema=openapi.Schema(
+                type=openapi.TYPE_OBJECT,
+                properties={
+                    'authorization_url': openapi.Schema(type=openapi.TYPE_STRING),
+                    'amount': openapi.Schema(type=openapi.TYPE_NUMBER),
+                    'reference': openapi.Schema(type=openapi.TYPE_STRING),
+                    'payment_number': openapi.Schema(type=openapi.TYPE_INTEGER),
+                    'installment_plan_id': openapi.Schema(type=openapi.TYPE_INTEGER),
+                }
+            )),
+            400: openapi.Response("Missing fields or already paid"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def post(self, request):
+        plan_id = request.data.get('plan_id')
+        payment_number = request.data.get('payment_number')
+
+        if not plan_id or not payment_number:
+            return Response(
+                standardized_response(success=False, error="plan_id and payment_number required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            installment = InstallmentPayment.objects.select_related(
+                'installment_plan__order'
+            ).get(
+                installment_plan_id=plan_id,
+                payment_number=payment_number
+            )
+        except InstallmentPayment.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Installment not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Verify user owns this plan
+        if installment.installment_plan.order.customer != request.user and not request.user.is_staff:
+            return Response(
+                standardized_response(success=False, error="Forbidden"),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check if already paid
+        if installment.status == InstallmentPayment.PaymentStatus.PAID:
+            return Response(
+                standardized_response(success=False, error="This installment is already paid"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Initialize Paystack payment
+        paystack = Paystack()
+        try:
+            response = paystack.initialize_payment(
+                email=request.user.email,
+                amount=installment.amount,
+                reference=installment.reference,
+                callback_url=settings.PAYSTACK_CALLBACK_URL
+            )
+        except Exception as e:
+            return Response(
+                standardized_response(success=False, error=f"Paystack error: {str(e)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        return Response(
+            standardized_response(
+                data={
+                    "authorization_url": response["data"]["authorization_url"],
+                    "amount": float(installment.amount),
+                    "reference": installment.reference,
+                    "payment_number": payment_number,
+                    "installment_plan_id": plan_id
+                },
+                message="Installment payment initialized successfully"
+            ),
+            status=status.HTTP_201_CREATED
+        )
+
+
 class VerifyInstallmentPaymentView(APIView):
     """Verify and process an installment payment"""
     permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [UserRateThrottle]
 
+    @swagger_auto_schema(
+        operation_id="verify_installment_payment",
+        operation_summary="Verify Installment Payment",
+        operation_description="""Verify an installment payment with Paystack and mark it as PAID.
+        
+If all installments are paid, automatically credits vendor wallets.""",
+        tags=["Installments"],
+        manual_parameters=[
+            openapi.Parameter('reference', openapi.IN_QUERY, description='Payment reference', type=openapi.TYPE_STRING, required=True),
+        ],
+        responses={
+            200: openapi.Response("Payment verified", schema=InstallmentPaymentSerializer()),
+            400: openapi.Response("Invalid payment or amount mismatch"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
     def get(self, request):
         reference = request.query_params.get("reference")
         if not reference:
@@ -504,6 +881,20 @@ class InstallmentWebhookView(APIView):
     """Handle Paystack webhook for installment payments"""
     permission_classes = []
 
+    @swagger_auto_schema(
+        operation_id="webhook_installment_payment",
+        operation_summary="Paystack Webhook for Installment Payments",
+        operation_description="""Webhook endpoint for Paystack to notify about installment payment status.
+        
+Signature verification: HMAC-SHA512
+No authentication required (webhook signature validation instead)""",
+        tags=["Webhooks"],
+        security=[],
+        responses={
+            200: openapi.Response("Webhook processed"),
+            403: openapi.Response("Invalid signature"),
+        },
+    )
     def post(self, request):
         signature = request.headers.get("x-paystack-signature", "")
         computed = hmac.new(
@@ -561,6 +952,23 @@ class SecureVerifyPaymentView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [UserRateThrottle]
 
+    @swagger_auto_schema(
+        operation_id="verify_payment",
+        operation_summary="Verify Single Payment",
+        operation_description="""Verify a one-time (non-installment) payment with Paystack.
+        
+Verifies payment status and credits vendor wallets on success.""",
+        tags=["Payments"],
+        manual_parameters=[
+            openapi.Parameter('reference', openapi.IN_QUERY, description='Payment reference', type=openapi.TYPE_STRING, required=True),
+        ],
+        responses={
+            200: openapi.Response("Payment verified", schema=PaymentSerializer()),
+            400: openapi.Response("Invalid payment or currency mismatch"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
     def get(self, request):
         reference = request.query_params.get("reference")
         if not reference:
@@ -605,6 +1013,20 @@ class SecureVerifyPaymentView(APIView):
 class PaystackWebhookView(APIView):
     permission_classes = []
 
+    @swagger_auto_schema(
+        operation_id="webhook_payment",
+        operation_summary="Paystack Webhook for Single Payments",
+        operation_description="""Webhook endpoint for Paystack to notify about single payment status.
+        
+Signature verification: HMAC-SHA512
+No authentication required (webhook signature validation instead)""",
+        tags=["Webhooks"],
+        security=[],
+        responses={
+            200: openapi.Response("Webhook processed"),
+            403: openapi.Response("Invalid signature"),
+        },
+    )
     def post(self, request):
         signature = request.headers.get("x-paystack-signature", "")
         computed = hmac.new(
@@ -656,11 +1078,65 @@ class RefundListView(generics.ListAPIView):
     permission_classes = [IsAdmin]
     queryset = Refund.objects.select_related("payment", "payment__order").order_by("-created_at")
 
+    @swagger_auto_schema(
+        operation_id="list_refunds",
+        operation_summary="List Refund Requests",
+        operation_description="Retrieve all refund requests (admin only).",
+        tags=["Refunds"],
+        responses={
+            200: RefundSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
 
 class RefundDetailView(generics.RetrieveUpdateAPIView):
     serializer_class = RefundSerializer
     permission_classes = [IsAdmin]
     queryset = Refund.objects.select_related("payment", "payment__order")
+
+    @swagger_auto_schema(
+        operation_id="retrieve_refund",
+        operation_summary="Get Refund Details",
+        operation_description="Retrieve details of a specific refund request (admin only).",
+        tags=["Refunds"],
+        responses={
+            200: RefundSerializer,
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @swagger_auto_schema(
+        operation_id="update_refund",
+        operation_summary="Approve or Reject Refund",
+        operation_description="""Update refund status: approve to credit customer wallet, or reject.
+        
+Request body: {"action": "APPROVE" or "REJECT"}""",
+        tags=["Refunds"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'action': openapi.Schema(type=openapi.TYPE_STRING, enum=['APPROVE', 'REJECT']),
+            },
+            required=['action']
+        ),
+        responses={
+            200: RefundSerializer,
+            400: openapi.Response("Already processed or invalid action"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Not Found"),
+        },
+    )
+    def patch(self, request, *args, **kwargs):
+        return super().patch(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
         refund = self.get_object()
@@ -700,6 +1176,19 @@ class CustomerWalletView(generics.RetrieveAPIView):
     serializer_class = WalletSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_id="get_customer_wallet",
+        operation_summary="Get Customer Wallet",
+        operation_description="Retrieve authenticated customer's wallet balance and transaction history.",
+        tags=["Wallet"],
+        responses={
+            200: WalletSerializer,
+            401: openapi.Response("Unauthorized"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
     def get_object(self):
         wallet, _ = Wallet.objects.get_or_create(user=self.request.user)
         return wallet
@@ -711,6 +1200,19 @@ class WalletTransactionListView(generics.ListAPIView):
     """
     serializer_class = WalletTransactionSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="list_wallet_transactions",
+        operation_summary="List Wallet Transactions",
+        operation_description="Retrieve all wallet transactions (credits/debits) for authenticated customer.",
+        tags=["Wallet"],
+        responses={
+            200: WalletTransactionSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
 
     def get_queryset(self):
         wallet = get_object_or_404(Wallet, user=self.request.user)
@@ -727,6 +1229,24 @@ class AdminWalletListView(generics.ListAPIView):
     filterset_fields = ['user__email']
     search_fields = ['user__email', 'user__username']
 
+    @swagger_auto_schema(
+        operation_id="list_all_wallets",
+        operation_summary="List All Wallets",
+        operation_description="Retrieve all customer wallets for monitoring (admin only). Supports filtering by email.",
+        tags=["Wallet"],
+        manual_parameters=[
+            openapi.Parameter('user__email', openapi.IN_QUERY, description='Filter by user email', type=openapi.TYPE_STRING),
+            openapi.Parameter('search', openapi.IN_QUERY, description='Search by email or username', type=openapi.TYPE_STRING),
+        ],
+        responses={
+            200: WalletSerializer(many=True),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
 
 # Export for URL inclusion
 __all__ = [
@@ -737,5 +1257,5 @@ __all__ = [
     'RefundListView', 'RefundDetailView',
     'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView',
     'InstallmentCheckoutView', 'InstallmentPlanListView', 'InstallmentPlanDetailView',
-    'InstallmentPaymentListView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView'
+    'InstallmentPaymentListView', 'InitializeInstallmentPaymentView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView'
 ]

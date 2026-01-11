@@ -13,6 +13,7 @@ from users.serializers import (
     CustomerProfileSerializer,
     CustomerProfileUpdateSerializer,
     VendorProfileSerializer,
+    VendorProfileUpdateSerializer,
     BusinessAdminProfileSerializer
 )
 from authentication.models import CustomUser
@@ -90,7 +91,7 @@ class ProfileService:
             serializer = CustomerProfileUpdateSerializer(profile, data=safe_data, partial=True, context=context)
         elif user.is_vendor:
             profile = Vendor.objects.get(user=user)
-            serializer = VendorProfileSerializer(profile, data=safe_data, partial=True, context=context)
+            serializer = VendorProfileUpdateSerializer(profile, data=safe_data, partial=True, context=context)
         else:  # Admin
             serializer = BusinessAdminProfileSerializer(user, data=safe_data, partial=True, context=context)
 

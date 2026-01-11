@@ -7,7 +7,7 @@ from .views import (
     RefundListView, RefundDetailView,
     CustomerWalletView, WalletTransactionListView, AdminWalletListView,
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
-    InstallmentPaymentListView, VerifyInstallmentPaymentView, InstallmentWebhookView
+    InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView
 )
 
 urlpatterns = [
@@ -30,6 +30,7 @@ urlpatterns = [
     path('installment-plans/', InstallmentPlanListView.as_view(), name='installment-plan-list'),
     path('installment-plans/<int:id>/', InstallmentPlanDetailView.as_view(), name='installment-plan-detail'),
     path('installment-plans/<int:plan_id>/payments/', InstallmentPaymentListView.as_view(), name='installment-payment-list'),
+    path('installment-plans/init-payment/', InitializeInstallmentPaymentView.as_view(), name='init-installment-payment'),
     path('verify-installment-payment/', VerifyInstallmentPaymentView.as_view(), name='verify-installment-payment'),
     path('installment-webhook/', InstallmentWebhookView.as_view(), name='installment-webhook'),
 
