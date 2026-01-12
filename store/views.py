@@ -169,7 +169,7 @@ class PatchProductView(BaseAPIView, generics.UpdateAPIView):
         product = self.get_object()
 
         # Only allow patching specific fields
-        allowed_fields = ['price', 'stock', 'description', 'category', 'image']
+        allowed_fields = ['price', 'discounted_price', 'stock', 'description', 'category', 'brand', 'tags', 'variants', 'image']
         data = {k: v for k, v in request.data.items() if k in allowed_fields}
 
         serializer = self.get_serializer(product, data=data, partial=True)

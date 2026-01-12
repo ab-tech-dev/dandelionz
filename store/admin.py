@@ -4,17 +4,21 @@ from .models import Product, Cart, CartItem, Favourite, Review
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'store', 'category', 'price', 'stock', 'in_stock', 'created_at')
-    list_filter = ('category', 'created_at', 'store')
-    search_fields = ('name', 'description')
+    list_display = ('name', 'store', 'category', 'price', 'discounted_price', 'brand', 'stock', 'in_stock', 'created_at')
+    list_filter = ('category', 'created_at', 'store', 'brand')
+    search_fields = ('name', 'description', 'brand', 'tags')
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = ('slug', 'created_at', 'updated_at')
     fieldsets = (
         ('Basic Information', {
-            'fields': ('name', 'slug', 'store', 'category')
+            'fields': ('name', 'slug', 'store', 'category', 'brand')
         }),
         ('Details', {
-            'fields': ('description', 'price', 'stock', 'image')
+            'fields': ('description', 'price', 'discounted_price', 'stock', 'image')
+        }),
+        ('Product Attributes', {
+            'fields': ('tags', 'variants'),
+            'description': 'Tags: comma-separated or JSON array. Variants: JSON with color and/or size.'
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),

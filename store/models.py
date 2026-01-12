@@ -4,6 +4,7 @@ from users.models import Vendor
 from django.utils.text import slugify
 from django.utils import timezone
 from cloudinary.models import CloudinaryField
+import json
 
 
 
@@ -33,8 +34,12 @@ class Product(models.Model):
     description = models.TextField()
     category = models.CharField(max_length=100, choices=CATEGORIES)
     price = models.DecimalField(max_digits=10, decimal_places=2)
+    discounted_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     stock = models.PositiveIntegerField()
     image = CloudinaryField('image', null=True, blank=True)
+    brand = models.CharField(max_length=255, null=True, blank=True)
+    tags = models.TextField(null=True, blank=True, help_text="Comma-separated tags or JSON array")
+    variants = models.JSONField(null=True, blank=True, help_text="Product variants with color and/or size")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

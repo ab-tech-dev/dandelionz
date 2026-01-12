@@ -7,10 +7,25 @@ from .models import (
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ('order_id', 'customer', 'status', 'total_price', 'payment_status', 'ordered_at')
-    search_fields = ('order_id', 'customer__email', 'customer__username')
-    list_filter = ('status', 'payment_status', 'ordered_at')
-    readonly_fields = ('order_id', 'ordered_at', 'updated_at')
+    list_display = ('order_id', 'customer', 'delivery_agent', 'status', 'total_price', 'payment_status', 'assigned_at', 'ordered_at')
+    search_fields = ('order_id', 'customer__email', 'customer__username', 'delivery_agent__user__full_name')
+    list_filter = ('status', 'payment_status', 'ordered_at', 'assigned_at')
+    readonly_fields = ('order_id', 'ordered_at', 'updated_at', 'assigned_at')
+    fieldsets = (
+        ('Order Information', {
+            'fields': ('order_id', 'customer', 'status', 'payment_status')
+        }),
+        ('Pricing', {
+            'fields': ('total_price', 'delivery_fee', 'discount')
+        }),
+        ('Delivery', {
+            'fields': ('delivery_agent', 'tracking_number', 'assigned_at')
+        }),
+        ('Metadata', {
+            'fields': ('ordered_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
 
 
 @admin.register(OrderItem)

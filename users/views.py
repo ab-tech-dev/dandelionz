@@ -4,6 +4,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from django.utils import timezone
 
 from store.serializers import ProductSerializer, CreateProductSerializer
 
@@ -21,6 +22,7 @@ from users.serializers import (
     AdminProductUpdateRequestSerializer,
     AdminProductListSerializer,
     AdminVendorListSerializer,
+    AdminVendorDetailSerializer,
     AdminVendorApprovalSerializer,
     AdminVendorActionResponseSerializer,
     AdminVendorSuspendSerializer,
@@ -32,10 +34,17 @@ from users.serializers import (
     VendorAnalyticsResponseSerializer,
     AdminFinancePayoutResponseSerializer,
     SuccessResponseSerializer,
+    DeliveryAgentProfileSerializer,
+    DeliveryAgentUpdateSerializer,
+    DeliveryAgentAssignmentSerializer,
+    DeliveryAgentStatsSerializer,
+    DeliveryAgentCreateSerializer,
+    DeliveryAgentListSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
-from transactions.models import PayoutRecord
+from transactions.models import PayoutRecord, Order
+from users.models import Notification
 import logging
 
 logger = logging.getLogger(__name__)
@@ -806,6 +815,37 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
+        operation_id="admin_vendor_details",
+        operation_summary="Get Individual Vendor Details",
+        operation_description="Retrieve detailed information about a specific vendor including store details, KYC information, and account status.",
+        tags=["Vendor Management"],
+        responses={
+            200: openapi.Response(
+                "Vendor details retrieved successfully",
+                AdminVendorDetailSerializer()
+            ),
+            404: openapi.Response("Vendor not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"], url_path="(?P<vendor_uuid>[^/.]+)")
+    def get_vendor_details(self, request, vendor_uuid=None):
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        if not vendor_uuid:
+            return Response({"message": "Vendor UUID is required"}, status=400)
+
+        try:
+            vendor = Vendor.objects.select_related("user").get(user__uuid=vendor_uuid)
+            serializer = AdminVendorDetailSerializer(vendor)
+            return Response({"success": True, "data": serializer.data})
+        except Vendor.DoesNotExist:
+            return Response({"message": "Vendor not found"}, status=404)
+
+    @swagger_auto_schema(
         operation_id="admin_approve_vendor",
         operation_summary="Approve or Unapprove Vendor",
         operation_description="Approve or revoke approval for a vendor. Requires vendor UUID and approval boolean flag.",
@@ -1070,17 +1110,21 @@ class AdminOrdersViewSet(AdminBaseViewSet):
 
     @swagger_auto_schema(
         operation_id="admin_assign_logistics",
-        operation_summary="Assign Logistics to Order",
-        operation_description="Mark an order as having logistics assigned and ready for shipment.",
+        operation_summary="Assign Logistics/Delivery Agent to Order",
+        operation_description="Assign a delivery agent to an order. Delivery agent will receive notification.",
         tags=["Orders & Logistics"],
-        request_body=AdminOrderActionSerializer,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'order_id': openapi.Schema(type=openapi.TYPE_STRING, description='Order UUID'),
+                'delivery_agent_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Delivery Agent ID')
+            },
+            required=['order_id', 'delivery_agent_id']
+        ),
         responses={
-            200: openapi.Response(
-                "Logistics assigned successfully",
-                AdminOrderActionResponseSerializer()
-            ),
+            200: openapi.Response("Delivery agent assigned successfully"),
             400: openapi.Response("Invalid request data"),
-            404: openapi.Response("Order not found"),
+            404: openapi.Response("Order or delivery agent not found"),
             403: openapi.Response("Admin access only"),
         },
         security=[{"Bearer": []}],
@@ -1091,18 +1135,44 @@ class AdminOrdersViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        serializer = AdminOrderActionSerializer(data=request.data)
+        serializer = DeliveryAgentAssignmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        order = Order.objects.filter(uuid=serializer.validated_data["order_uuid"]).first()
-        if not order:
+        try:
+            order = Order.objects.get(order_id=serializer.validated_data['order_id'])
+        except Order.DoesNotExist:
             return Response({"success": False, "message": "Order not found"}, status=404)
 
-        order.logistics_assigned = True
-        order.save(update_fields=["logistics_assigned"])
+        from users.models import DeliveryAgent
+        try:
+            delivery_agent = DeliveryAgent.objects.get(id=serializer.validated_data['delivery_agent_id'])
+        except DeliveryAgent.DoesNotExist:
+            return Response({"success": False, "message": "Delivery agent not found"}, status=404)
 
-        response_serializer = AdminOrderActionResponseSerializer({"success": True})
-        return Response(response_serializer.data)
+        order.delivery_agent = delivery_agent
+        order.assigned_at = timezone.now()
+        order.save(update_fields=['delivery_agent', 'assigned_at'])
+
+        # Notify delivery agent
+        Notification.objects.create(
+            recipient=delivery_agent.user,
+            title="New Order Assignment",
+            message=f"You have been assigned order {order.order_id} for delivery."
+        )
+
+        # Notify customer
+        Notification.objects.create(
+            recipient=order.customer,
+            title="Delivery Agent Assigned",
+            message=f"A delivery agent has been assigned to your order {order.order_id}."
+        )
+
+        return Response({
+            "success": True,
+            "message": "Delivery agent assigned successfully",
+            "order_id": str(order.order_id),
+            "delivery_agent": delivery_agent.user.full_name
+        }, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_id="admin_process_refund",
@@ -1243,3 +1313,442 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
 
         serializer = AdminAnalyticsSerializer(data)
         return Response({"success": True, "data": serializer.data})
+
+
+# =====================================================
+# DELIVERY AGENT VIEWSET
+# =====================================================
+class DeliveryAgentViewSet(viewsets.ViewSet):
+    """
+    ViewSet for delivery agents to manage their profile and assigned orders.
+    
+    Endpoints:
+    - GET /api/delivery/profile/: Retrieve delivery agent profile
+    - PATCH /api/delivery/profile/: Update delivery agent profile
+    - GET /api/delivery/assigned-orders/: List assigned orders
+    - PATCH /api/delivery/mark-delivered/:order_id/: Mark order as delivered
+    - GET /api/delivery/stats/: Get delivery agent statistics
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_delivery_agent(self, request):
+        """Get delivery agent or return None"""
+        try:
+            return request.user.deliveryagent
+        except:
+            return None
+
+    @swagger_auto_schema(
+        operation_id="delivery_profile_retrieve",
+        operation_summary="Get Delivery Agent Profile",
+        operation_description="Retrieve the authenticated delivery agent's profile information.",
+        tags=["Delivery Agent"],
+        responses={
+            200: openapi.Response("Profile retrieved successfully", DeliveryAgentProfileSerializer()),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def list(self, request):
+        """Get delivery agent profile"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = DeliveryAgentProfileSerializer(agent)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="delivery_profile_update",
+        operation_summary="Update Delivery Agent Profile",
+        operation_description="Partially update delivery agent profile (phone, is_active).",
+        tags=["Delivery Agent"],
+        request_body=DeliveryAgentUpdateSerializer,
+        responses={
+            200: openapi.Response("Profile updated successfully", DeliveryAgentProfileSerializer()),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def partial_update(self, request):
+        """Update delivery agent profile"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = DeliveryAgentUpdateSerializer(agent, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            response_serializer = DeliveryAgentProfileSerializer(agent)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_id="delivery_assigned_orders",
+        operation_summary="List Assigned Orders",
+        operation_description="Get list of orders assigned to the delivery agent.",
+        tags=["Delivery Agent"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                description='Filter by order status: PENDING, SHIPPED, DELIVERED',
+                type=openapi.TYPE_STRING,
+            )
+        ],
+        responses={
+            200: openapi.Response("Orders retrieved successfully"),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'])
+    def assigned_orders(self, request):
+        """Get assigned orders for delivery agent"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        orders = Order.objects.filter(delivery_agent=agent).order_by('-assigned_at')
+        
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            orders = orders.filter(status=status_filter)
+        
+        from transactions.serializers import OrderSerializer
+        serializer = OrderSerializer(orders, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="delivery_mark_delivered",
+        operation_summary="Mark Order as Delivered",
+        operation_description="Update order status to DELIVERED and notify customer.",
+        tags=["Delivery Agent"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'notes': openapi.Schema(type=openapi.TYPE_STRING, description='Delivery notes (optional)')
+            }
+        ),
+        responses={
+            200: openapi.Response("Order marked as delivered"),
+            400: openapi.Response("Invalid order or already delivered"),
+            403: openapi.Response("Not authorized to update this order"),
+            404: openapi.Response("Order not found"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['patch'], url_path='mark-delivered/(?P<order_id>[^/.]+)')
+    def mark_delivered(self, request, order_id=None):
+        """Mark order as delivered"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        try:
+            order = Order.objects.get(order_id=order_id, delivery_agent=agent)
+        except Order.DoesNotExist:
+            return Response(
+                {"detail": "Order not found or not assigned to you"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        
+        if order.status == Order.Status.DELIVERED:
+            return Response(
+                {"detail": "Order already marked as delivered"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        order.status = Order.Status.DELIVERED
+        order.save(update_fields=['status', 'updated_at'])
+        
+        # Create notification for customer
+        Notification.objects.create(
+            recipient=order.customer,
+            title="Order Delivered",
+            message=f"Your order {order.order_id} has been delivered."
+        )
+        
+        from transactions.serializers import OrderSerializer
+        serializer = OrderSerializer(order, context={'request': request})
+        return Response(
+            {"success": True, "message": "Order marked as delivered", "order": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="delivery_stats",
+        operation_summary="Get Delivery Agent Statistics",
+        operation_description="Get statistics for the delivery agent including total assignments, deliveries, and success rate.",
+        tags=["Delivery Agent"],
+        responses={
+            200: openapi.Response("Statistics retrieved successfully", DeliveryAgentStatsSerializer()),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'])
+    def stats(self, request):
+        """Get delivery agent statistics"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        orders = agent.assigned_orders.all()
+        total_assigned = orders.count()
+        total_delivered = orders.filter(status=Order.Status.DELIVERED).count()
+        pending_deliveries = orders.exclude(status=Order.Status.DELIVERED).count()
+        
+        success_rate = (total_delivered / total_assigned * 100) if total_assigned > 0 else 0
+        
+        data = {
+            'total_assigned': total_assigned,
+            'total_delivered': total_delivered,
+            'pending_deliveries': pending_deliveries,
+            'delivery_success_rate': round(success_rate, 2),
+        }
+        
+        serializer = DeliveryAgentStatsSerializer(data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="delivery_notifications",
+        operation_summary="Get Delivery Agent Notifications",
+        operation_description="Get notifications for the delivery agent including new assignments and updates.",
+        tags=["Delivery Agent"],
+        responses={
+            200: openapi.Response("Notifications retrieved successfully"),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'])
+    def notifications(self, request):
+        """Get delivery agent notifications"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        notifications = Notification.objects.filter(recipient=agent.user).order_by('-created_at')[:50]
+        serializer = NotificationSerializer(notifications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="delivery_pending_deliveries",
+        operation_summary="Get Pending Deliveries",
+        operation_description="Get list of orders assigned to delivery agent that are not yet delivered.",
+        tags=["Delivery Agent"],
+        responses={
+            200: openapi.Response("Pending deliveries retrieved successfully"),
+            403: openapi.Response("Delivery agent access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'])
+    def pending_deliveries(self, request):
+        """Get pending deliveries for delivery agent"""
+        agent = self.get_delivery_agent(request)
+        if not agent:
+            return Response(
+                {"detail": "Delivery agent access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        pending_orders = agent.assigned_orders.exclude(status=Order.Status.DELIVERED).order_by('assigned_at')
+        
+        from transactions.serializers import OrderSerializer
+        serializer = OrderSerializer(pending_orders, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# =====================================================
+# ADMIN DELIVERY AGENT MANAGEMENT
+# =====================================================
+class AdminDeliveryAgentViewSet(AdminBaseViewSet):
+    """
+    ViewSet for business admins to manage delivery agents.
+    
+    Endpoints:
+    - GET /api/admin/delivery-agents/: List all delivery agents
+    - POST /api/admin/delivery-agents/: Create new delivery agent
+    - PATCH /api/admin/delivery-agents/:id/: Update delivery agent status
+    - DELETE /api/admin/delivery-agents/:id/: Deactivate delivery agent
+    """
+
+    @swagger_auto_schema(
+        operation_id="admin_list_delivery_agents",
+        operation_summary="List All Delivery Agents",
+        operation_description="Get list of all delivery agents with their statistics.",
+        tags=["Admin - Delivery Agents"],
+        responses={
+            200: openapi.Response("Delivery agents retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'])
+    def list_agents(self, request):
+        """List all delivery agents"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from users.models import DeliveryAgent
+        agents = DeliveryAgent.objects.all().order_by('created_at')
+        serializer = DeliveryAgentListSerializer(agents, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="admin_create_delivery_agent",
+        operation_summary="Create New Delivery Agent",
+        operation_description="Create a new delivery agent account (rider).",
+        tags=["Admin - Delivery Agents"],
+        request_body=DeliveryAgentCreateSerializer,
+        responses={
+            201: openapi.Response("Delivery agent created successfully"),
+            400: openapi.Response("Invalid input data"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['post'])
+    def create_agent(self, request):
+        """Create a new delivery agent"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        serializer = DeliveryAgentCreateSerializer(data=request.data)
+        if serializer.is_valid():
+            agent = serializer.save()
+            return Response(
+                {
+                    "success": True,
+                    "message": "Delivery agent created successfully",
+                    "agent_id": agent.id,
+                    "email": agent.user.email,
+                    "full_name": agent.user.full_name,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @swagger_auto_schema(
+        operation_id="admin_deactivate_delivery_agent",
+        operation_summary="Deactivate Delivery Agent",
+        operation_description="Deactivate a delivery agent (remove from active rotation).",
+        tags=["Admin - Delivery Agents"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'agent_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Delivery Agent ID'),
+                'is_active': openapi.Schema(type=openapi.TYPE_BOOLEAN, description='Active status')
+            },
+            required=['agent_id']
+        ),
+        responses={
+            200: openapi.Response("Delivery agent status updated"),
+            404: openapi.Response("Delivery agent not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['patch'])
+    def update_agent_status(self, request):
+        """Update delivery agent status"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        agent_id = request.data.get('agent_id')
+        is_active = request.data.get('is_active', False)
+
+        if not agent_id:
+            return Response({"message": "agent_id is required"}, status=400)
+
+        from users.models import DeliveryAgent
+        try:
+            agent = DeliveryAgent.objects.get(id=agent_id)
+        except DeliveryAgent.DoesNotExist:
+            return Response({"message": "Delivery agent not found"}, status=404)
+
+        agent.is_active = is_active
+        agent.save(update_fields=['is_active'])
+
+        status_text = "activated" if is_active else "deactivated"
+        return Response(
+            {
+                "success": True,
+                "message": f"Delivery agent {status_text}",
+                "agent_id": agent.id,
+                "is_active": agent.is_active,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_get_agent_details",
+        operation_summary="Get Delivery Agent Details",
+        operation_description="Get detailed information about a specific delivery agent including performance metrics.",
+        tags=["Admin - Delivery Agents"],
+        responses={
+            200: openapi.Response("Agent details retrieved successfully"),
+            404: openapi.Response("Delivery agent not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=['get'], url_path='details/(?P<agent_id>[^/.]+)')
+    def get_agent_details(self, request, agent_id=None):
+        """Get detailed information about a delivery agent"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from users.models import DeliveryAgent
+        try:
+            agent = DeliveryAgent.objects.get(id=agent_id)
+        except DeliveryAgent.DoesNotExist:
+            return Response({"message": "Delivery agent not found"}, status=404)
+
+        orders = agent.assigned_orders.all()
+        total_assigned = orders.count()
+        total_delivered = orders.filter(status=Order.Status.DELIVERED).count()
+        pending = orders.exclude(status=Order.Status.DELIVERED).count()
+        success_rate = (total_delivered / total_assigned * 100) if total_assigned > 0 else 0
+
+        data = {
+            "id": agent.id,
+            "email": agent.user.email,
+            "full_name": agent.user.full_name,
+            "phone": agent.phone,
+            "is_active": agent.is_active,
+            "created_at": agent.created_at,
+            "total_assigned": total_assigned,
+            "total_delivered": total_delivered,
+            "pending_deliveries": pending,
+            "success_rate": round(success_rate, 2),
+        }
+
+        return Response(data, status=status.HTTP_200_OK)
+

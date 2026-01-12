@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, re_path
 from .views import (
     CustomerProfileViewSet,
     VendorViewSet,
@@ -8,6 +8,8 @@ from .views import (
     AdminOrdersViewSet,
     AdminFinanceViewSet,
     AdminAnalyticsViewSet,
+    DeliveryAgentViewSet,
+    AdminDeliveryAgentViewSet,
 )
 
 # =========================
@@ -37,6 +39,7 @@ admin_profile = AdminProfileViewSet.as_view({"get": "retrieve"})
 admin_change_password = AdminProfileViewSet.as_view({"post": "change_password"})
 
 admin_list_vendors = AdminVendorViewSet.as_view({"get": "list_vendors"})
+admin_vendor_details = AdminVendorViewSet.as_view({"get": "get_vendor_details"})
 admin_approve_vendor = AdminVendorViewSet.as_view({"post": "approve_vendor"})
 admin_suspend_user = AdminVendorViewSet.as_view({"post": "suspend_user"})
 admin_verify_kyc = AdminVendorViewSet.as_view({"post": "verify_kyc"})
@@ -52,6 +55,27 @@ admin_payments = AdminFinanceViewSet.as_view({"get": "payments"})
 admin_trigger_payout = AdminFinanceViewSet.as_view({"post": "trigger_payout"})
 
 admin_analytics = AdminAnalyticsViewSet.as_view({"get": "overview"})
+
+# =========================
+# DELIVERY AGENT
+# =========================
+delivery_profile = DeliveryAgentViewSet.as_view({
+    "get": "list",
+    "patch": "partial_update",
+})
+delivery_assigned_orders = DeliveryAgentViewSet.as_view({"get": "assigned_orders"})
+delivery_mark_delivered = DeliveryAgentViewSet.as_view({"patch": "mark_delivered"})
+delivery_stats = DeliveryAgentViewSet.as_view({"get": "stats"})
+delivery_notifications = DeliveryAgentViewSet.as_view({"get": "notifications"})
+delivery_pending = DeliveryAgentViewSet.as_view({"get": "pending_deliveries"})
+
+# =========================
+# ADMIN DELIVERY AGENT MANAGEMENT
+# =========================
+admin_list_agents = AdminDeliveryAgentViewSet.as_view({"get": "list_agents"})
+admin_create_agent = AdminDeliveryAgentViewSet.as_view({"post": "create_agent"})
+admin_update_agent = AdminDeliveryAgentViewSet.as_view({"patch": "update_agent_status"})
+admin_agent_details = AdminDeliveryAgentViewSet.as_view({"get": "get_agent_details"})
 
 urlpatterns = [
     # CUSTOMER
@@ -74,6 +98,7 @@ urlpatterns = [
 
     # ADMIN VENDOR MANAGEMENT
     path("admin/vendors/", admin_list_vendors, name="admin-list-vendors"),
+    re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
     path("admin/vendors/approve/", admin_approve_vendor, name="admin-approve-vendor"),
     path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
     path("admin/vendors/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc"),
@@ -93,4 +118,18 @@ urlpatterns = [
 
     # ADMIN ANALYTICS
     path("admin/analytics/", admin_analytics, name="admin-analytics"),
+
+    # DELIVERY AGENT
+    path("delivery/profile/", delivery_profile, name="delivery-profile"),
+    path("delivery/assigned-orders/", delivery_assigned_orders, name="delivery-assigned-orders"),
+    path("delivery/mark-delivered/<str:order_id>/", delivery_mark_delivered, name="delivery-mark-delivered"),
+    path("delivery/stats/", delivery_stats, name="delivery-stats"),
+    path("delivery/notifications/", delivery_notifications, name="delivery-notifications"),
+    path("delivery/pending-deliveries/", delivery_pending, name="delivery-pending-deliveries"),
+
+    # ADMIN DELIVERY AGENT MANAGEMENT
+    path("admin/delivery-agents/", admin_list_agents, name="admin-list-agents"),
+    path("admin/delivery-agents/create/", admin_create_agent, name="admin-create-agent"),
+    path("admin/delivery-agents/update-status/", admin_update_agent, name="admin-update-agent-status"),
+    path("admin/delivery-agents/details/<int:agent_id>/", admin_agent_details, name="admin-agent-details"),
 ]

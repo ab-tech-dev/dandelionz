@@ -69,6 +69,7 @@ class Order(models.Model):
 
     order_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='orders')
+    delivery_agent = models.ForeignKey('users.DeliveryAgent', on_delete=models.SET_NULL, related_name='assigned_orders', null=True, blank=True)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     products = models.ManyToManyField('store.Product', through='OrderItem', related_name='orders')
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -76,6 +77,7 @@ class Order(models.Model):
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tracking_number = models.CharField(max_length=100, blank=True, null=True)
     payment_status = models.CharField(max_length=20, default='UNPAID')
+    assigned_at = models.DateTimeField(null=True, blank=True)
     ordered_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

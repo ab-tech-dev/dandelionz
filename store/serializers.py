@@ -46,8 +46,8 @@ class ProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'store', 'store_name', 'name', 'slug', 'description', 'category',
-            'price', 'stock', 'image', 'in_stock', 'created_at', 'updated_at',
-            'reviews'
+            'price', 'discounted_price', 'stock', 'brand', 'tags', 'variants', 'image', 
+            'in_stock', 'created_at', 'updated_at', 'reviews'
         ]
         ref_name = "StoreProductSerializer"
 
@@ -62,7 +62,7 @@ class CreateProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'name', 'slug', 'description', 'category',
-            'price', 'stock', 'image', 'store', 'created_at', 'updated_at'
+            'price', 'discounted_price', 'stock', 'brand', 'tags', 'variants', 'image', 'store', 'created_at', 'updated_at'
         ]
         read_only_fields = ['slug', 'store', 'created_at', 'updated_at']
 

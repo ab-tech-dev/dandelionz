@@ -5,7 +5,8 @@ from .models import (
     Vendor,
     Customer,
     BusinessAdmin,
-    Notification
+    Notification,
+    DeliveryAgent
 )
 
 User = get_user_model()
@@ -105,6 +106,7 @@ class VendorProfileUpdateSerializer(serializers.ModelSerializer):
             'address',
             'bank_name',
             'account_number',
+            'recipient_code',
         ]
 
 # Example of serializer for vendor payout request (you need a model for this)
@@ -413,6 +415,24 @@ class AdminVendorListSerializer(serializers.Serializer):
     is_verified_vendor = serializers.BooleanField()
     is_active = serializers.BooleanField(source='user.is_active')
 
+class AdminVendorDetailSerializer(serializers.Serializer):
+    """Detailed vendor information for admin dashboard"""
+    user_uuid = serializers.UUIDField(source='user.uuid')
+    email = serializers.EmailField(source='user.email')
+    full_name = serializers.CharField(source='user.full_name')
+    phone_number = serializers.CharField(source='user.phone_number')
+    store_name = serializers.CharField()
+    store_description = serializers.CharField()
+    business_registration_number = serializers.CharField()
+    address = serializers.CharField()
+    bank_name = serializers.CharField()
+    account_number = serializers.CharField()
+    recipient_code = serializers.CharField()
+    is_verified_vendor = serializers.BooleanField()
+    is_active = serializers.BooleanField(source='user.is_active')
+    is_verified = serializers.BooleanField(source='user.is_verified')
+    created_at = serializers.DateTimeField(source='user.date_joined', read_only=True)
+
 class AdminVendorApprovalSerializer(serializers.Serializer):
     user_uuid = serializers.UUIDField()
     approve = serializers.BooleanField()
@@ -469,3 +489,104 @@ class AdminFinancePayoutResponseSerializer(serializers.Serializer):
         help_text="Payout amount"
     )
     message = serializers.CharField(required=False, allow_blank=True)
+
+
+# =====================================================
+# DELIVERY AGENT SERIALIZERS
+# =====================================================
+class DeliveryAgentProfileSerializer(serializers.ModelSerializer):
+    """Serializer for delivery agent profile information"""
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_full_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_phone = serializers.CharField(source='user.phone_number', read_only=True)
+    
+    class Meta:
+        model = DeliveryAgent
+        fields = ['id', 'user_email', 'user_full_name', 'user_phone', 'phone', 'is_active', 'created_at']
+        read_only_fields = ['id', 'user_email', 'user_full_name', 'user_phone', 'created_at']
+
+
+class DeliveryAgentUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating delivery agent profile"""
+    class Meta:
+        model = DeliveryAgent
+        fields = ['phone', 'is_active']
+
+
+class DeliveryAgentAssignmentSerializer(serializers.Serializer):
+    """Serializer for assigning orders to delivery agents"""
+    order_id = serializers.CharField()
+    delivery_agent_id = serializers.IntegerField()
+    
+    def validate_delivery_agent_id(self, value):
+        try:
+            DeliveryAgent.objects.get(id=value)
+        except DeliveryAgent.DoesNotExist:
+            raise serializers.ValidationError("Delivery agent not found")
+        return value
+
+
+class DeliveryAgentStatsSerializer(serializers.Serializer):
+    """Serializer for delivery agent statistics"""
+    total_assigned = serializers.IntegerField()
+    total_delivered = serializers.IntegerField()
+    pending_deliveries = serializers.IntegerField()
+    delivery_success_rate = serializers.FloatField()
+
+
+class DeliveryAgentCreateSerializer(serializers.ModelSerializer):
+    """Serializer for creating delivery agents (admin only)"""
+    email = serializers.EmailField()
+    full_name = serializers.CharField(max_length=150)
+    phone = serializers.CharField(max_length=20)
+    password = serializers.CharField(write_only=True, min_length=8)
+    
+    class Meta:
+        model = DeliveryAgent
+        fields = ['email', 'full_name', 'phone', 'password', 'is_active']
+    
+    def create(self, validated_data):
+        from authentication.models import CustomUser
+        
+        email = validated_data.pop('email')
+        full_name = validated_data.pop('full_name')
+        password = validated_data.pop('password')
+        phone = validated_data.pop('phone')
+        
+        # Create user with DELIVERY_AGENT role
+        user = CustomUser.objects.create_user(
+            email=email,
+            password=password,
+            full_name=full_name,
+            phone_number=phone,
+            role=CustomUser.Role.DELIVERY_AGENT,
+            is_verified=True,  # Admin creates verified delivery agents
+        )
+        
+        # Create delivery agent profile
+        delivery_agent = DeliveryAgent.objects.create(
+            user=user,
+            phone=phone,
+            is_active=validated_data.get('is_active', True)
+        )
+        
+        return delivery_agent
+
+
+class DeliveryAgentListSerializer(serializers.ModelSerializer):
+    """Serializer for listing delivery agents (admin view)"""
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+    user_full_name = serializers.CharField(source='user.full_name', read_only=True)
+    total_assigned = serializers.SerializerMethodField()
+    total_delivered = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = DeliveryAgent
+        fields = ['id', 'user_email', 'user_full_name', 'phone', 'is_active', 'total_assigned', 'total_delivered', 'created_at']
+        read_only_fields = ['id', 'created_at']
+    
+    def get_total_assigned(self, obj):
+        return obj.assigned_orders.count()
+    
+    def get_total_delivered(self, obj):
+        return obj.assigned_orders.filter(status='DELIVERED').count()

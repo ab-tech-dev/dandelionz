@@ -63,52 +63,66 @@ class ProfileService:
     # ---------------------------
     @staticmethod
     @transaction.atomic
-    def update_profile(user, data=None, files=None, request=None):
+    def update_profile(user, data=None, files=None, request=None, partial=True):
         if not user:
             raise PermissionDenied("Authentication required")
 
-        context = {'request': request} if request else {}
+        try:
+            context = {'request': request} if request else {}
 
-        # Handle profile picture
-        if files and 'profile_picture' in files:
-            ProfileService._process_profile_picture_file(user, files['profile_picture'])
-        elif 'image_data' in data:
-            ProfileService._process_image_data(user, data.get('image_data'))
+            # Ensure data is a dict
+            if data is None:
+                data = {}
+            
+            # Handle profile picture
+            if files and 'profile_picture' in files:
+                ProfileService._process_profile_picture_file(user, files['profile_picture'])
+            elif data and 'image_data' in data:
+                ProfileService._process_image_data(user, data.get('image_data'))
 
-        # Handle password change
-        if 'current_password' in data and 'new_password' in data:
-            result = ProfileService.process_password_change(user, data['current_password'], data['new_password'])
-            if not result.get('success'):
-                return False, result, 400
+            # Handle password change
+            if data and 'current_password' in data and 'new_password' in data:
+                result = ProfileService.process_password_change(user, data['current_password'], data['new_password'])
+                if not result.get('success'):
+                    return False, {"success": False, "error": result.get('error')}, 400
 
-        # Restrict fields per role
-        restricted_fields = ['uuid', 'email', 'role', 'is_superuser', 'is_staff']
-        safe_data = {k: v for k, v in data.items() if k not in restricted_fields + ['profile_picture', 'image_data', 'current_password', 'new_password']}
+            # Restrict fields per role
+            restricted_fields = ['uuid', 'email', 'role', 'is_superuser', 'is_staff']
+            safe_data = {k: v for k, v in data.items() if k not in restricted_fields + ['profile_picture', 'image_data', 'current_password', 'new_password']}
 
-        # Choose serializer based on role
-        if user.is_customer:
-            profile = Customer.objects.get(user=user)
-            serializer = CustomerProfileUpdateSerializer(profile, data=safe_data, partial=True, context=context)
-        elif user.is_vendor:
-            profile = Vendor.objects.get(user=user)
-            serializer = VendorProfileUpdateSerializer(profile, data=safe_data, partial=True, context=context)
-        else:  # Admin
-            serializer = BusinessAdminProfileSerializer(user, data=safe_data, partial=True, context=context)
+            # Choose serializer based on role
+            if user.is_customer:
+                profile = Customer.objects.get(user=user)
+                serializer = CustomerProfileUpdateSerializer(profile, data=safe_data, partial=partial, context=context)
+            elif user.is_vendor:
+                profile = Vendor.objects.get(user=user)
+                serializer = VendorProfileUpdateSerializer(profile, data=safe_data, partial=partial, context=context)
+            else:  # Admin
+                serializer = BusinessAdminProfileSerializer(user, data=safe_data, partial=partial, context=context)
 
-        if serializer.is_valid():
+            if not serializer.is_valid():
+                logger.error(f"Profile serializer validation failed for {user.email}: {serializer.errors}")
+                return False, {"success": False, "error": serializer.errors}, 400
+
             serializer.save()
+            
             # Update base user fields
             base_fields = ['full_name', 'phone_number']
+            update_fields = []
             for field in base_fields:
                 if field in data:
                     setattr(user, field, data[field])
-            user.save(update_fields=[f for f in base_fields if f in data])
+                    update_fields.append(field)
+            if update_fields:
+                user.save(update_fields=update_fields)
 
             updated_data = ProfileService.get_profile(user, request=request)
             logger.info(f"Profile updated for {user.email}")
             return True, {"success": True, "data": updated_data, "message": "Profile updated successfully"}, 200
 
-        return False, {"success": False, "error": serializer.errors}, 400
+        except Exception as e:
+            logger.error(f"Error updating profile for {user.email}: {str(e)}", exc_info=True)
+            return False, {"success": False, "error": "An error occurred while updating profile"}, 500
 
     # ---------------------------
     # PASSWORD CHANGE

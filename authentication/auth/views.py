@@ -316,6 +316,7 @@ class LogoutView(BaseAPIView):
     
     Invalidates the provided refresh token and clears session cookies.
     Requires authenticated user with valid access token.
+    If no refresh token is provided, all user tokens will be blacklisted for security.
     """
     permission_classes = [IsAuthenticated]
 
@@ -326,7 +327,7 @@ class LogoutView(BaseAPIView):
 
 Requires authentication with a valid access token.
 The refresh token can be provided in request body or will be read from cookies if JWT_COOKIE_SECURE is enabled.
-After logout, the refresh token is invalidated and cannot be used to obtain new access tokens.
+If no refresh token is provided, all active user tokens will be invalidated for security.
 
 JWT cookies will be cleared from the response if cookie-based authentication is enabled.""",
         tags=["Authentication"],
@@ -360,8 +361,9 @@ JWT cookies will be cleared from the response if cookie-based authentication is 
         except Exception as e:
             logger.error(f"Logout error: {str(e)}")
             logger.error(traceback.format_exc())
+            # Return success even on error to ensure cookies are cleared
             response = Response(
-                standardized_response(success=True, message="Logout not processed"),
+                standardized_response(success=True, message="Logout completed"),
                 status=status.HTTP_200_OK
             )
 

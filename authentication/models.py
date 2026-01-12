@@ -39,6 +39,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         BUSINESS_ADMIN = 'BUSINESS_ADMIN', 'Business Admin'
         VENDOR = 'VENDOR', 'Vendor'
         CUSTOMER = 'CUSTOMER', 'Customer'
+        DELIVERY_AGENT = 'DELIVERY_AGENT', 'Delivery Agent'
 
     # Primary key as UUID
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
@@ -98,6 +99,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     @property
     def is_customer(self):
         return self.role == self.Role.CUSTOMER
+
+    @property
+    def is_delivery_agent(self):
+        return self.role == self.Role.DELIVERY_AGENT
 
 
 # =====================================================

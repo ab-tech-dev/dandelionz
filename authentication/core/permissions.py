@@ -36,6 +36,16 @@ class IsCustomer(BasePermission):
         return request.user.is_authenticated and request.user.is_customer
 
 
+class IsDeliveryAgent(BasePermission):
+    """
+    Allows access only to users with role DELIVERY_AGENT
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return hasattr(request.user, 'deliveryagent')
+
+
 # =====================================================
 # Mixed Permissions
 # =====================================================

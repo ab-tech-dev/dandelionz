@@ -243,15 +243,31 @@ class AuthenticationService:
     @staticmethod
     def logout(user, refresh_token=None):
         """Handle user logout and invalidate token if provided"""
+        blacklisted_count = 0
+        
         if refresh_token:
             try:
                 token = RefreshToken(refresh_token)
                 jti = token.get('jti')
                 if jti:
                     TokenManager.blacklist_token(jti)
-                    logger.info(f"Token blacklisted during logout: {jti}")
+                    blacklisted_count += 1
+                    logger.info(f"Refresh token blacklisted during logout: {jti}")
             except Exception as e:
-                logger.warning(f"Error blacklisting token during logout: {str(e)}")
+                logger.warning(f"Error blacklisting refresh token during logout: {str(e)}")
+        else:
+            # If no refresh token provided, blacklist all user tokens for security
+            try:
+                blacklisted_count = TokenManager.blacklist_all_user_tokens(str(user.uuid))
+                logger.info(f"All tokens blacklisted for user {user.pk} during logout")
+            except Exception as e:
+                logger.warning(f"Error blacklisting all user tokens during logout: {str(e)}")
 
-        logger.info(f"User logged out: {user.pk}")
-        return True, {"success": True, "message": "Successfully logged out"}, 200
+        logger.info(f"User logged out: {user.pk} ({blacklisted_count} token(s) blacklisted)")
+        return True, {
+            "success": True, 
+            "message": "Successfully logged out",
+            "data": {
+                "tokens_blacklisted": blacklisted_count
+            }
+        }, 200
