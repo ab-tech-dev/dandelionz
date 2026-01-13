@@ -62,9 +62,10 @@ class CreateProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'name', 'slug', 'description', 'category',
-            'price', 'discounted_price', 'stock', 'brand', 'tags', 'variants', 'image', 'store', 'created_at', 'updated_at'
+            'price', 'discounted_price', 'stock', 'brand', 'tags', 'variants', 'image', 'store', 
+            'publish_status', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['slug', 'store', 'created_at', 'updated_at']
+        read_only_fields = ['slug', 'store', 'publish_status', 'created_at', 'updated_at']
 
     def get_image(self, obj):
         return self.get_cloudinary_url(obj.image)
@@ -104,4 +105,52 @@ class FavouriteSerializer(CloudinarySerializer):
     class Meta:
         model = Favourite
         fields = ['id', 'customer', 'product', 'product_details', 'added_at']
+
+
+# ---------------------------
+# Admin Product Approval Serializers
+# ---------------------------
+class PendingProductsSerializer(CloudinarySerializer):
+    """
+    Serializer for displaying products pending approval.
+    Includes approval status and admin details.
+    """
+    store_name = serializers.CharField(source='store.store_name', read_only=True)
+    store_owner_email = serializers.CharField(source='store.user.email', read_only=True)
+    approved_by_email = serializers.CharField(source='approved_by.email', read_only=True, allow_null=True)
+    in_stock = serializers.BooleanField(read_only=True)
+    image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'store', 'store_name', 'store_owner_email', 'name', 'slug', 
+            'description', 'category', 'price', 'discounted_price', 'stock', 
+            'brand', 'tags', 'variants', 'image', 'in_stock',
+            'publish_status', 'approval_status', 'approved_by', 'approved_by_email', 'approval_date', 
+            'rejection_reason', 'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'publish_status', 'approval_status', 'approved_by', 'approval_date', 
+            'rejection_reason', 'created_at', 'updated_at'
+        ]
+
+    def get_image(self, obj):
+        return self.get_cloudinary_url(obj.image)
+
+
+class ProductApprovalSerializer(serializers.Serializer):
+    """
+    Serializer for approving or rejecting a product.
+    Used for validation of approval/rejection requests.
+    """
+    rejection_reason = serializers.CharField(
+        max_length=1000, 
+        required=False, 
+        allow_blank=False,
+        help_text="Reason for rejecting the product (required for rejection)"
+    )
+
+    class Meta:
+        fields = ['rejection_reason']
 

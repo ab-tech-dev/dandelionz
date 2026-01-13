@@ -10,6 +10,10 @@ from .views import (
     AdminAnalyticsViewSet,
     DeliveryAgentViewSet,
     AdminDeliveryAgentViewSet,
+    NotificationsListView,
+    NotificationDetailView,
+    UnreadNotificationsCountView,
+    MarkAllNotificationsReadView,
 )
 
 # =========================
@@ -132,4 +136,10 @@ urlpatterns = [
     path("admin/delivery-agents/create/", admin_create_agent, name="admin-create-agent"),
     path("admin/delivery-agents/update-status/", admin_update_agent, name="admin-update-agent-status"),
     path("admin/delivery-agents/details/<int:agent_id>/", admin_agent_details, name="admin-agent-details"),
+
+    # NOTIFICATIONS
+    path("notifications/", NotificationsListView.as_view(), name="notifications-list"),
+    path("notifications/<int:notification_id>/", NotificationDetailView.as_view(), name="notification-detail"),
+    path("notifications/unread/count/", UnreadNotificationsCountView.as_view(), name="unread-count"),
+    path("notifications/mark-all-read/", MarkAllNotificationsReadView.as_view(), name="mark-all-read"),
 ]

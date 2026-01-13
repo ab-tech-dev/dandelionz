@@ -3,7 +3,9 @@ from .views import (
     ProductListView, ProductDetailView, CreateProductView,
     CartView, AddToCartView, RemoveFromCartView, ProductDeleteView,
     FavouriteListView, AddFavouriteView, RemoveFavouriteView,
-    ProductReviewListView, AddReviewView, PatchProductView
+    ProductReviewListView, AddReviewView, PatchProductView,
+    PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
+    VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView
 )
 
 urlpatterns = [
@@ -28,4 +30,16 @@ urlpatterns = [
     # Reviews
     path('products/<slug:slug>/reviews/', ProductReviewListView.as_view(), name='product-reviews'),
     path('products/<slug:slug>/review/add/', AddReviewView.as_view(), name='add-review'),
+
+    # Admin - Product Approval
+    path('admin/products/pending/', PendingProductsListView.as_view(), name='pending-products'),
+    path('admin/products/<int:product_id>/approve/', ApproveProductView.as_view(), name='approve-product'),
+    path('admin/products/<int:product_id>/reject/', RejectProductView.as_view(), name='reject-product'),
+    path('admin/products/stats/', ApprovalStatsView.as_view(), name='approval-stats'),
+
+    # Vendor - Draft Products
+    path('vendor/drafts/', VendorDraftProductsView.as_view(), name='vendor-drafts'),
+    path('vendor/drafts/<int:product_id>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
+    path('vendor/drafts/<int:product_id>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
+    path('vendor/drafts/<int:product_id>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
 ]

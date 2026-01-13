@@ -28,18 +28,39 @@ class Product(models.Model):
         ('gaming', 'Video Games & Consoles'),
     ]
 
+    APPROVAL_STATUS = [
+        ('pending', 'Pending Approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
+    PUBLISH_STATUS = [
+        ('draft', 'Draft'),
+        ('submitted', 'Submitted'),
+    ]
+
     store = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='products')
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=255, blank=True)
     slug = models.SlugField(unique=True, blank=True)
-    description = models.TextField()
-    category = models.CharField(max_length=100, choices=CATEGORIES)
-    price = models.DecimalField(max_digits=10, decimal_places=2)
+    description = models.TextField(blank=True)
+    category = models.CharField(max_length=100, choices=CATEGORIES, blank=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discounted_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    stock = models.PositiveIntegerField()
+    stock = models.PositiveIntegerField(null=True, blank=True)
     image = CloudinaryField('image', null=True, blank=True)
     brand = models.CharField(max_length=255, null=True, blank=True)
     tags = models.TextField(null=True, blank=True, help_text="Comma-separated tags or JSON array")
     variants = models.JSONField(null=True, blank=True, help_text="Product variants with color and/or size")
+    
+    # Draft & Publish Status
+    publish_status = models.CharField(max_length=20, choices=PUBLISH_STATUS, default='draft')
+    
+    # Approval fields
+    approval_status = models.CharField(max_length=20, choices=APPROVAL_STATUS, default='pending')
+    approved_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_products')
+    approval_date = models.DateTimeField(null=True, blank=True)
+    rejection_reason = models.TextField(null=True, blank=True)
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

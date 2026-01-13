@@ -65,6 +65,10 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
 
 
 class CustomerProfileUpdateSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source='user.full_name', required=False, max_length=150)
+    phone_number = serializers.CharField(source='user.phone_number', required=False, max_length=15, allow_blank=True)
+    profile_picture = serializers.CharField(source='user.profile_picture', required=False, allow_blank=True)
+
     class Meta:
         model = Customer
         fields = [
@@ -72,7 +76,28 @@ class CustomerProfileUpdateSerializer(serializers.ModelSerializer):
             'city',
             'country',
             'postal_code',
+            'full_name',
+            'phone_number',
+            'profile_picture',
         ]
+
+    def update(self, instance, validated_data):
+        # Extract user data
+        user_data = validated_data.pop('user', {})
+        
+        # Update user fields if provided
+        user = instance.user
+        if user_data:
+            for attr, value in user_data.items():
+                setattr(user, attr, value)
+            user.save()
+        
+        # Update customer fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        return instance
 
 # --------------------------------------
 # VENDOR PROFILE & VENDOR-SIDE Serializer
@@ -356,6 +381,9 @@ class TriggerPayoutSerializer(serializers.Serializer):
 class AdminAnalyticsSerializer(serializers.Serializer):
     total_orders = serializers.IntegerField()
     total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_products_sold = serializers.IntegerField()
+    new_customers = serializers.IntegerField()
     pending_orders = serializers.IntegerField()
     delivered_orders = serializers.IntegerField()
 

@@ -43,7 +43,7 @@ from users.serializers import (
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
-from transactions.models import PayoutRecord, Order
+from transactions.models import PayoutRecord, Order, Payment
 from users.models import Notification
 import logging
 
@@ -132,7 +132,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_id="customer_profile_partial_update",
         operation_summary="Partially Update Customer Profile",
-        operation_description="Update specific fields of the customer profile. Only provide the fields you want to update.",
+        operation_description="Update specific fields of the customer profile and user info. Can update shipping address, location, contact info, and profile picture. Only provide the fields you want to update.",
         tags=["Customer Profile"],
         request_body=CustomerProfileUpdateSerializer,
         responses={
@@ -1304,9 +1304,28 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
+        from transactions.models import OrderItem, Wallet
+        from authentication.models import CustomUser
+
+        # Calculate total products sold
+        total_products_sold = OrderItem.objects.aggregate(
+            total=models.Sum("quantity")
+        )["total"] or 0
+
+
+        # Calculate new customers (created in last 30 days)
+        from datetime import timedelta
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        new_customers = CustomUser.objects.filter(
+            role='CUSTOMER',
+            created_at__gte=thirty_days_ago
+        ).count()
+
         data = {
             "total_orders": Order.objects.count(),
             "total_revenue": Payment.objects.aggregate(total=models.Sum("amount"))["total"] or 0,
+            "total_products_sold": total_products_sold,
+            "new_customers": new_customers,
             "pending_orders": Order.objects.filter(status="pending").count(),
             "delivered_orders": Order.objects.filter(status="delivered").count(),
         }
@@ -1752,3 +1771,229 @@ class AdminDeliveryAgentViewSet(AdminBaseViewSet):
 
         return Response(data, status=status.HTTP_200_OK)
 
+
+# ---------------------------
+# Notifications
+# ---------------------------
+from rest_framework import generics
+from rest_framework.decorators import action as action_decorator
+from rest_framework.response import Response as DRFResponse
+from rest_framework.status import HTTP_200_OK, HTTP_204_NO_CONTENT
+from drf_spectacular.utils import extend_schema, OpenApiParameter
+from authentication.core.base_view import BaseAPIView
+from authentication.core.response import standardized_response
+
+
+class NotificationsListView(BaseAPIView, generics.ListAPIView):
+    """
+    Get all notifications for the authenticated user.
+    Sorted by most recent first.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = NotificationSerializer
+
+    def get_queryset(self):
+        """Get notifications for current user, ordered by most recent"""
+        return Notification.objects.filter(
+            recipient=self.request.user
+        ).order_by('-created_at')
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Get all notifications for the authenticated user",
+        parameters=[
+            OpenApiParameter(
+                name='is_read',
+                description='Filter by read status (true/false)',
+                required=False,
+                type=bool
+            ),
+        ],
+        responses={200: NotificationSerializer(many=True)},
+    )
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        
+        # Filter by read status if provided
+        is_read = request.query_params.get('is_read')
+        if is_read is not None:
+            is_read = is_read.lower() in ['true', '1', 'yes']
+            queryset = queryset.filter(is_read=is_read)
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return DRFResponse(
+            standardized_response(
+                data=serializer.data,
+                message=f"Retrieved {len(serializer.data)} notifications"
+            )
+        )
+
+
+class NotificationDetailView(BaseAPIView):
+    """
+    Get, mark as read, or delete a specific notification.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_notification(self, notification_id):
+        """Get notification and ensure user owns it"""
+        try:
+            notification = Notification.objects.get(
+                id=notification_id,
+                recipient=self.request.user
+            )
+            return notification
+        except Notification.DoesNotExist:
+            return None
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Get a specific notification",
+        responses={
+            200: NotificationSerializer,
+            404: {"description": "Notification not found"},
+        },
+    )
+    def get(self, request, notification_id):
+        """Get a specific notification"""
+        notification = self.get_notification(notification_id)
+        if not notification:
+            return DRFResponse(
+                standardized_response(success=False, error="Notification not found"),
+                status=404
+            )
+        
+        serializer = NotificationSerializer(notification)
+        return DRFResponse(standardized_response(data=serializer.data))
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Mark a notification as read",
+        responses={
+            200: {"description": "Notification marked as read"},
+            404: {"description": "Notification not found"},
+        },
+    )
+    def post(self, request, notification_id):
+        """Mark notification as read"""
+        notification = self.get_notification(notification_id)
+        if not notification:
+            return DRFResponse(
+                standardized_response(success=False, error="Notification not found"),
+                status=404
+            )
+        
+        notification.is_read = True
+        notification.save()
+        
+        serializer = NotificationSerializer(notification)
+        return DRFResponse(
+            standardized_response(
+                data=serializer.data,
+                message="Notification marked as read"
+            )
+        )
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Delete a notification",
+        responses={
+            204: {"description": "Notification deleted"},
+            404: {"description": "Notification not found"},
+        },
+    )
+    def delete(self, request, notification_id):
+        """Delete a notification"""
+        notification = self.get_notification(notification_id)
+        if not notification:
+            return DRFResponse(
+                standardized_response(success=False, error="Notification not found"),
+                status=404
+            )
+        
+        notification.delete()
+        return DRFResponse(
+            standardized_response(message="Notification deleted"),
+            status=HTTP_204_NO_CONTENT
+        )
+
+
+class UnreadNotificationsCountView(BaseAPIView):
+    """
+    Get count of unread notifications for the authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Get count of unread notifications",
+        responses={
+            200: {
+                "description": "Unread count",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "data": {"unread_count": 5},
+                            "message": "Retrieved unread count"
+                        }
+                    }
+                }
+            }
+        },
+    )
+    def get(self, request):
+        """Get count of unread notifications"""
+        unread_count = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False
+        ).count()
+        
+        return DRFResponse(
+            standardized_response(
+                data={"unread_count": unread_count},
+                message="Retrieved unread count"
+            )
+        )
+
+
+class MarkAllNotificationsReadView(BaseAPIView):
+    """
+    Mark all unread notifications as read for the authenticated user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Notifications"],
+        description="Mark all unread notifications as read",
+        responses={
+            200: {
+                "description": "All notifications marked as read",
+                "content": {
+                    "application/json": {
+                        "example": {
+                            "success": True,
+                            "data": {"marked_as_read": 5},
+                            "message": "5 notifications marked as read"
+                        }
+                    }
+                }
+            }
+        },
+    )
+    def post(self, request):
+        """Mark all notifications as read"""
+        unread_notifications = Notification.objects.filter(
+            recipient=request.user,
+            is_read=False
+        )
+        
+        count = unread_notifications.count()
+        unread_notifications.update(is_read=True)
+        
+        return DRFResponse(
+            standardized_response(
+                data={"marked_as_read": count},
+                message=f"{count} notifications marked as read"
+            )
+        )

@@ -3,6 +3,53 @@ from .models import (
     Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, 
     WalletTransaction, PayoutRecord, InstallmentPlan, InstallmentPayment
 )
+from django.db.models import Sum
+from datetime import timedelta
+from django.utils import timezone
+from django.utils.html import format_html
+from authentication.models import CustomUser
+
+
+class AnalyticsAdmin(admin.AdminSite):
+    """
+    Admin dashboard with analytics overview
+    """
+    site_header = "E-Commerce Admin"
+    site_title = "Admin Portal"
+    index_title = "Platform Analytics Dashboard"
+
+    def index(self, request, extra_context=None):
+        """Display analytics on admin index page"""
+        if extra_context is None:
+            extra_context = {}
+        
+        # Calculate analytics metrics
+        total_products_sold = OrderItem.objects.aggregate(total=Sum("quantity"))["total"] or 0
+        total_balance = Wallet.objects.aggregate(total=Sum("balance"))["total"] or 0
+        thirty_days_ago = timezone.now() - timedelta(days=30)
+        new_customers = CustomUser.objects.filter(
+            role='CUSTOMER',
+            created_at__gte=thirty_days_ago
+        ).count()
+        total_orders = Order.objects.count()
+        total_revenue = Payment.objects.filter(
+            status='SUCCESS',
+            verified=True
+        ).aggregate(total=Sum("amount"))["total"] or 0
+        pending_orders = Order.objects.filter(status='PENDING').count()
+        delivered_orders = Order.objects.filter(status='DELIVERED').count()
+
+        extra_context['analytics'] = {
+            'total_orders': total_orders,
+            'total_revenue': f"₦{total_revenue:,.2f}",
+            'total_balance': f"₦{total_balance:,.2f}",
+            'total_products_sold': total_products_sold,
+            'new_customers': new_customers,
+            'pending_orders': pending_orders,
+            'delivered_orders': delivered_orders,
+        }
+        
+        return super().index(request, extra_context)
 
 
 @admin.register(Order)
