@@ -308,7 +308,7 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
 @extend_schema(
     tags=["Cart"],
     description="Remove a specific product from the authenticated user's cart.",
-    parameters=[OpenApiParameter(name='product_id', description='Product ID to remove', required=True, type=int)],
+    parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
     responses={
         200: {"description": "Item removed successfully"},
         404: {"description": "Item not found in cart"}
@@ -317,9 +317,10 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
 class RemoveFromCartView(BaseAPIView):
     permission_classes = [IsAuthenticated]
 
-    def delete(self, request, product_id):
+    def delete(self, request, slug):
         cart = get_object_or_404(Cart, customer=request.user)
-        item = get_object_or_404(CartItem, cart=cart, product_id=product_id)
+        product = get_object_or_404(Product, slug=slug)
+        item = get_object_or_404(CartItem, cart=cart, product=product)
         item.delete()
         return Response(standardized_response(message="Item removed from cart"))
 
@@ -375,7 +376,7 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
 @extend_schema(
     tags=["Favourites"],
     description="Remove a specific product from the authenticated user's favourites list.",
-    parameters=[OpenApiParameter(name='product_id', description='Product ID to remove', required=True, type=int)],
+    parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
     responses={
         200: {"description": "Removed successfully"},
         404: {"description": "Product not in favourites"}
@@ -384,8 +385,9 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
 class RemoveFavouriteView(BaseAPIView):
     permission_classes = [IsAuthenticated]
 
-    def delete(self, request, product_id):
-        fav = Favourite.objects.filter(customer=request.user, product_id=product_id).first()
+    def delete(self, request, slug):
+        product = get_object_or_404(Product, slug=slug)
+        fav = Favourite.objects.filter(customer=request.user, product=product).first()
         if fav:
             fav.delete()
             return Response(standardized_response(message="Removed from favourites"))
@@ -509,7 +511,7 @@ class PendingProductsListView(BaseAPIView, generics.ListAPIView):
     tags=["Admin - Product Approval"],
     description="Approve a product and make it visible to customers (Admin only).",
     parameters=[
-        OpenApiParameter(name='product_id', description='Product ID', required=True, type=int)
+        OpenApiParameter(name='slug', description='Product slug', required=True, type=str)
     ],
     request=ProductApprovalSerializer,
     responses={
@@ -525,9 +527,9 @@ class ApproveProductView(BaseAPIView):
     """
     permission_classes = [IsAdmin]
 
-    def post(self, request, product_id):
+    def post(self, request, slug):
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -555,7 +557,7 @@ class ApproveProductView(BaseAPIView):
     tags=["Admin - Product Approval"],
     description="Reject a product with a rejection reason (Admin only).",
     parameters=[
-        OpenApiParameter(name='product_id', description='Product ID', required=True, type=int)
+        OpenApiParameter(name='slug', description='Product slug', required=True, type=str)
     ],
     request=ProductApprovalSerializer,
     responses={
@@ -571,9 +573,9 @@ class RejectProductView(BaseAPIView):
     """
     permission_classes = [IsAdmin]
 
-    def post(self, request, product_id):
+    def post(self, request, slug):
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -708,7 +710,7 @@ class VendorDraftProductsView(BaseAPIView, generics.ListAPIView):
     tags=["Products - Drafts"],
     description="Submit/publish a draft product for admin approval (vendor only)",
     parameters=[
-        OpenApiParameter(name='product_id', description='Product ID', required=True, type=int)
+        OpenApiParameter(name='slug', description='Product slug', required=True, type=str)
     ],
     responses={
         200: {"description": "Product submitted successfully"},
@@ -724,9 +726,9 @@ class SubmitDraftProductView(BaseAPIView):
     """
     permission_classes = [IsAuthenticated, IsVendor]
 
-    def post(self, request, product_id):
+    def post(self, request, slug):
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -790,7 +792,7 @@ class SubmitDraftProductView(BaseAPIView):
     tags=["Products - Drafts"],
     description="Update a draft product (vendor only). Can modify any field while in draft status.",
     parameters=[
-        OpenApiParameter(name='product_id', description='Product ID', required=True, type=int)
+        OpenApiParameter(name='slug', description='Product slug', required=True, type=str)
     ],
     request=ProductSerializer,
     responses={
@@ -808,9 +810,9 @@ class UpdateDraftProductView(BaseAPIView):
     permission_classes = [IsAuthenticated, IsVendor]
     serializer_class = ProductSerializer
 
-    def patch(self, request, product_id):
+    def patch(self, request, slug):
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -860,7 +862,7 @@ class UpdateDraftProductView(BaseAPIView):
     tags=["Products - Drafts"],
     description="Delete a draft product (vendor only). Only draft products can be deleted.",
     parameters=[
-        OpenApiParameter(name='product_id', description='Product ID', required=True, type=int)
+        OpenApiParameter(name='slug', description='Product slug', required=True, type=str)
     ],
     responses={
         200: {"description": "Product deleted successfully"},
@@ -876,9 +878,9 @@ class DeleteDraftProductView(BaseAPIView):
     """
     permission_classes = [IsAuthenticated, IsVendor]
 
-    def delete(self, request, product_id):
+    def delete(self, request, slug):
         try:
-            product = Product.objects.get(id=product_id)
+            product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),

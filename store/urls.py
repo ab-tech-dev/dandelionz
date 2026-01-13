@@ -20,12 +20,12 @@ urlpatterns = [
     # Cart
     path('cart/', CartView.as_view(), name='cart-view'),
     path('cart/add/', AddToCartView.as_view(), name='add-to-cart'),
-    path('cart/remove/<int:product_id>/', RemoveFromCartView.as_view(), name='remove-from-cart'),
+    path('cart/remove/<slug:slug>/', RemoveFromCartView.as_view(), name='remove-from-cart'),
 
     # Favourites
     path('favourites/', FavouriteListView.as_view(), name='favourites-list'),
     path('favourites/add/', AddFavouriteView.as_view(), name='add-favourite'),
-    path('favourites/remove/<int:product_id>/', RemoveFavouriteView.as_view(), name='remove-favourite'),
+    path('favourites/remove/<slug:slug>/', RemoveFavouriteView.as_view(), name='remove-favourite'),
 
     # Reviews
     path('products/<slug:slug>/reviews/', ProductReviewListView.as_view(), name='product-reviews'),
@@ -33,13 +33,13 @@ urlpatterns = [
 
     # Admin - Product Approval
     path('admin/products/pending/', PendingProductsListView.as_view(), name='pending-products'),
-    path('admin/products/<int:product_id>/approve/', ApproveProductView.as_view(), name='approve-product'),
-    path('admin/products/<int:product_id>/reject/', RejectProductView.as_view(), name='reject-product'),
+    path('admin/products/<slug:slug>/approve/', ApproveProductView.as_view(), name='approve-product'),
+    path('admin/products/<slug:slug>/reject/', RejectProductView.as_view(), name='reject-product'),
     path('admin/products/stats/', ApprovalStatsView.as_view(), name='approval-stats'),
 
     # Vendor - Draft Products
     path('vendor/drafts/', VendorDraftProductsView.as_view(), name='vendor-drafts'),
-    path('vendor/drafts/<int:product_id>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
-    path('vendor/drafts/<int:product_id>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
-    path('vendor/drafts/<int:product_id>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
+    path('vendor/drafts/<slug:slug>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
+    path('vendor/drafts/<slug:slug>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
+    path('vendor/drafts/<slug:slug>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
 ]
