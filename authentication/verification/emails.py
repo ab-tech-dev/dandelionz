@@ -25,7 +25,7 @@ class EmailService:
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
                 token = default_token_generator.make_token(user)
 
-                verify_url = f"{settings.FRONTEND_URL}/auth/email-verify?uid={uid}&token={token}"
+                verify_url = f"{settings.FRONTEND_URL}/verify-email?uid={uid}&token={token}"
 
                 subject = f"{settings.APP_NAME} - Verify Your Email Address"
 
@@ -77,7 +77,7 @@ class EmailService:
             token = default_token_generator.make_token(user)
 
             # Create verification link
-            reset_url = f"{settings.FRONTEND_URL}/auth/password-reset-confirm?uid={uid}&token={token}"
+            reset_url = f"{settings.FRONTEND_URL}/password-reset?uid={uid}&token={token}"
 
             subject = f"{settings.APP_NAME} - Reset your Password"
 

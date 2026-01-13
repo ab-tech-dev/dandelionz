@@ -180,7 +180,7 @@ CACHES = {
 }
 
 # Frontend URL
-FRONTEND_URL = 'http://app.dandelionz.com.ng'
+FRONTEND_URL = 'https://app.dandelionz.com.ng'
 
 # Email & Verification
 REQUIRE_EMAIL_VERIFICATION = True

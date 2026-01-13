@@ -1286,8 +1286,8 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
 
     @swagger_auto_schema(
         operation_id="admin_analytics_overview",
-        operation_summary="Admin Sales & Orders Analytics Overview",
-        operation_description="Get platform-wide analytics including total orders, revenue, pending and delivered orders.",
+        operation_summary="Admin Analytics Overview",
+        operation_description="Get platform-wide analytics including total users, vendors, orders, and products.",
         tags=["Analytics"],
         responses={
             200: openapi.Response(
@@ -1304,30 +1304,15 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        from transactions.models import OrderItem, Wallet
         from authentication.models import CustomUser
-
-        # Calculate total products sold
-        total_products_sold = OrderItem.objects.aggregate(
-            total=models.Sum("quantity")
-        )["total"] or 0
-
-
-        # Calculate new customers (created in last 30 days)
-        from datetime import timedelta
-        thirty_days_ago = timezone.now() - timedelta(days=30)
-        new_customers = CustomUser.objects.filter(
-            role='CUSTOMER',
-            created_at__gte=thirty_days_ago
-        ).count()
-
+        from users.models import Vendor
+        from store.models import Product
+        
         data = {
+            "total_users": CustomUser.objects.filter(role='CUSTOMER').count(),
+            "total_vendors": Vendor.objects.count(),
             "total_orders": Order.objects.count(),
-            "total_revenue": Payment.objects.aggregate(total=models.Sum("amount"))["total"] or 0,
-            "total_products_sold": total_products_sold,
-            "new_customers": new_customers,
-            "pending_orders": Order.objects.filter(status="pending").count(),
-            "delivered_orders": Order.objects.filter(status="delivered").count(),
+            "total_products": Product.objects.count(),
         }
 
         serializer = AdminAnalyticsSerializer(data)

@@ -379,13 +379,10 @@ class TriggerPayoutSerializer(serializers.Serializer):
 
 
 class AdminAnalyticsSerializer(serializers.Serializer):
+    total_users = serializers.IntegerField()
+    total_vendors = serializers.IntegerField()
     total_orders = serializers.IntegerField()
-    total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
-    total_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
-    total_products_sold = serializers.IntegerField()
-    new_customers = serializers.IntegerField()
-    pending_orders = serializers.IntegerField()
-    delivered_orders = serializers.IntegerField()
+    total_products = serializers.IntegerField()
 
 
 
