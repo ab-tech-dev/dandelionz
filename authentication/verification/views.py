@@ -61,42 +61,14 @@ class VerifyEmailView(BaseAPIView):
             if success:
                 # Email verification succeeded, award referral bonus if exists
                 try:
-                    from authentication.models import Referral, CustomUser
-                    from transactions.models import Wallet
-                    from users.models import Notification
+                    from authentication.models import CustomUser
+                    from authentication.core.referral_service import ReferralService
                     
                     user_data = response_data.get('data', {}).get('user')
                     if user_data and user_data.get('uuid'):
                         user = CustomUser.objects.get(uuid=user_data['uuid'])
-
-                        # Get unawarded referrals for this newly verified user
-                        referrals = Referral.objects.filter(referred_user=user, bonus_awarded=False)
-                        
-                        for r in referrals:
-                            try:
-                                # Mark bonus as awarded
-                                r.bonus_awarded = True
-                                r.save(update_fields=['bonus_awarded'])
-                                logger.info(f"Marked referral bonus as awarded for {r.referrer.email}")
-
-                                # Credit bonus to referrer's wallet
-                                referrer = r.referrer
-                                wallet, created = Wallet.objects.get_or_create(user=referrer)
-                                wallet.credit(r.bonus_amount, source=f"Referral bonus for {user.email}")
-                                logger.info(f"Credited {r.bonus_amount} to {referrer.email}'s wallet")
-
-                                # Create notification for referrer
-                                Notification.objects.create(
-                                    recipient=referrer,
-                                    title="Referral Bonus Credited",
-                                    message=f"You have received a referral bonus of {r.bonus_amount} "
-                                            f"for referring {user.email}.",
-                                )
-                                logger.info(f"Referral bonus awarded and notification sent to {referrer.email}")
-                            except Exception as bonus_error:
-                                logger.error(f"Error processing referral {r.id}: {str(bonus_error)}")
-                                # Continue processing other referrals if one fails
-                                continue
+                        stats = ReferralService.award_referral_bonuses(user)
+                        logger.info(f"Referral bonus processing completed: {stats}")
                     else:
                         logger.warning(f"Could not extract user data from verification response")
 

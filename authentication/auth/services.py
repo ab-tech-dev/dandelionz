@@ -58,16 +58,14 @@ class AuthenticationService:
             # REFERRAL CODE HANDLING
             if referral_code:
                 try:
-                    referrer = CustomUser.objects.get(referral_code=referral_code)
-                    from authentication.models import Referral  # make sure you have this model
-                    Referral.objects.create(
-                        referrer=referrer,
-                        referred_user=user,
-                        bonus_amount=getattr(settings, 'REFERRAL_BONUS_AMOUNT', 0)
-                    )
-                    logger.info(f"Referral recorded: {referrer.email} referred {user.email}")
-                except CustomUser.DoesNotExist:
-                    logger.warning(f"Invalid referral code used by {user.email}")
+                    from authentication.core.referral_service import ReferralService
+                    success_ref, referral, message = ReferralService.create_referral(referral_code, user)
+                    if success_ref:
+                        logger.info(f"Referral created: {referral.email} referred {user.email}")
+                    else:
+                        logger.warning(f"Invalid referral code or error: {message}")
+                except Exception as e:
+                    logger.error(f"Error processing referral: {str(e)}")
 
             # Queue verification email
             if user.email and settings.REQUIRE_EMAIL_VERIFICATION:

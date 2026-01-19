@@ -6,6 +6,7 @@ from django.utils.text import slugify
 from django.utils import timezone
 from cloudinary.models import CloudinaryField
 import json
+import uuid
 
 
 # ==========================================
@@ -63,6 +64,9 @@ class Product(models.Model):
         ('submitted', 'Submitted'),
     ]
 
+    # UUID for external API references (like orders do)
+    uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
+    
     store = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='products')
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     name = models.CharField(max_length=255, blank=True)
@@ -111,13 +115,22 @@ class Product(models.Model):
 # Cart & Related Models
 # -------------------------------
 class Cart(models.Model):
-    customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='cart')
+    customer = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='cart', help_text="Each customer has one active cart")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Ensure one cart per customer
+        constraints = [
+            models.UniqueConstraint(fields=['customer'], name='one_cart_per_customer')
+        ]
 
     @property
     def total(self):
         return sum(item.subtotal for item in self.items.all())
+    
+    def __str__(self):
+        return f"Cart for {self.customer.email}"
 
 
 class CartItem(models.Model):
@@ -125,9 +138,15 @@ class CartItem(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
 
+    class Meta:
+        # Prevent duplicate products in same cart
+        unique_together = ('cart', 'product')
+
     @property
     def subtotal(self):
-        return self.product.price * self.quantity
+        """Calculate item subtotal using discounted price if available, else regular price"""
+        price = self.product.discounted_price if self.product.discounted_price else self.product.price
+        return price * self.quantity if price else 0
 
 
 class Favourite(models.Model):

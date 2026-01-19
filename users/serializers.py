@@ -36,7 +36,7 @@ class UserBaseSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
-        ref_name = "UsersUserBase"
+        ref_name = "UsersProfileUserBase"
 
     def get_profile_picture(self, obj):
         if obj.profile_picture:
@@ -317,14 +317,16 @@ from store.models import Product
 
 
 class AdminProductUpdateSerializer(serializers.Serializer):
-    product_uuid = serializers.UUIDField()
-    name = serializers.CharField(required=False)
-    description = serializers.CharField(required=False)
-    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
-    is_active = serializers.BooleanField(required=False)
+    product_slug = serializers.SlugField(help_text="Product slug for identification")
+    name = serializers.CharField(required=False, help_text="Product name")
+    description = serializers.CharField(required=False, help_text="Product description")
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, help_text="Product price")
+    discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text="Discounted price if applicable")
+    stock = serializers.IntegerField(required=False, help_text="Stock quantity")
+    is_active = serializers.BooleanField(required=False, help_text="Whether product is active")
 
-    def validate_product_uuid(self, value):
-        if not Product.objects.filter(uuid=value).exists():
+    def validate_product_slug(self, value):
+        if not Product.objects.filter(slug=value).exists():
             raise serializers.ValidationError("Product does not exist")
         return value
 

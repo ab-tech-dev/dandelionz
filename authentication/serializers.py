@@ -23,7 +23,7 @@ class UserBaseSerializer(serializers.ModelSerializer):
             'referral_code'
         ]
         read_only_fields = ['uuid', 'email', 'role', 'created_at', 'is_verified', 'referral_code']
-        ref_name = "AuthUserBase"
+        ref_name = "AuthenticationUserBase"
 
     def get_profile_picture(self, obj):
         if obj.profile_picture:

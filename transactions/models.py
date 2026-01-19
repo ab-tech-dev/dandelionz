@@ -68,10 +68,11 @@ class Order(models.Model):
         RETURNED = 'RETURNED', 'Returned'
         CANCELED = 'CANCELED', 'Canceled'
 
-    order_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    # External reference UUID for API/tracking (separate from internal id)
+    order_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True, help_text="Public order reference ID")
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='orders')
     delivery_agent = models.ForeignKey('users.DeliveryAgent', on_delete=models.SET_NULL, related_name='assigned_orders', null=True, blank=True)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING, help_text="Current order fulfillment status")
     products = models.ManyToManyField('store.Product', through='OrderItem', related_name='orders')
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
