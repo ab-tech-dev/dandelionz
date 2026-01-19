@@ -17,8 +17,8 @@ CustomUser = get_user_model()
 
 class AdminDashboardUserListSerializer(serializers.ModelSerializer):
     """Lightweight user info for admin list views"""
-    total_orders = serializers.IntegerField(read_only=True, source='total_orders')
-    total_spend = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True, source='total_spend')
+    total_orders = serializers.IntegerField(read_only=True)
+    total_spend = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     
     class Meta:
         model = CustomUser
@@ -28,8 +28,8 @@ class AdminDashboardUserListSerializer(serializers.ModelSerializer):
 
 class AdminDashboardUserDetailSerializer(serializers.ModelSerializer):
     """Full user details for admin inspection"""
-    total_orders = serializers.IntegerField(read_only=True, source='total_orders')
-    total_spend = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True, source='total_spend')
+    total_orders = serializers.IntegerField(read_only=True)
+    total_spend = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     suspension_history = serializers.SerializerMethodField()
     
     class Meta:
