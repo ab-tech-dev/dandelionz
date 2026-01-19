@@ -20,6 +20,17 @@ class IsAdmin(BasePermission):
         return False
 
 
+class IsBusinessAdmin(BasePermission):
+    """
+    Allows access only to authenticated users with BUSINESS_ADMIN role.
+    Used for strict admin dashboard access control.
+    """
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        return request.user.is_business_admin or request.user.is_admin
+
+
 class IsVendor(BasePermission):
     """
     Allows access only to users with role VENDOR

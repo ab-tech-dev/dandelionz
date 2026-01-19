@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    OrderListCreateView, OrderDetailView,
+    OrderListCreateView, OrderDetailView, OrderReceiptView,
     OrderItemListCreateView, OrderItemDetailView,
     TransactionLogListView,
     CheckoutView, SecureVerifyPaymentView, PaystackWebhookView,
@@ -14,6 +14,7 @@ urlpatterns = [
     # Order endpoints
     path('orders/', OrderListCreateView.as_view(), name='order-list-create'),
     path('orders/<uuid:order_id>/', OrderDetailView.as_view(), name='order-detail'),
+    path('orders/<uuid:order_id>/receipt/', OrderReceiptView.as_view(), name='order-receipt'),
     path('orders/<uuid:order_id>/items/', OrderItemListCreateView.as_view(), name='order-item-list-create'),
     path('order-items/<int:pk>/', OrderItemDetailView.as_view(), name='order-item-detail'),
     path('logs/', TransactionLogListView.as_view(), name='transaction-log-list'),

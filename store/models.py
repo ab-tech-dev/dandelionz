@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Sum, Count
 from authentication.models import CustomUser
 from users.models import Vendor
 from django.utils.text import slugify
@@ -7,27 +8,50 @@ from cloudinary.models import CloudinaryField
 import json
 
 
+# ==========================================
+# Category Model
+# ==========================================
+class Category(models.Model):
+    """
+    Represents a product category with aggregated metrics.
+    """
+    name = models.CharField(max_length=255, unique=True)
+    slug = models.SlugField(unique=True, blank=True)
+    description = models.TextField(blank=True, null=True)
+    image = CloudinaryField('image', null=True, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "Categories"
+        ordering = ['name']
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
+
+    @property
+    def product_count(self):
+        """Get count of approved products in this category"""
+        return self.products.filter(approval_status='approved', publish_status='submitted').count()
+
+    @property
+    def total_sales(self):
+        """Get total sales value from all orders of products in this category"""
+        from transactions.models import Order, OrderItem
+        total = OrderItem.objects.filter(
+            product__category=self,
+            product__approval_status='approved'
+        ).aggregate(total=Sum('quantity'))['total'] or 0
+        return total
+
+    def __str__(self):
+        return self.name
+
 
 class Product(models.Model):
-    CATEGORIES = [
-        ('electronics', 'Electronics'),
-        ('fashion', 'Fashion'),
-        ('home_appliances', 'Home Appliances'),
-        ('beauty', 'Beauty & Personal Care'),
-        ('sports', 'Sports & Outdoors'),
-        ('automotive', 'Automotive'),
-        ('books', 'Books'),
-        ('toys', 'Toys & Games'),
-        ('groceries', 'Groceries'),
-        ('computers', 'Computers & Accessories'),
-        ('phones', 'Phones & Tablets'),
-        ('jewelry', 'Jewelry & Watches'),
-        ('baby', 'Baby Products'),
-        ('pets', 'Pet Supplies'),
-        ('office', 'Office Products'),
-        ('gaming', 'Video Games & Consoles'),
-    ]
-
     APPROVAL_STATUS = [
         ('pending', 'Pending Approval'),
         ('approved', 'Approved'),
@@ -40,10 +64,10 @@ class Product(models.Model):
     ]
 
     store = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='products')
+    category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True, blank=True, related_name='products')
     name = models.CharField(max_length=255, blank=True)
     slug = models.SlugField(unique=True, blank=True)
     description = models.TextField(blank=True)
-    category = models.CharField(max_length=100, choices=CATEGORIES, blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     discounted_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     stock = models.PositiveIntegerField(null=True, blank=True)

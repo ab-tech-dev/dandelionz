@@ -1,5 +1,34 @@
 from django.contrib import admin
-from .models import Product, Cart, CartItem, Favourite, Review
+from .models import Product, Cart, CartItem, Favourite, Review, Category
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'product_count', 'total_sales', 'is_active', 'created_at')
+    list_filter = ('is_active', 'created_at')
+    search_fields = ('name', 'description')
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = ('created_at', 'updated_at')
+    fieldsets = (
+        ('Category Information', {
+            'fields': ('name', 'slug', 'description', 'image')
+        }),
+        ('Status', {
+            'fields': ('is_active',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def product_count(self, obj):
+        return obj.product_count
+    product_count.short_description = 'Products'
+
+    def total_sales(self, obj):
+        return obj.total_sales
+    total_sales.short_description = 'Total Sales'
 
 
 @admin.register(Product)

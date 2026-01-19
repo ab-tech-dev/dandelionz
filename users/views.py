@@ -209,6 +209,59 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @swagger_auto_schema(
+        operation_id="customer_delete_account",
+        operation_summary="Delete Customer Account",
+        operation_description="Permanently delete the authenticated customer's account. This action cannot be undone. Requires password confirmation.",
+        tags=["Customer Profile"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'password': openapi.Schema(type=openapi.TYPE_STRING, description='User password for confirmation'),
+            },
+            required=['password']
+        ),
+        responses={
+            204: openapi.Response("Account deleted successfully"),
+            400: openapi.Response("Invalid password"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def delete_account(self, request):
+        """Permanently delete the customer account and all associated data."""
+        customer = self.get_customer(request)
+
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        password = request.data.get('password')
+        if not password:
+            return Response(
+                {"detail": "Password is required for account deletion"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        if not user.check_password(password):
+            return Response(
+                {"detail": "Incorrect password"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Delete the user account (cascade will delete customer profile)
+        user.delete()
+
+        return Response(
+            {"message": "Account deleted successfully"},
+            status=status.HTTP_204_NO_CONTENT,
+        )
+
+
 
 
 

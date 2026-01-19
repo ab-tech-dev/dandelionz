@@ -1,9 +1,9 @@
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
-from .models import Product
+from .models import Product, Category
 from authentication.core.base_view import BaseAPIView
-from .serializers import  ProductSerializer
+from .serializers import ProductSerializer, CategorySerializer
 from authentication.core.response import standardized_response
 from rest_framework.response import Response
 from rest_framework import generics
@@ -17,10 +17,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
-from .models import Product, Cart, CartItem, Favourite, Review
+from .models import Product, Cart, CartItem, Favourite, Review, Category
 from .serializers import (
     ProductSerializer, CreateProductSerializer, CartSerializer, CartItemSerializer,
-    FavouriteSerializer, ReviewSerializer, ProductApprovalSerializer, PendingProductsSerializer
+    FavouriteSerializer, ReviewSerializer, ProductApprovalSerializer, PendingProductsSerializer,
+    CategorySerializer
 )
 
 from rest_framework import serializers
@@ -92,17 +93,24 @@ class ProductDetailView(BaseAPIView):
 @extend_schema(
     tags=["Products"],
     description="Create a new product as draft (authenticated users only). Product starts as draft and won't be submitted for approval until vendor submits it.",
-    request=ProductSerializer,
+    request=CreateProductSerializer,
     examples=[
         OpenApiExample(
             "Create product example",
             summary="Add new product as draft",
             value={
-                "name": "Example Product",
-                "description": "Product description",
-                "price": 100.0,
+                "name": "Wireless Headphones",
+                "description": "High-quality wireless headphones with noise cancellation",
                 "category": "electronics",
-                "stock": 10,
+                "brand": "AudioBrand",
+                "price": 150.00,
+                "discounted_price": 120.00,
+                "stock": 50,
+                "tags": "headphones, wireless, audio",
+                "variants": {
+                    "colors": ["black", "white", "silver"],
+                    "sizes": []
+                },
                 "image": None
             }
         )
@@ -132,6 +140,17 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
 
         # Save the product as draft
         product = serializer.save(store=vendor, publish_status='draft')
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(
+            standardized_response(data=serializer.data, message="Product created successfully as draft"),
+            status=status.HTTP_201_CREATED,
+            headers=headers
+        )
 
 
 @extend_schema(
@@ -913,6 +932,346 @@ class DeleteDraftProductView(BaseAPIView):
         return Response(
             standardized_response(
                 message=f"Draft product '{product_name}' deleted successfully"
+            ),
+            status=status.HTTP_200_OK
+        )
+
+# ==========================================
+# CATEGORY VIEWS
+# ==========================================
+class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
+    """
+    Get list of all categories or create a new category (admin only).
+    
+    GET /categories - Returns all categories with product counts and sales
+    POST /categories - Create a new category (admin only)
+    """
+    queryset = Category.objects.filter(is_active=True)
+    serializer_class = CategorySerializer
+    permission_classes = [AllowAny]  # GET is public, POST requires admin check
+    filter_backends = [SearchFilter, OrderingFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['name', 'created_at']
+    ordering = ['name']
+
+    def get_permissions(self):
+        """Allow public GET, but restrict POST to admins"""
+        if self.request.method == 'POST':
+            return [IsAdmin()]
+        return [AllowAny()]
+
+    @extend_schema(
+        summary="List all active categories",
+        description="Returns all active categories with aggregated product counts and total sales.",
+        responses={200: CategorySerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Create a new category",
+        description="Admin only: Create a new product category.",
+        request=CategorySerializer,
+        responses={201: CategorySerializer}
+    )
+    def post(self, request, *args, **kwargs):
+        return super().post(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        """Track admin who created the category"""
+        serializer.save()
+
+
+class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
+    """
+    Get, update, or delete a specific category (admin only for update/delete).
+    
+    GET /categories/:id - Get category details
+    PATCH /categories/:id - Update category (admin only)
+    DELETE /categories/:id - Delete category (admin only)
+    """
+    queryset = Category.objects.all()
+    serializer_class = CategorySerializer
+    permission_classes = [AllowAny]
+
+    def get_permissions(self):
+        """Allow public GET, but restrict PATCH/DELETE to admins"""
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAdmin()]
+
+    @extend_schema(
+        summary="Retrieve category details",
+        description="Get detailed information about a specific category including product counts and sales.",
+        responses={200: CategorySerializer}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Update category",
+        description="Admin only: Update category details.",
+        request=CategorySerializer,
+        responses={200: CategorySerializer}
+    )
+    def patch(self, request, *args, **kwargs):
+        return super().patch(request, *args, **kwargs)
+
+    @extend_schema(
+        summary="Delete category",
+        description="Admin only: Delete a category. Associated products will have null category.",
+    )
+    def delete(self, request, *args, **kwargs):
+        return super().delete(request, *args, **kwargs)
+
+
+# ==========================================
+# PRODUCT STATISTICS VIEW
+# ==========================================
+class ProductStatsView(BaseAPIView):
+    """
+    Get dashboard statistics for products.
+    
+    GET /products/stats - Returns counts for dashboard cards:
+    - totalProducts: Approved and submitted products
+    - approvedCount: Products with approved status
+    - rejectedCount: Products with rejected status
+    - pendingCount: Products with pending status
+    - draftCount: Draft products (admin/vendor only)
+    """
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        summary="Get product statistics",
+        description="Returns aggregated product counts by approval status for dashboard display.",
+        responses={
+            200: {
+                "type": "object",
+                "properties": {
+                    "total_products": {"type": "integer", "description": "Total approved products"},
+                    "approved_count": {"type": "integer"},
+                    "rejected_count": {"type": "integer"},
+                    "pending_count": {"type": "integer"},
+                    "draft_count": {"type": "integer"}
+                }
+            }
+        }
+    )
+    def get(self, request):
+        """Get product statistics"""
+        stats = {
+            'total_products': Product.objects.filter(
+                approval_status='approved',
+                publish_status='submitted'
+            ).count(),
+            'approved_count': Product.objects.filter(approval_status='approved').count(),
+            'rejected_count': Product.objects.filter(approval_status='rejected').count(),
+            'pending_count': Product.objects.filter(approval_status='pending').count(),
+            'draft_count': Product.objects.filter(publish_status='draft').count(),
+        }
+        
+        return Response(
+            standardized_response(data=stats),
+            status=status.HTTP_200_OK
+        )
+
+
+# ==========================================
+# PRODUCT FILTERING & ADVANCED VIEWS
+# ==========================================
+class ProductFilteredView(BaseAPIView, generics.ListAPIView):
+    """
+    Get products with advanced filtering options.
+    
+    GET /products/filtered - Returns filtered products with support for:
+    - status: Filter by approval status (approved, pending, rejected)
+    - category: Filter by category ID or slug
+    - vendor: Filter by vendor/store ID
+    - search: Search in product name and description
+    - ordering: Sort by price, name, created_at, etc.
+    """
+    permission_classes = [AllowAny]
+    serializer_class = ProductSerializer
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ['category', 'store', 'approval_status']
+    search_fields = ['name', 'description', 'brand']
+    ordering_fields = ['price', 'name', 'created_at', 'approval_status']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        """
+        Return products based on filters.
+        Default shows only approved products.
+        """
+        queryset = Product.objects.all()
+        
+        # Check if user is admin
+        from authentication.core.permissions import IsAdmin
+        is_admin = IsAdmin().has_permission(self.request, self) if self.request.user.is_authenticated else False
+        
+        # Only show approved published products by default for public users
+        if not is_admin:
+            queryset = queryset.filter(
+                approval_status='approved',
+                publish_status='submitted'
+            )
+        
+        # Allow filtering by status if user has permission
+        status_filter = self.request.query_params.get('status', None)
+        if status_filter and self.request.user.is_authenticated and is_admin:
+            queryset = queryset.filter(approval_status=status_filter)
+        
+        return queryset
+
+    @extend_schema(
+        summary="Get filtered products",
+        description="Returns products with advanced filtering and sorting options.",
+        parameters=[
+            OpenApiParameter(name='status', description='Filter by approval status: approved, pending, rejected', required=False),
+            OpenApiParameter(name='category', description='Filter by category ID', required=False),
+            OpenApiParameter(name='store', description='Filter by vendor/store ID', required=False),
+            OpenApiParameter(name='search', description='Search in product name and description', required=False),
+            OpenApiParameter(name='ordering', description='Sort by: price, name, created_at', required=False),
+        ],
+        responses={200: ProductSerializer(many=True)}
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+
+# ==========================================
+# PRODUCT SUMMARY & DASHBOARD VIEWS
+# ==========================================
+@extend_schema(
+    tags=["Products - Dashboard"],
+    summary="Get product summary statistics",
+    description="Returns total count of products by approval status for dashboard display. This endpoint provides the main dashboard card data.",
+    responses={
+        200: {
+            "type": "object",
+            "properties": {
+                "total": {"type": "integer", "description": "Total approved and submitted products"},
+                "approved": {"type": "integer", "description": "Products with approved status"},
+                "rejected": {"type": "integer", "description": "Products with rejected status"},
+                "pending": {"type": "integer", "description": "Products with pending approval status"}
+            }
+        }
+    }
+)
+class ProductSummaryView(BaseAPIView):
+    """
+    Get product dashboard summary.
+    Returns total counts of products categorized by approval status.
+    Main endpoint for dashboard card data.
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        """Get product summary statistics"""
+        summary = {
+            'total': Product.objects.filter(
+                approval_status='approved',
+                publish_status='submitted'
+            ).count(),
+            'approved': Product.objects.filter(approval_status='approved').count(),
+            'rejected': Product.objects.filter(approval_status='rejected').count(),
+            'pending': Product.objects.filter(approval_status='pending').count(),
+        }
+        
+        return Response(
+            standardized_response(
+                data=summary,
+                message="Product summary retrieved successfully"
+            ),
+            status=status.HTTP_200_OK
+        )
+
+
+# ==========================================
+# PRODUCT REVIEW/APPROVAL WORKFLOW
+# ==========================================
+@extend_schema(
+    tags=["Admin - Product Review"],
+    summary="Review a product (approve or reject)",
+    description="Admin endpoint to review and approve or reject a pending product. Updates product status and sends notification to vendor.",
+    parameters=[
+        OpenApiParameter(name='id', description='Product ID', required=True, type=int)
+    ],
+    request=ProductApprovalSerializer,
+    responses={
+        200: {"description": "Product reviewed successfully"},
+        400: {"description": "Invalid request or missing required fields"},
+        404: {"description": "Product not found"},
+        403: {"description": "Only admin can review products"}
+    }
+)
+class ProductReviewView(BaseAPIView):
+    """
+    Admin endpoint to review a product and change its approval status.
+    Supports both approval and rejection with optional reason.
+    Sends email notification to vendor.
+    """
+    permission_classes = [IsAdmin]
+
+    def post(self, request, id):
+        """Review a product (approve or reject)"""
+        try:
+            product = Product.objects.get(id=id)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Product not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Get status and reason from request
+        status_action = request.data.get('status', '').lower()
+        reason = request.data.get('reason', '')
+
+        # Validate status field
+        if status_action not in ['approved', 'rejected']:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Status must be 'approved' or 'rejected'"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # For rejection, reason is required
+        if status_action == 'rejected' and not reason:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Reason is required when rejecting a product"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Update product
+        product.approval_status = status_action
+        product.approved_by = request.user
+        product.approval_date = timezone.now()
+        
+        if status_action == 'rejected':
+            product.rejection_reason = reason
+        else:
+            product.rejection_reason = None
+            
+        product.save()
+
+        # Send email notification to vendor
+        from store.tasks import send_product_approval_email_task, send_product_rejection_email_task
+    
+        if status_action == 'approved':
+            send_product_approval_email_task.delay(product.id)
+        else:
+            send_product_rejection_email_task.delay(product.id, reason)
+
+        serializer = PendingProductsSerializer(product)
+        return Response(
+            standardized_response(
+                data=serializer.data,
+                message=f"Product '{product.name}' {status_action} successfully"
             ),
             status=status.HTTP_200_OK
         )

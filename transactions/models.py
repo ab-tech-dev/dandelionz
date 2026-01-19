@@ -65,6 +65,7 @@ class Order(models.Model):
         PAID = 'PAID', 'Paid'
         SHIPPED = 'SHIPPED', 'Shipped'
         DELIVERED = 'DELIVERED', 'Delivered'
+        RETURNED = 'RETURNED', 'Returned'
         CANCELED = 'CANCELED', 'Canceled'
 
     order_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
@@ -78,6 +79,9 @@ class Order(models.Model):
     tracking_number = models.CharField(max_length=100, blank=True, null=True)
     payment_status = models.CharField(max_length=20, default='UNPAID')
     assigned_at = models.DateTimeField(null=True, blank=True)
+    shipped_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    returned_at = models.DateTimeField(null=True, blank=True)
     ordered_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -110,6 +114,35 @@ class Order(models.Model):
 
     def __str__(self):
         return f"Order {self.order_id} ({getattr(self.customer, 'email', 'Unknown')})"
+
+
+# ========================
+# ORDER STATUS HISTORY
+# ========================
+class OrderStatusHistory(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='status_history')
+    status = models.CharField(max_length=10, choices=Order.Status.choices)
+    changed_by = models.CharField(
+        max_length=20,
+        choices=[('ADMIN', 'Admin'), ('SYSTEM', 'System'), ('VENDOR', 'Vendor'), ('CUSTOMER', 'Customer')],
+        default='SYSTEM'
+    )
+    admin = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='order_status_changes'
+    )
+    reason = models.TextField(blank=True, null=True)
+    changed_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['changed_at']
+        verbose_name_plural = "Order Status Histories"
+
+    def __str__(self):
+        return f"Order {self.order.order_id} -> {self.status} at {self.changed_at}"
 
 
 class OrderItem(models.Model):

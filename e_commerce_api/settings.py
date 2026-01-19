@@ -64,7 +64,26 @@ MIDDLEWARE = [
 CORS_ALLOWED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
-    "https://api.dandelionz.com.ng"
+    "https://api.dandelionz.com.ng",
+]
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://dandelionz.com.ng",
+    "https://app.dandelionz.com.ng",
+    "https://api.dandelionz.com.ng",
 ]
 
 ROOT_URLCONF = 'e_commerce_api.urls'

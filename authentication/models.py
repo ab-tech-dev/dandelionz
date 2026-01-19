@@ -44,6 +44,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     # Primary key as UUID
     uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False, unique=True)
 
+    class UserStatus(models.TextChoices):
+        ACTIVE = 'ACTIVE', 'Active'
+        SUSPENDED = 'SUSPENDED', 'Suspended'
+
     # Core fields
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=150, blank=True)
@@ -55,6 +59,14 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         unique=True,
         blank=True,
         null=True
+    )
+
+    # User status for admin control
+    status = models.CharField(
+        max_length=20,
+        choices=UserStatus.choices,
+        default=UserStatus.ACTIVE,
+        help_text="User account status - controls platform access"
     )
 
     # System fields
@@ -104,6 +116,25 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     def is_delivery_agent(self):
         return self.role == self.Role.DELIVERY_AGENT
 
+    @property
+    def total_orders(self):
+        """Get total number of orders placed by this customer"""
+        from transactions.models import Order
+        return Order.objects.filter(customer=self).count()
+
+    @property
+    def total_spend(self):
+        """Get total amount spent by this customer"""
+        from transactions.models import Order
+        from django.db.models import Sum
+        result = Order.objects.filter(customer=self).aggregate(total=Sum('total_price'))
+        return result.get('total') or 0
+
+    @property
+    def is_suspended(self):
+        """Check if user is suspended"""
+        return self.status == self.UserStatus.SUSPENDED
+
 
 # =====================================================
 # REFERRAL MODEL 
@@ -122,3 +153,60 @@ class Referral(models.Model):
     bonus_awarded = models.BooleanField(default=False)
     bonus_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(default=timezone.now)
+
+# =====================================================
+# USER SUSPENSION TRACKING
+# =====================================================
+class UserSuspension(models.Model):
+    class Action(models.TextChoices):
+        SUSPEND = 'SUSPEND', 'Suspend'
+        REINSTATE = 'REINSTATE', 'Reinstate'
+
+    user = models.ForeignKey(
+        CustomUser,
+        on_delete=models.CASCADE,
+        related_name='suspensions'
+    )
+    admin = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='suspension_actions'
+    )
+    action = models.CharField(max_length=10, choices=Action.choices)
+    reason = models.TextField()
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.action} {self.user.email} by {self.admin.email if self.admin else 'Unknown'}"
+
+
+# =====================================================
+# ADMIN AUDIT LOG
+# =====================================================
+class AdminAuditLog(models.Model):
+    admin = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='audit_logs'
+    )
+    action = models.CharField(max_length=255, help_text="Action performed (e.g., 'suspend_user', 'cancel_order')")
+    target_entity = models.CharField(max_length=100, help_text="Entity type (e.g., 'User', 'Order')")
+    target_id = models.CharField(max_length=255, help_text="ID of the target entity")
+    reason = models.TextField(blank=True, null=True)
+    details = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['admin', '-created_at']),
+            models.Index(fields=['target_entity', 'target_id']),
+        ]
+
+    def __str__(self):
+        return f"{self.admin.email} - {self.action} on {self.target_entity}:{self.target_id}"

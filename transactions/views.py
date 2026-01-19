@@ -1248,9 +1248,44 @@ class AdminWalletListView(generics.ListAPIView):
         return super().get(request, *args, **kwargs)
 
 
+# ----------------------
+# Receipt/Export endpoint
+# ----------------------
+class OrderReceiptView(generics.RetrieveAPIView):
+    """
+    Retrieve order receipt/invoice details for display or export.
+    Includes all order information needed for receipts, invoices, and tracking.
+    """
+    serializer_class = OrderSerializer
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
+    lookup_field = 'order_id'
+    lookup_url_kwarg = 'order_id'
+
+    def get_queryset(self):
+        if self.request.user.is_staff:
+            return Order.objects.all()
+        return Order.objects.filter(customer=self.request.user)
+
+    @swagger_auto_schema(
+        operation_id="order_receipt",
+        operation_summary="Get Order Receipt",
+        operation_description="Retrieve order receipt/invoice details including items, shipping address, payment info, and tracking number. Can be used for display or export to PDF.",
+        tags=["Orders"],
+        responses={
+            200: OrderSerializer,
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Permission denied"),
+        },
+    )
+    def get(self, request, *args, **kwargs):
+        order = self.get_object()
+        serializer = self.get_serializer(order)
+        return Response(standardized_response(data=serializer.data))
+
+
 # Export for URL inclusion
 __all__ = [
-    'OrderListCreateView', 'OrderDetailView',
+    'OrderListCreateView', 'OrderDetailView', 'OrderReceiptView',
     'OrderItemListCreateView', 'OrderItemDetailView',
     'TransactionLogListView',
     'CheckoutView', 'SecureVerifyPaymentView', 'PaystackWebhookView',

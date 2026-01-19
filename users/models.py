@@ -5,6 +5,13 @@ from django.utils import timezone
 User = settings.AUTH_USER_MODEL
 
 class Vendor(models.Model):
+    VENDOR_STATUS_CHOICES = [
+        ('approved', 'Approved'),
+        ('pending', 'Pending'),
+        ('rejected', 'Rejected'),
+        ('suspended', 'Suspended'),
+    ]
+    
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="vendor_profile")
     store_name = models.CharField(max_length=150, default="Unnamed Store")
     store_description = models.TextField(blank=True)
@@ -14,6 +21,12 @@ class Vendor(models.Model):
     account_number = models.CharField(max_length=20, blank=True)
     recipient_code = models.CharField(max_length=100, blank=True)
     is_verified_vendor = models.BooleanField(default=False)
+    vendor_status = models.CharField(
+        max_length=20, 
+        choices=VENDOR_STATUS_CHOICES, 
+        default='pending',
+        help_text="Approval status of the vendor account"
+    )
 
 
 class Customer(models.Model):

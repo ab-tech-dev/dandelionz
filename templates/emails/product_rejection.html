@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .header {
+            background-color: #dc3545;
+            color: white;
+            padding: 20px;
+            border-radius: 5px 5px 0 0;
+        }
+        .content {
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+        .footer {
+            padding: 10px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+        }
+        .button {
+            display: inline-block;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 3px;
+            margin-top: 10px;
+        }
+        .product-details {
+            background-color: white;
+            padding: 15px;
+            margin: 15px 0;
+            border-left: 4px solid #dc3545;
+        }
+        .reason-box {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✕ Product Rejected</h1>
+        </div>
+        
+        <div class="content">
+            <p>Hello {{ vendor_name }},</p>
+            
+            <p>We regret to inform you that your product has been <strong>rejected</strong> and cannot be published at this time.</p>
+            
+            <div class="product-details">
+                <h3>{{ product_name }}</h3>
+                <p><strong>Product ID:</strong> {{ product_id }}</p>
+                <p><strong>Status:</strong> <span style="color: #dc3545; font-weight: bold;">REJECTED</span></p>
+            </div>
+            
+            <h3>Reason for Rejection:</h3>
+            <div class="reason-box">
+                <p>{{ rejection_reason }}</p>
+            </div>
+            
+            <p>{{ message }}</p>
+            
+            <h3>What you can do:</h3>
+            <ul>
+                <li>Review the rejection reason carefully</li>
+                <li>Make the necessary changes to your product</li>
+                <li>Resubmit your product for approval</li>
+            </ul>
+            
+            <a href="#" class="button">Edit & Resubmit Product</a>
+            
+            <p>If you believe this rejection was made in error or need further assistance, please contact our support team.</p>
+            
+            <p>Best regards,<br>
+            <strong>The E-Commerce Team</strong></p>
+        </div>
+        
+        <div class="footer">
+            <p>This is an automated email. Please do not reply to this message.</p>
+        </div>
+    </div>
+</body>
+</html>

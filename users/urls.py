@@ -15,6 +15,19 @@ from .views import (
     UnreadNotificationsCountView,
     MarkAllNotificationsReadView,
 )
+from authentication.views_admin import (
+    AdminUserListView,
+    AdminUserDetailView,
+    AdminUserSuspendView,
+    AdminOrderListView,
+    AdminOrderDetailView,
+    AdminOrderCancelView,
+    AdminProfileView,
+    AdminPhotoUploadView,
+    AdminPasswordVerifyView,
+    AdminPasswordChangeView,
+    AdminAuditLogView,
+)
 
 # =========================
 # CUSTOMER
@@ -142,4 +155,24 @@ urlpatterns = [
     path("notifications/<int:notification_id>/", NotificationDetailView.as_view(), name="notification-detail"),
     path("notifications/unread/count/", UnreadNotificationsCountView.as_view(), name="unread-count"),
     path("notifications/mark-all-read/", MarkAllNotificationsReadView.as_view(), name="mark-all-read"),
+
+    # NEW ADMIN DASHBOARD ENDPOINTS (User & Order Management + Audit)
+    # User Management
+    path("admin/users/", AdminUserListView.as_view(), name="admin-users-list"),
+    path("admin/users/<uuid:uuid>/", AdminUserDetailView.as_view(), name="admin-users-detail"),
+    path("admin/users/<uuid:uuid>/suspend/", AdminUserSuspendView.as_view(), name="admin-users-suspend"),
+    
+    # Order Management (with status history)
+    path("admin/orders/list/", AdminOrderListView.as_view(), name="admin-orders-list"),
+    path("admin/orders/<uuid:order_id>/", AdminOrderDetailView.as_view(), name="admin-orders-detail"),
+    path("admin/orders/<uuid:order_id>/cancel/", AdminOrderCancelView.as_view(), name="admin-orders-cancel"),
+    
+    # Admin Profile Management
+    path("admin/account/profile/", AdminProfileView.as_view(), name="admin-account-profile"),
+    path("admin/account/photo/", AdminPhotoUploadView.as_view(), name="admin-account-photo"),
+    path("admin/account/password/verify/", AdminPasswordVerifyView.as_view(), name="admin-account-password-verify"),
+    path("admin/account/password/change/", AdminPasswordChangeView.as_view(), name="admin-account-password-change"),
+    
+    # Audit Logs
+    path("admin/audit-logs/", AdminAuditLogView.as_view(), name="admin-audit-logs"),
 ]
