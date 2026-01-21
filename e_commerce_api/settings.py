@@ -62,6 +62,7 @@ MIDDLEWARE = [
 ]
 
 CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
@@ -81,6 +82,7 @@ CORS_ALLOW_HEADERS = [
 ]
 
 CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
