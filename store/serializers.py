@@ -130,6 +130,13 @@ class CreateProductSerializer(CloudinarySerializer):
     vendorName = serializers.CharField(source='store.store_name', read_only=True)
     image = serializers.SerializerMethodField()
     in_stock = serializers.BooleanField(read_only=True)
+    category = serializers.SlugRelatedField(
+        slug_field='slug',
+        queryset=Category.objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Category slug (string)"
+    )
 
     class Meta:
         model = Product

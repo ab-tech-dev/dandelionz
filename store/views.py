@@ -8,6 +8,7 @@ from authentication.core.response import standardized_response
 from rest_framework.response import Response
 from rest_framework import generics
 from django_filters.rest_framework import DjangoFilterBackend
+from django_filters import FilterSet, NumberFilter, CharFilter
 from rest_framework.filters import OrderingFilter, SearchFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.utils import timezone
@@ -30,13 +31,27 @@ from authentication.core.response import standardized_response
 from authentication.core.permissions import IsAdminOrVendor, IsAdmin, IsVendor
 
 # ---------------------------
+# Products FilterSet
+# ---------------------------
+class ProductFilterSet(FilterSet):
+    price = NumberFilter(field_name='price', lookup_expr='exact', label='Exact Price')
+    min_price = NumberFilter(field_name='price', lookup_expr='gte', label='Minimum Price')
+    max_price = NumberFilter(field_name='price', lookup_expr='lte', label='Maximum Price')
+    store = CharFilter(field_name='store__id', lookup_expr='exact')
+    
+    class Meta:
+        model = Product
+        fields = ['store', 'category']
+
+
+# ---------------------------
 # Products List & Filtering
 # ---------------------------
 class ProductListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['store', 'price', 'category']
+    filterset_class = ProductFilterSet
     search_fields = ['name', 'description']
     ordering_fields = ['price', 'name']
 
@@ -50,13 +65,15 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
     @extend_schema(
         parameters=[
             OpenApiParameter(name='store', description='Filter by store/vendor ID', required=False, type=int),
-            OpenApiParameter(name='price', description='Filter by price', required=False, type=float),
+            OpenApiParameter(name='price', description='Filter by exact price', required=False, type=float),
+            OpenApiParameter(name='min_price', description='Filter by minimum price', required=False, type=float),
+            OpenApiParameter(name='max_price', description='Filter by maximum price', required=False, type=float),
             OpenApiParameter(name='category', description='Filter by category', required=False, type=str),
             OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
             OpenApiParameter(name='ordering', description='Order by price or name', required=False, type=str),
         ],
         responses={200: ProductSerializer(many=True)},
-        description="Retrieve a list of products. Supports filtering, search, and ordering. Only shows approved products."
+        description="Retrieve a list of products. Supports filtering by exact price or price range, search, and ordering. Only shows approved products."
     )
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -986,13 +1003,14 @@ class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
     """
     Get, update, or delete a specific category (admin only for update/delete).
     
-    GET /categories/:id - Get category details
-    PATCH /categories/:id - Update category (admin only)
-    DELETE /categories/:id - Delete category (admin only)
+    GET /categories/:slug - Get category details
+    PATCH /categories/:slug - Update category (admin only)
+    DELETE /categories/:slug - Delete category (admin only)
     """
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]
+    lookup_field = 'slug'
 
     def get_permissions(self):
         """Allow public GET, but restrict PATCH/DELETE to admins"""

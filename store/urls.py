@@ -15,7 +15,7 @@ urlpatterns = [
     # CATEGORIES
     # ==================
     path('categories/', CategoryListCreateView.as_view(), name='category-list-create'),
-    path('categories/<int:pk>/', CategoryDetailView.as_view(), name='category-detail'),
+    path('categories/<slug:slug>/', CategoryDetailView.as_view(), name='category-detail'),
 
     # ==================
     # PRODUCTS - STATS & FILTERING
