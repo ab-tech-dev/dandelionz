@@ -58,15 +58,21 @@ def _send_notification_safely(recipient, title, message):
     message = str(message)
     
     try:
-        with transaction.atomic():
+        # Use savepoint to isolate this operation from parent transaction
+        sid = transaction.savepoint()
+        try:
             Notification.objects.create(
                 recipient=recipient,
                 title=title,
                 message=message
             )
+            transaction.savepoint_commit(sid)
             logger.debug(f"Notification created for {recipient.email}")
+        except Exception as e:
+            transaction.savepoint_rollback(sid)
+            logger.error(f"Failed to create notification for {recipient.email}: {str(e)}", exc_info=True)
     except Exception as e:
-        logger.error(f"Failed to create notification for {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected error in _send_notification_safely for {recipient.email}: {str(e)}", exc_info=True)
 
 
 @receiver(post_save, sender=Product)
