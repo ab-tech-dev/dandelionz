@@ -251,3 +251,57 @@ class ProductApprovalSerializer(serializers.Serializer):
     class Meta:
         fields = ['rejection_reason']
 
+
+# ---------------------------
+# Vendor Admin Product Detail Serializer
+# ---------------------------
+class VendorAdminProductDetailSerializer(CloudinarySerializer):
+    """
+    Serializer for vendor admin to view detailed product information.
+    Includes full vendor details, approval status, and all product attributes.
+    Used for GET /user/admin/products/{slug}/
+    """
+    vendor = serializers.SerializerMethodField()
+    category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    in_stock = serializers.BooleanField(read_only=True)
+    image = serializers.SerializerMethodField()
+    uploadDate = serializers.DateTimeField(source='created_at', read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'slug', 'name', 'description', 'price', 'category',
+            'category_name', 'stock', 'image', 'uploadDate', 'vendor', 'status'
+        ]
+        read_only_fields = fields
+
+    def get_vendor(self, obj):
+        """
+        Format vendor information according to spec.
+        Returns vendor UUID, store_name, and email.
+        """
+        return {
+            'uuid': str(obj.store.user.uuid),
+            'store_name': obj.store.store_name,
+            'email': obj.store.user.email
+        }
+
+    def get_image(self, obj):
+        """Convert CloudinaryField to URL"""
+        if obj.image:
+            return f"{CLOUDINARY_BASE_URL}{obj.image}"
+        return None
+
+    def get_status(self, obj):
+        """
+        Convert approval_status to uppercase format.
+        Choices: 'pending', 'approved', 'rejected' -> 'PENDING', 'APPROVED', 'REJECTED'
+        """
+        status_map = {
+            'pending': 'PENDING',
+            'approved': 'APPROVED',
+            'rejected': 'REJECTED'
+        }
+        return status_map.get(obj.approval_status, obj.approval_status.upper())
+

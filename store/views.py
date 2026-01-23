@@ -22,7 +22,7 @@ from .models import Product, Cart, CartItem, Favourite, Review, Category
 from .serializers import (
     ProductSerializer, CreateProductSerializer, CartSerializer, CartItemSerializer,
     FavouriteSerializer, ReviewSerializer, ProductApprovalSerializer, PendingProductsSerializer,
-    CategorySerializer
+    CategorySerializer, VendorAdminProductDetailSerializer
 )
 
 from rest_framework import serializers
@@ -1290,6 +1290,93 @@ class ProductReviewView(BaseAPIView):
             standardized_response(
                 data=serializer.data,
                 message=f"Product '{product.name}' {status_action} successfully"
+            ),
+            status=status.HTTP_200_OK
+        )
+
+
+# ==========================================
+# VENDOR ADMIN - PRODUCT DETAILS
+# ==========================================
+class VendorAdminProductDetailView(BaseAPIView):
+    """
+    Vendor admin endpoint to view detailed product information.
+    Returns comprehensive product details including vendor information and approval status.
+    
+    Accessible by: Vendor (viewing own products) or Admin (viewing all products)
+    """
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Vendor Admin - Products"],
+        summary="Get Product Details",
+        description="Retrieve detailed information for a specific product by slug. Includes vendor details, pricing, stock, and approval status.",
+        parameters=[
+            OpenApiParameter(
+                name='slug', 
+                description='Product slug identifier', 
+                required=True, 
+                type=str,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        responses={
+            200: OpenApiResponse(
+                description="Product details retrieved successfully",
+                response=VendorAdminProductDetailSerializer
+            ),
+            404: OpenApiResponse(description="Product not found"),
+            403: OpenApiResponse(description="Not authorized to view this product")
+        }
+    )
+    def get(self, request, slug):
+        """
+        Get detailed product information for vendor admin dashboard.
+        
+        Returns product with full vendor details, image URL, and status.
+        Vendors can only view their own products; admins can view all.
+        """
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Product not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check authorization: vendor can only view own products, admin can view all
+        from authentication.core.permissions import IsVendor
+        is_admin = hasattr(request.user, 'business_admin_profile')
+        is_vendor = hasattr(request.user, 'vendor_profile')
+
+        if is_vendor and not is_admin:
+            # Vendor can only view their own products
+            if product.store.user != request.user:
+                return Response(
+                    standardized_response(
+                        success=False,
+                        error="Not authorized to view this product"
+                    ),
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        elif not is_admin:
+            # Non-admin, non-vendor users cannot view
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Not authorized to view this product"
+                ),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = VendorAdminProductDetailSerializer(product)
+        return Response(
+            standardized_response(
+                success=True,
+                data=serializer.data
             ),
             status=status.HTTP_200_OK
         )

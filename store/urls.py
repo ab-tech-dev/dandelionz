@@ -7,7 +7,7 @@ from .views import (
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
-    ProductSummaryView, ProductReviewView
+    ProductSummaryView, ProductReviewView, VendorAdminProductDetailView
 )
 
 urlpatterns = [
@@ -60,6 +60,7 @@ urlpatterns = [
     path('admin/products/<slug:slug>/approve/', ApproveProductView.as_view(), name='approve-product'),
     path('admin/products/<slug:slug>/reject/', RejectProductView.as_view(), name='reject-product'),
     path('admin/products/<int:id>/review/', ProductReviewView.as_view(), name='product-review'),
+    path('admin/products/<slug:slug>/', VendorAdminProductDetailView.as_view(), name='vendor-admin-product-detail'),
     path('admin/products/stats/', ApprovalStatsView.as_view(), name='approval-stats'),
 
     # ==================
