@@ -53,14 +53,14 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'store', 'category', 'price', 'discounted_price', 'brand', 'stock', 'in_stock', 'approval_status', 'publish_status', 'created_at')
     list_filter = ('category', 'created_at', 'store', 'brand', 'approval_status', 'publish_status')
     search_fields = ('name', 'description', 'brand', 'tags')
-    readonly_fields = ('slug', 'created_at', 'updated_at', 'approved_by', 'approval_date', 'uuid')
+    readonly_fields = ('slug', 'created_at', 'updated_at', 'approved_by', 'approval_date')
     inlines = [ProductImageInline, ProductVideoInline]
     fieldsets = (
         ('Basic Information', {
-            'fields': ('uuid', 'name', 'slug', 'store', 'category', 'brand')
+            'fields': ('name', 'slug', 'store', 'category', 'brand')
         }),
         ('Details', {
-            'fields': ('description', 'price', 'discounted_price', 'stock', 'image')
+            'fields': ('description', 'price', 'discounted_price', 'stock')
         }),
         ('Product Attributes', {
             'fields': ('tags', 'variants'),
