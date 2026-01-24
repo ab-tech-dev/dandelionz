@@ -109,12 +109,12 @@ class ProductDetailView(BaseAPIView):
 
 @extend_schema(
     tags=["Products"],
-    description="Create a new product as draft (authenticated users only). Product starts as draft and won't be submitted for approval until vendor submits it.",
+    description="Create a new product as draft with multiple images and optional video. At least one image is required and must be marked as main.",
     request=CreateProductSerializer,
     examples=[
         OpenApiExample(
-            "Create product example",
-            summary="Add new product as draft",
+            "Create product with images",
+            summary="Add new product with images",
             value={
                 "name": "Wireless Headphones",
                 "description": "High-quality wireless headphones with noise cancellation",
@@ -126,9 +126,24 @@ class ProductDetailView(BaseAPIView):
                 "tags": "headphones, wireless, audio",
                 "variants": {
                     "colors": ["black", "white", "silver"],
-                    "sizes": []
+                    "sizes": ["M", "L"]
                 },
-                "image": None
+                "images_data": [
+                    {
+                        "is_main": True,
+                        "alt_text": "Main product image",
+                        "variant_association": None
+                    },
+                    {
+                        "is_main": False,
+                        "alt_text": "Black variant",
+                        "variant_association": {"colors": ["black"]}
+                    }
+                ],
+                "video_data": {
+                    "title": "Product Demo",
+                    "description": "See the product in action"
+                }
             }
         )
     ],
@@ -157,17 +172,81 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
 
         # Save the product as draft
         product = serializer.save(store=vendor, publish_status='draft')
+        
+        # Handle images
+        images_data = self.request.data.get('images_data', [])
+        self._create_product_images(product, images_data, serializer.validated_data.get('variants'))
+        
+        # Handle video
+        video_data = self.request.data.get('video_data')
+        if video_data:
+            self._create_product_video(product, video_data)
+
+    def _create_product_images(self, product, images_data, variants):
+        """Helper function to create product images with variant associations"""
+        from .models import ProductImage, validate_variant_association
+        
+        for idx, img_data in enumerate(images_data):
+            is_main = img_data.get('is_main', False)
+            image_file = img_data.get('image')
+            alt_text = img_data.get('alt_text')
+            variant_assoc = img_data.get('variant_association')
+            
+            # Validate variant association if provided
+            if variant_assoc and variants:
+                is_valid, error_msg = validate_variant_association(variant_assoc, variants)
+                if not is_valid:
+                    raise serializers.ValidationError({
+                        "images_data": f"Image {idx + 1}: {error_msg}"
+                    })
+            
+            # Create the image
+            ProductImage.objects.create(
+                product=product,
+                image=image_file,
+                is_main=is_main,
+                alt_text=alt_text,
+                variant_association=variant_assoc,
+                display_order=idx
+            )
+
+    def _create_product_video(self, product, video_data):
+        """Helper function to create product video with size validation"""
+        from .models import ProductVideo, validate_video_size
+        
+        video_file = video_data.get('video')
+        
+        # Validate video size
+        if hasattr(video_file, 'size'):
+            is_valid, error_msg = validate_video_size(video_file.size)
+            if not is_valid:
+                raise serializers.ValidationError({
+                    "video_data": error_msg
+                })
+        
+        ProductVideo.objects.create(
+            product=product,
+            video=video_file,
+            title=video_data.get('title'),
+            description=video_data.get('description')
+        )
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
+        
+        # Return the complete product with images and videos
+        product = Product.objects.get(pk=serializer.instance.pk)
+        response_serializer = self.get_serializer(product)
+        
+        headers = self.get_success_headers(response_serializer.data)
         return Response(
-            standardized_response(data=serializer.data, message="Product created successfully as draft"),
+            standardized_response(data=response_serializer.data, message="Product created successfully as draft with media"),
             status=status.HTTP_201_CREATED,
             headers=headers
         )
+
 
 
 @extend_schema(
@@ -579,6 +658,10 @@ class ApproveProductView(BaseAPIView):
         product.rejection_reason = None
         product.save()
 
+        # Send email notification to vendor
+        from store.tasks import send_product_approval_email_task
+        send_product_approval_email_task.delay(product.id)
+
         serializer = PendingProductsSerializer(product)
         return Response(
             standardized_response(
@@ -631,6 +714,10 @@ class RejectProductView(BaseAPIView):
         product.approval_date = timezone.now()
         product.rejection_reason = reason
         product.save()
+
+        # Send email notification to vendor
+        from store.tasks import send_product_rejection_email_task
+        send_product_rejection_email_task.delay(product.id, reason)
 
         serializer = PendingProductsSerializer(product)
         return Response(

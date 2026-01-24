@@ -29,6 +29,8 @@ from users.serializers import (
     AdminVendorKYCSerializer,
     AdminProfileResponseSerializer,
     NotificationSerializer,
+    AdminNotificationCreateSerializer,
+    AdminNotificationListSerializer,
     VendorProfileSerializer,
     VendorOrdersSummaryResponseSerializer,
     VendorAnalyticsResponseSerializer,
@@ -2035,3 +2037,177 @@ class MarkAllNotificationsReadView(BaseAPIView):
                 message=f"{count} notifications marked as read"
             )
         )
+
+
+# =====================================================
+# ADMIN NOTIFICATIONS
+# =====================================================
+class AdminNotificationViewSet(AdminBaseViewSet):
+    """
+    ViewSet for managing admin notifications (broadcast notifications).
+    Allows admins to send, draft, or schedule notifications to users and vendors.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="admin_create_notification",
+        operation_summary="Create Admin Notification",
+        operation_description="""
+        Create a notification with three possible actions:
+        1. Send Immediately: status='Sent', scheduled_at=null
+        2. Save as Draft: status='Draft'
+        3. Schedule for Later: status='Scheduled', scheduled_at='2026-01-25T10:00:00Z'
+        
+        Recipients can be USERS, VENDORS, or ALL.
+        """,
+        tags=["Admin Notifications"],
+        request_body=AdminNotificationCreateSerializer,
+        responses={
+            201: openapi.Response(
+                "Notification created/scheduled successfully",
+                AdminNotificationCreateSerializer()
+            ),
+            400: openapi.Response("Invalid data or validation error"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def create(self, request):
+        """Create a notification (send, draft, or schedule)"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        serializer = AdminNotificationCreateSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        serializer.is_valid(raise_exception=True)
+        notification = serializer.save()
+
+        # Handle different notification statuses
+        status_code = status.HTTP_201_CREATED
+        message = "Notification created successfully"
+
+        if notification.status == 'Sent':
+            # Send notification immediately to recipients
+            self._send_notification_to_recipients(notification)
+            message = "Notification sent to recipients"
+
+        elif notification.status == 'Draft':
+            message = "Notification saved as draft"
+
+        elif notification.status == 'Scheduled':
+            # Schedule the notification to be sent later using Celery
+            from users.tasks import send_scheduled_notification
+            send_scheduled_notification.apply_async(
+                args=[notification.id],
+                eta=notification.scheduled_at
+            )
+            message = f"Notification scheduled for {notification.scheduled_at}"
+
+        return Response({
+            "success": True,
+            "data": AdminNotificationCreateSerializer(notification).data,
+            "message": message
+        }, status=status_code)
+
+    def _send_notification_to_recipients(self, notification):
+        """
+        Send notification immediately to the specified recipient group.
+        Creates individual Notification records for each recipient.
+        """
+        from users.models import Vendor
+        from authentication.models import CustomUser
+
+        recipients = []
+
+        if notification.recipient_type == 'ALL':
+            # Send to all active users
+            recipients = CustomUser.objects.filter(is_active=True, status='ACTIVE')
+
+        elif notification.recipient_type == 'USERS':
+            # Send to all customers (non-vendor, non-admin users)
+            recipients = CustomUser.objects.filter(
+                is_active=True,
+                status='ACTIVE',
+                role=CustomUser.Role.CUSTOMER
+            )
+
+        elif notification.recipient_type == 'VENDORS':
+            # Send to all vendors
+            vendor_user_ids = Vendor.objects.filter(
+                vendor_status='approved'
+            ).values_list('user_id', flat=True)
+            recipients = CustomUser.objects.filter(
+                uuid__in=vendor_user_ids,
+                is_active=True,
+                status='ACTIVE'
+            )
+
+        # Create individual notifications for each recipient
+        notifications_to_create = [
+            Notification(
+                recipient=recipient,
+                title=notification.title,
+                message=notification.message,
+                status='Sent',
+                created_at=timezone.now()
+            )
+            for recipient in recipients
+        ]
+
+        if notifications_to_create:
+            Notification.objects.bulk_create(notifications_to_create, batch_size=1000)
+            logger.info(
+                f"[AdminNotification] Sent to {len(notifications_to_create)} "
+                f"recipients (type: {notification.recipient_type})"
+            )
+
+    @swagger_auto_schema(
+        operation_id="admin_list_notifications",
+        operation_summary="List Admin Notifications",
+        operation_description="Retrieve all admin broadcast notifications with their status and scheduling details.",
+        tags=["Admin Notifications"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                description="Filter by notification status: Sent, Draft, or Scheduled",
+                type=openapi.TYPE_STRING
+            ),
+        ],
+        responses={
+            200: openapi.Response(
+                "Notifications retrieved successfully",
+                AdminNotificationListSerializer(many=True)
+            ),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def list_notifications(self, request):
+        """List all admin broadcast notifications"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        # Filter broadcast notifications (those with recipient_type set)
+        notifications = Notification.objects.filter(
+            recipient_type__isnull=False
+        ).select_related('created_by').order_by('-created_at')
+
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            notifications = notifications.filter(status=status_filter)
+
+        serializer = AdminNotificationListSerializer(notifications, many=True)
+
+        return Response({
+            "success": True,
+            "data": serializer.data,
+            "count": notifications.count()
+        })
+

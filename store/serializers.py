@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Product, Cart, CartItem, Favourite, Review, Category
+from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
 from authentication.models import CustomUser
 from users.models import Vendor
 
@@ -80,6 +80,66 @@ class CategoryListSerializer(serializers.ModelSerializer):
         return obj.total_sales
 
 
+# ---------------------------
+# Product Image Serializer
+# ---------------------------
+class ProductImageSerializer(CloudinarySerializer):
+    """
+    Serializer for product images with variant association.
+    """
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductImage
+        fields = [
+            'id', 'image', 'image_url', 'is_main', 'alt_text', 
+            'variant_association', 'display_order', 'uploaded_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'uploaded_at', 'updated_at']
+
+    def get_image_url(self, obj):
+        return self.get_cloudinary_url(obj.image)
+
+
+class ProductImageCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating product images.
+    Used in product creation workflow.
+    """
+    class Meta:
+        model = ProductImage
+        fields = ['image', 'is_main', 'alt_text', 'variant_association', 'display_order']
+
+
+# ---------------------------
+# Product Video Serializer
+# ---------------------------
+class ProductVideoSerializer(CloudinarySerializer):
+    """
+    Serializer for product videos.
+    """
+    video_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductVideo
+        fields = [
+            'id', 'video', 'video_url', 'title', 'description', 
+            'duration', 'file_size', 'uploaded_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'duration', 'file_size', 'uploaded_at', 'updated_at']
+
+    def get_video_url(self, obj):
+        return self.get_cloudinary_url(obj.video)
+
+
+class ProductVideoCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating product videos.
+    Used in product creation workflow.
+    """
+    class Meta:
+        model = ProductVideo
+        fields = ['video', 'title', 'description']
 
 
 # ---------------------------
@@ -106,6 +166,8 @@ class ProductSerializer(CloudinarySerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     in_stock = serializers.BooleanField(read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
+    images = ProductImageSerializer(many=True, read_only=True)
+    videos = ProductVideoSerializer(many=True, read_only=True)
     image = serializers.SerializerMethodField()
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
 
@@ -114,22 +176,38 @@ class ProductSerializer(CloudinarySerializer):
         fields = [
             'id', 'store', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
             'category_name', 'price', 'discounted_price', 'stock', 'brand', 'tags', 
-            'variants', 'image', 'in_stock', 'approval_status', 'uploaded_date', 
+            'variants', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date', 
             'created_at', 'updated_at', 'reviews'
         ]
         ref_name = "StoreProductSerializer"
 
     def get_image(self, obj):
-        return self.get_cloudinary_url(obj.image)
+        # Return main image if available, otherwise first image
+        main_image = obj.main_image
+        if main_image:
+            return self.get_cloudinary_url(main_image.image)
+        return None
 
 class CreateProductSerializer(CloudinarySerializer):
     """
-    Serializer for creating draft products.
-    Vendor can provide all product information which will be saved as draft.
+    Serializer for creating draft products with images and optional video.
+    
+    Vendor can provide:
+    - Basic product info (name, description, price, etc.)
+    - At least one image (required) with optional variant associations
+    - Optional video (max 5MB)
+    - Images can be marked as main or associated with specific variants
     """
     vendorName = serializers.CharField(source='store.store_name', read_only=True)
     image = serializers.SerializerMethodField()
     in_stock = serializers.BooleanField(read_only=True)
+    images = ProductImageSerializer(many=True, read_only=True)
+    videos = ProductVideoSerializer(many=True, read_only=True)
+    
+    # Nested serializers for creating related objects
+    images_data = ProductImageCreateSerializer(many=True, write_only=True, required=False, help_text="List of images for the product. At least one image is required.")
+    video_data = ProductVideoCreateSerializer(write_only=True, required=False, allow_null=True, help_text="Optional video for the product (max 5MB)")
+    
     category = serializers.SlugRelatedField(
         slug_field='slug',
         queryset=Category.objects.all(),
@@ -143,12 +221,60 @@ class CreateProductSerializer(CloudinarySerializer):
         fields = [
             'id', 'name', 'slug', 'description', 'category', 'brand',
             'price', 'discounted_price', 'stock', 'tags', 'variants', 'image', 
+            'images', 'videos', 'images_data', 'video_data',
             'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'slug', 'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'slug', 'vendorName', 'in_stock', 'created_at', 'updated_at', 'images', 'videos']
 
     def get_image(self, obj):
-        return self.get_cloudinary_url(obj.image)
+        # Return main image if available, otherwise first image
+        main_image = obj.main_image
+        if main_image:
+            return self.get_cloudinary_url(main_image.image)
+        return None
+
+    def validate_images_data(self, value):
+        """Validate that at least one image is provided and at least one is marked as main"""
+        if not value:
+            raise serializers.ValidationError("At least one image is required")
+        
+        # Check if at least one image is marked as main
+        has_main = any(img.get('is_main', False) for img in value)
+        if not has_main:
+            raise serializers.ValidationError("At least one image must be marked as main (is_main: true)")
+        
+        return value
+
+    def validate_video_data(self, value):
+        """Validate video file size doesn't exceed 5MB"""
+        if not value:
+            return value
+        
+        from .models import validate_video_size
+        
+        # Get file size from uploaded file if available
+        if hasattr(value.get('video'), 'size'):
+            is_valid, error_msg = validate_video_size(value['video'].size)
+            if not is_valid:
+                raise serializers.ValidationError({"video": error_msg})
+        
+        return value
+
+    def validate(self, data):
+        """Cross-field validation"""
+        # Validate variant associations if variants exist
+        if data.get('variants'):
+            images_data = self.initial_data.get('images_data', [])
+            from .models import validate_variant_association
+            
+            for img in images_data:
+                variant_assoc = img.get('variant_association')
+                if variant_assoc:
+                    is_valid, error_msg = validate_variant_association(variant_assoc, data['variants'])
+                    if not is_valid:
+                        raise serializers.ValidationError({"images_data": error_msg})
+        
+        return data
 
 
 # ---------------------------
@@ -207,7 +333,7 @@ class FavouriteSerializer(CloudinarySerializer):
 class PendingProductsSerializer(CloudinarySerializer):
     """
     Serializer for displaying products pending approval.
-    Includes approval status and admin details.
+    Includes approval status, admin details, and product media.
     """
     vendor = VendorSerializer(source='store', read_only=True)
     vendorName = serializers.CharField(source='store.store_name', read_only=True)
@@ -216,6 +342,8 @@ class PendingProductsSerializer(CloudinarySerializer):
     approved_by_email = serializers.CharField(source='approved_by.email', read_only=True, allow_null=True)
     in_stock = serializers.BooleanField(read_only=True)
     image = serializers.SerializerMethodField()
+    images = ProductImageSerializer(many=True, read_only=True)
+    videos = ProductVideoSerializer(many=True, read_only=True)
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
@@ -223,7 +351,7 @@ class PendingProductsSerializer(CloudinarySerializer):
         fields = [
             'id', 'store', 'vendor', 'vendorName', 'store_owner_email', 'name', 'slug', 
             'description', 'category', 'category_name', 'price', 'discounted_price', 'stock', 
-            'brand', 'tags', 'variants', 'image', 'in_stock', 'uploaded_date',
+            'brand', 'tags', 'variants', 'image', 'images', 'videos', 'in_stock', 'uploaded_date',
             'publish_status', 'approval_status', 'approved_by', 'approved_by_email', 'approval_date', 
             'rejection_reason', 'created_at', 'updated_at'
         ]
@@ -233,7 +361,11 @@ class PendingProductsSerializer(CloudinarySerializer):
         ]
 
     def get_image(self, obj):
-        return self.get_cloudinary_url(obj.image)
+        # Return main image if available
+        main_image = obj.main_image
+        if main_image:
+            return self.get_cloudinary_url(main_image.image)
+        return None
 
 
 class ProductApprovalSerializer(serializers.Serializer):
@@ -258,13 +390,15 @@ class ProductApprovalSerializer(serializers.Serializer):
 class VendorAdminProductDetailSerializer(CloudinarySerializer):
     """
     Serializer for vendor admin to view detailed product information.
-    Includes full vendor details, approval status, and all product attributes.
+    Includes full vendor details, approval status, product attributes, and media.
     Used for GET /user/admin/products/{slug}/
     """
     vendor = serializers.SerializerMethodField()
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
     in_stock = serializers.BooleanField(read_only=True)
     image = serializers.SerializerMethodField()
+    images = ProductImageSerializer(many=True, read_only=True)
+    videos = ProductVideoSerializer(many=True, read_only=True)
     uploadDate = serializers.DateTimeField(source='created_at', read_only=True)
     status = serializers.SerializerMethodField()
 
@@ -272,7 +406,7 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'slug', 'name', 'description', 'price', 'category',
-            'category_name', 'stock', 'image', 'uploadDate', 'vendor', 'status'
+            'category_name', 'stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status'
         ]
         read_only_fields = fields
 
@@ -288,9 +422,10 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         }
 
     def get_image(self, obj):
-        """Convert CloudinaryField to URL"""
-        if obj.image:
-            return f"{CLOUDINARY_BASE_URL}{obj.image}"
+        """Convert CloudinaryField to URL - return main image"""
+        main_image = obj.main_image
+        if main_image:
+            return f"{CLOUDINARY_BASE_URL}{main_image.image}"
         return None
 
     def get_status(self, obj):

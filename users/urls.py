@@ -10,6 +10,7 @@ from .views import (
     AdminAnalyticsViewSet,
     DeliveryAgentViewSet,
     AdminDeliveryAgentViewSet,
+    AdminNotificationViewSet,
     NotificationsListView,
     NotificationDetailView,
     UnreadNotificationsCountView,
@@ -155,6 +156,9 @@ urlpatterns = [
     path("notifications/<int:notification_id>/", NotificationDetailView.as_view(), name="notification-detail"),
     path("notifications/unread/count/", UnreadNotificationsCountView.as_view(), name="unread-count"),
     path("notifications/mark-all-read/", MarkAllNotificationsReadView.as_view(), name="mark-all-read"),
+
+    # ADMIN NOTIFICATIONS
+    path("admin/notifications/", AdminNotificationViewSet.as_view({"post": "create", "get": "list_notifications"}), name="admin-notifications"),
 
     # NEW ADMIN DASHBOARD ENDPOINTS (User & Order Management + Audit)
     # User Management

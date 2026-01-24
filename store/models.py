@@ -110,6 +110,93 @@ class Product(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def has_main_image(self):
+        """Check if product has at least one main image"""
+        return self.images.filter(is_main=True).exists()
+
+    @property
+    def main_image(self):
+        """Get the main image for this product"""
+        return self.images.filter(is_main=True).first()
+
+    @property
+    def all_images(self):
+        """Get all images for this product, ordered by is_main first, then created_at"""
+        return self.images.all().order_by('-is_main', 'created_at')
+
+    @property
+    def video(self):
+        """Get the main video for this product"""
+        return self.videos.first()
+
+
+# ==========================================
+# Product Image Model
+# ==========================================
+class ProductImage(models.Model):
+    """
+    Represents a product image with optional variant association.
+    Each image can be associated with specific variants (colors/sizes).
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
+    image = CloudinaryField('image', null=False, blank=False)
+    is_main = models.BooleanField(default=False, help_text="Main/primary image for product display")
+    alt_text = models.CharField(max_length=255, null=True, blank=True, help_text="Alternative text for accessibility")
+    
+    # Variant association - JSON field for flexibility
+    # e.g., {"colors": ["red", "blue"], "sizes": ["M", "L"]}
+    variant_association = models.JSONField(
+        null=True, 
+        blank=True, 
+        default=None,
+        help_text="JSON mapping of variant attributes (e.g., {\"colors\": [\"red\", \"blue\"]}). Leave null/empty for all variants."
+    )
+    
+    display_order = models.PositiveIntegerField(default=0, help_text="Order in which to display images")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-is_main', 'display_order', 'uploaded_at']
+        unique_together = ('product', 'image')  # Prevent duplicate images
+
+    def __str__(self):
+        return f"{'Main ' if self.is_main else ''}Image for {self.product.name}"
+
+    def save(self, *args, **kwargs):
+        # If this is being set as main, unset others
+        if self.is_main:
+            ProductImage.objects.filter(product=self.product, is_main=True).exclude(pk=self.pk).update(is_main=False)
+        super().save(*args, **kwargs)
+
+
+# ==========================================
+# Product Video Model
+# ==========================================
+class ProductVideo(models.Model):
+    """
+    Represents a product video (optional).
+    Max file size is 5MB.
+    """
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='videos')
+    video = CloudinaryField('video', null=False, blank=False, resource_type='video')
+    title = models.CharField(max_length=255, null=True, blank=True)
+    description = models.TextField(null=True, blank=True)
+    
+    # Metadata
+    duration = models.PositiveIntegerField(null=True, blank=True, help_text="Video duration in seconds")
+    file_size = models.PositiveIntegerField(null=True, blank=True, help_text="File size in bytes")
+    
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"Video for {self.product.name}"
+
 
 # -------------------------------
 # Cart & Related Models
@@ -171,3 +258,55 @@ class Review(models.Model):
 
     def __str__(self):
         return f"Review for {self.product.name} by {self.customer.email}"
+
+
+# ==========================================
+# Product Media Helper Functions
+# ==========================================
+def validate_video_size(file_size_bytes, max_size_mb=5):
+    """
+    Validate video file size.
+    
+    Args:
+        file_size_bytes: Size of file in bytes
+        max_size_mb: Maximum allowed size in MB (default 5MB)
+    
+    Returns:
+        tuple: (is_valid: bool, error_message: str or None)
+    """
+    max_size_bytes = max_size_mb * 1024 * 1024
+    if file_size_bytes > max_size_bytes:
+        return False, f"Video size exceeds {max_size_mb}MB limit"
+    return True, None
+
+
+def validate_variant_association(variant_association, product_variants):
+    """
+    Validate that provided variant association exists in product variants.
+    
+    Args:
+        variant_association: JSON object with variant attributes
+        product_variants: Product's variants JSON field
+    
+    Returns:
+        tuple: (is_valid: bool, error_message: str or None)
+    """
+    if not variant_association or not product_variants:
+        return True, None  # No association or no product variants is valid
+    
+    # Ensure both are dicts
+    if not isinstance(variant_association, dict) or not isinstance(product_variants, dict):
+        return False, "Invalid variant format"
+    
+    for key, values in variant_association.items():
+        if key not in product_variants:
+            return False, f"Variant key '{key}' not found in product variants"
+        
+        product_variant_values = product_variants.get(key, [])
+        if isinstance(values, list):
+            for val in values:
+                if val not in product_variant_values:
+                    return False, f"Variant value '{val}' not found in product {key} variants"
+    
+    return True, None
+

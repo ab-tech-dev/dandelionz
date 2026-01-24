@@ -294,6 +294,117 @@ class NotificationSerializer(serializers.ModelSerializer):
         ]
 
 
+class AdminNotificationCreateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for creating admin broadcast notifications.
+    Handles sending, drafting, or scheduling notifications to specific recipient groups.
+    """
+    
+    class Meta:
+        model = Notification
+        fields = [
+            'id',
+            'title',
+            'message',
+            'recipient_type',
+            'status',
+            'scheduled_at',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def validate_recipient_type(self, value):
+        """Validate that recipient_type is one of the allowed choices"""
+        valid_types = ['USERS', 'VENDORS', 'ALL']
+        if value not in valid_types:
+            raise serializers.ValidationError(
+                f"recipient_type must be one of {valid_types}"
+            )
+        return value
+
+    def validate_status(self, value):
+        """Validate that status is one of the allowed choices"""
+        valid_statuses = ['Sent', 'Draft', 'Scheduled']
+        if value not in valid_statuses:
+            raise serializers.ValidationError(
+                f"status must be one of {valid_statuses}"
+            )
+        return value
+
+    def validate(self, data):
+        """
+        Cross-field validation:
+        - If status is 'Scheduled', scheduled_at must be provided
+        - scheduled_at must be in the future
+        """
+        status = data.get('status')
+        scheduled_at = data.get('scheduled_at')
+        
+        if status == 'Scheduled':
+            if not scheduled_at:
+                raise serializers.ValidationError(
+                    "scheduled_at is required when status is 'Scheduled'"
+                )
+            
+            from django.utils import timezone
+            if scheduled_at <= timezone.now():
+                raise serializers.ValidationError(
+                    "scheduled_at must be a future date and time"
+                )
+        
+        return data
+
+    def create(self, validated_data):
+        """
+        Create the notification and set created_by to the current user (admin).
+        """
+        request = self.context.get('request')
+        if request and request.user:
+            validated_data['created_by'] = request.user
+        
+        return super().create(validated_data)
+
+
+class AdminNotificationListSerializer(serializers.ModelSerializer):
+    """
+    Serializer for listing admin broadcast notifications with full details.
+    """
+    created_by_email = serializers.EmailField(
+        source='created_by.email',
+        read_only=True,
+        allow_null=True
+    )
+    created_by_name = serializers.CharField(
+        source='created_by.full_name',
+        read_only=True,
+        allow_null=True
+    )
+
+    class Meta:
+        model = Notification
+        fields = [
+            'id',
+            'title',
+            'message',
+            'recipient_type',
+            'status',
+            'scheduled_at',
+            'created_by',
+            'created_by_email',
+            'created_by_name',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'created_by',
+            'created_by_email',
+            'created_by_name',
+            'created_at',
+            'updated_at',
+        ]
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True)
     new_password = serializers.CharField(write_only=True)

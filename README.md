@@ -1,5 +1,7 @@
 # E-Commerce API Platform - Complete Documentation
 
+**Version**: 1.0.0 | **Last Updated**: January 2026
+
 ## 📋 Table of Contents
 1. [Overview](#overview)
 2. [Tech Stack](#tech-stack)
@@ -15,88 +17,195 @@
 12. [Setup & Deployment](#setup--deployment)
 13. [Development Guide](#development-guide)
 14. [Security Features](#security-features)
+15. [Email & Notifications](#email--notifications)
+16. [Background Tasks & Celery](#background-tasks--celery)
+17. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## 🎯 Overview
 
-**Dandelionz** is a comprehensive multi-vendor e-commerce API platform built with Django and Django REST Framework. It enables vendors to list and manage products, customers to browse and purchase items, and administrators to oversee the entire marketplace.
+**Dandelionz** is a comprehensive multi-vendor e-commerce API platform built with Django and Django REST Framework. It enables vendors to list and manage products, customers to browse and purchase items, delivery agents to track orders, and administrators to oversee the entire marketplace ecosystem.
 
-### Key Features:
-- **Multi-Vendor Architecture**: Support for multiple vendors managing their own product catalogs
-- **Secure Authentication**: JWT-based authentication with email verification
-- **Payment Processing**: Paystack integration for secure payment handling
-- **Order Management**: Complete order lifecycle from creation to delivery
-- **Wallet System**: User wallets with credit/debit transaction tracking
-- **Customer Profiles**: Vendor and Customer profile management with specialized features
-- **Admin Dashboard**: Business admin controls for vendor management, orders, and payouts
-- **Product Management**: Full CRUD operations with categories, reviews, and ratings
-- **Shopping Cart**: Add/remove items, manage favorites
-- **Email Verification**: Automated email notifications and verification workflows
-- **Referral System**: Built-in referral code tracking for user acquisition
+### Core Features:
+- **Multi-Vendor Architecture**: Complete support for multiple vendors managing independent product catalogs
+- **JWT Authentication**: Secure token-based authentication with 15-minute access token lifetime and 14-day refresh tokens
+- **Email Verification**: Automated email verification workflow with token-based validation
+- **Paystack Integration**: Full payment gateway integration with webhook support and transaction tracking
+- **Order Management**: Complete order lifecycle (PENDING → PAID → SHIPPED → DELIVERED) with status tracking
+- **Wallet System**: User financial wallets with credit/debit transactions and audit trails
+- **Role-Based Access Control**: Admin, Business Admin, Vendor, Customer, and Delivery Agent roles
+- **Product Catalog**: Full CRUD operations with 16 product categories, reviews, and ratings
+- **Shopping Cart**: Add/remove items with real-time subtotal calculations
+- **Favorites/Wishlist**: Product favorites management for customers
+- **Referral System**: Unique referral codes with bonus tracking
+- **Delivery Management**: Delivery agent assignment and tracking
+- **Admin Analytics**: Business admin dashboard with vendor and order analytics
+- **Docker & Containerization**: Full Docker Compose setup for development and production
+- **API Documentation**: Auto-generated Swagger/OpenAPI docs with DRF YASG and DRF Spectacular
 
 ---
 
 ## 🛠️ Tech Stack
 
-### Backend Framework
-- **Django** 5.2.7 - Web framework
-- **Django REST Framework** 3.16.1 - API development
-- **PostgreSQL** - Primary database
-- **Redis** - Caching and message broker
+### Core Framework & Libraries
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| Django | 5.2.7 | Web framework |
+| Django REST Framework | 3.16.1 | REST API development |
+| Django Simple JWT | 5.5.1 | JWT authentication |
+| PostgreSQL | Latest | Primary database |
+| Redis | Latest | Caching & message broker |
 
-### Key Libraries
-- **Django Celery Beat** 2.8.1 - Task scheduling
-- **Django Celery Results** 2.6.0 - Task result persistence
-- **Simple JWT** 5.5.1 - JWT authentication
-- **Cloudinary** 1.44.1 - Image storage and management
-- **Paystack** - Payment gateway integration
-- **Django CORS Headers** 4.9.0 - Cross-origin request handling
-- **DRF YASG** 1.21.11 - Swagger/OpenAPI documentation
-- **DRF Spectacular** 0.28.0 - Enhanced API documentation
+### Background Processing & Async
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| Celery | 5.5.3 | Distributed task queue |
+| Django Celery Beat | 2.8.1 | Periodic task scheduler |
+| Django Celery Results | 2.6.0 | Task result persistence |
 
-### Deployment
-- **Docker** & **Docker Compose** - Containerization
-- **Gunicorn** 23.0.0 - WSGI application server
-- **WhiteNoise** 6.11.0 - Static file serving
+### External Services & Integrations
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| Cloudinary | 1.44.1 | Image storage & transformation |
+| Paystack | - | Payment gateway integration |
+| Django CORS Headers | 4.9.0 | Cross-origin request handling |
+
+### API Documentation & Schema
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| DRF YASG | 1.21.11 | Swagger/OpenAPI UI & generation |
+| DRF Spectacular | 0.28.0 | Advanced OpenAPI 3.0+ schema |
+
+### Deployment & Infrastructure
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| Docker | Latest | Containerization |
+| Docker Compose | Latest | Multi-container orchestration |
+| Gunicorn | 23.0.0 | WSGI application server |
+| WhiteNoise | 6.11.0 | Static file serving in production |
+| psycopg2-binary | 2.9.11 | PostgreSQL database adapter |
+
+### Utilities & Tools
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| python-dotenv | 1.1.1 | Environment variable management |
+| Pillow | 12.0.0 | Image processing |
+| Django Admin Trap | 1.1.1 | Admin interface security |
 
 ---
 
 ## 📁 Project Structure
 
 ```
-e_commerce_api/
-├── authentication/           # User authentication & verification
-│   ├── auth/               # Login, registration, token management
-│   ├── verification/       # Email verification, password reset
-│   ├── core/              # Base classes, utilities, permissions
-│   ├── models.py          # CustomUser model
-│   └── serializers.py     # Auth request/response serializers
-├── users/                  # User profiles & admin functions
-│   ├── models.py          # Vendor, Customer, BusinessAdmin, Notification
-│   ├── services/          # Payout, profile resolution
-│   ├── views.py           # Profile management, admin analytics
-│   └── serializers.py     # User profile serializers
-├── store/                  # Products, cart, favorites
-│   ├── models.py          # Product, Cart, CartItem, Favorite, Review
-│   ├── views.py           # Product listing, cart management
-│   └── serializers.py     # Product & cart serializers
-├── transactions/           # Orders, payments, wallets
-│   ├── models.py          # Order, Payment, Wallet, Refund, InstallmentPlan
-│   ├── paystack.py        # Paystack payment gateway integration
-│   ├── views.py           # Order & payment processing
-│   └── serializers.py     # Order & payment serializers
-├── e_commerce_api/        # Project settings & configuration
-│   ├── settings.py        # Django settings
-│   ├── urls.py            # URL routing
-│   ├── celery.py          # Celery configuration
-│   └── wsgi.py            # WSGI application
-├── templates/             # Email templates
-│   └── emails/           # HTML email templates
-├── Dockerfile             # Container configuration
-├── docker-compose.yml     # Multi-container orchestration
-├── requirements.txt       # Python dependencies
-└── manage.py             # Django management script
+e_commerce_api/                         # Project root
+├── authentication/                     # Authentication & user verification
+│   ├── auth/
+│   │   ├── views.py                   # Login, register, token refresh
+│   │   ├── services.py                # Auth business logic
+│   │   └── __pycache__/
+│   ├── verification/
+│   │   ├── views.py                   # Email verification, password reset
+│   │   ├── services.py                # Verification workflows
+│   │   ├── emails.py                  # Email templates & sending
+│   │   ├── tasks.py                   # Celery email tasks
+│   │   ├── tokens.py                  # Token generation & validation
+│   │   └── __pycache__/
+│   ├── core/
+│   │   ├── base_view.py               # BaseViewSet with common functionality
+│   │   ├── email_backend.py           # Custom SMTP backend with retry logic
+│   │   ├── exceptions.py              # Custom exception classes
+│   │   ├── jwt_utils.py               # JWT token utilities
+│   │   ├── permissions.py             # Role-based permissions (IsAdmin, IsVendor, etc)
+│   │   ├── referral_service.py        # Referral code generation & tracking
+│   │   ├── response.py                # Standardized response wrapper
+│   │   └── __pycache__/
+│   ├── models.py                      # CustomUser model with roles
+│   ├── admin.py                       # Admin interface configuration
+│   ├── serializers.py                 # User auth serializers
+│   ├── serializers_admin.py           # Admin-specific serializers
+│   ├── urls.py                        # Auth endpoints
+│   ├── urls_admin.py                  # Admin auth endpoints
+│   ├── views.py                       # User endpoints
+│   ├── views_admin.py                 # Admin endpoints
+│   └── __pycache__/
+│
+├── users/                              # User profiles & management
+│   ├── models.py                      # Vendor, Customer, BusinessAdmin, Notification, DeliveryAgent
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── payout_service.py          # Vendor payout processing
+│   │   ├── profile_resolver.py        # User profile type resolution
+│   │   ├── services.py                # User business logic
+│   │   └── __pycache__/
+│   ├── admin.py                       # User admin interface
+│   ├── serializers.py                 # User serializers
+│   ├── urls.py                        # User profile endpoints
+│   ├── views.py                       # Profile management views
+│   ├── signals.py                     # Django signals (profile creation on user signup)
+│   ├── tasks.py                       # Celery tasks (notifications, payouts)
+│   ├── tests.py                       # User tests
+│   └── __pycache__/
+│
+├── store/                              # Products, cart, favorites
+│   ├── models.py                      # Product, Cart, CartItem, Favorite, Review
+│   ├── management/
+│   │   ├── __init__.py
+│   │   ├── __pycache__/
+│   │   └── commands/                  # Custom management commands
+│   ├── admin.py                       # Product admin interface
+│   ├── serializers.py                 # Product & cart serializers
+│   ├── urls.py                        # Product & cart endpoints
+│   ├── views.py                       # Product, cart, review views
+│   ├── signals.py                     # Product signals
+│   ├── tasks.py                       # Celery tasks (bulk operations)
+│   ├── tests.py                       # Store tests
+│   └── __pycache__/
+│
+├── transactions/                       # Orders, payments, wallets
+│   ├── models.py                      # Order, Payment, Wallet, Refund, InstallmentPlan, etc
+│   ├── paystack.py                    # Paystack API integration & webhook handling
+│   ├── admin.py                       # Transaction admin interface
+│   ├── serializers.py                 # Order & payment serializers
+│   ├── urls.py                        # Transaction endpoints
+│   ├── views.py                       # Order & payment views
+│   ├── signals.py                     # Order signals
+│   ├── tasks.py                       # Celery tasks (order processing, delivery)
+│   ├── tests.py                       # Transaction tests
+│   ├── migrations/                    # Database migrations
+│   └── __pycache__/
+│
+├── e_commerce_api/                    # Project configuration
+│   ├── settings.py                    # Django settings (DB, Redis, Email, Paystack, etc)
+│   ├── urls.py                        # Main URL routing (includes all apps)
+│   ├── asgi.py                        # ASGI config
+│   ├── wsgi.py                        # WSGI config
+│   ├── celery.py                      # Celery config (broker, beat schedule)
+│   └── __pycache__/
+│
+├── templates/                          # Email & other templates
+│   └── emails/
+│       ├── base_email.html            # Base email template
+│       ├── verify_email.html          # Email verification template
+│       ├── password_reset.html        # Password reset template
+│       ├── product_approval.html      # Product approval notification
+│       └── product_rejection.html     # Product rejection notification
+│
+├── static/                             # Static files (development)
+│   └── logo/
+│
+├── staticfiles/                        # Collected static files (production)
+│   ├── admin/
+│   ├── cloudinary/
+│   ├── drf-yasg/                      # Swagger UI resources
+│   ├── rest_framework/                # DRF static resources
+│   └── ...
+│
+├── Dockerfile                          # Docker image configuration
+├── docker-compose.yml                 # Multi-container orchestration
+├── manage.py                           # Django CLI
+├── requirements.txt                   # Python dependencies (65 packages)
+└── README.md                           # This file
 ```
 
 ---
@@ -1880,6 +1989,247 @@ for log in logs:
 
 ---
 
+## � Email & Notifications
+
+### Email Configuration
+
+The API uses a robust SMTP email backend with retry logic:
+
+```python
+# settings.py Configuration
+EMAIL_BACKEND = 'authentication.core.email_backend.RobustSMTPEmailBackend'
+EMAIL_HOST = os.getenv('EMAIL_HOST')  # e.g., smtp.gmail.com
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+EMAIL_TIMEOUT = 60  # 60-second timeout
+EMAIL_CONNECTION_RETRY_ATTEMPTS = 3
+EMAIL_CONNECTION_RETRY_DELAY = 2  # seconds between retries
+```
+
+### Email Templates
+
+Located in `templates/emails/`:
+
+| Template | Use Case |
+|----------|----------|
+| `base_email.html` | Base template for all emails |
+| `verify_email.html` | Email verification on signup |
+| `password_reset.html` | Password reset requests |
+| `product_approval.html` | Vendor product approval notification |
+| `product_rejection.html` | Vendor product rejection notification |
+
+### Email Sending via Celery
+
+```python
+# authentication/verification/tasks.py
+@shared_task
+def send_verification_email_task(user_email, token):
+    """Async task to send email verification"""
+    # Automatically retried on failure
+    pass
+```
+
+### Notification System
+
+Users receive real-time notifications for:
+- Order status updates
+- Product approvals/rejections
+- Payout confirmations
+- New messages
+- Promotional updates
+
+```python
+# Create notification
+Notification.objects.create(
+    recipient=user,
+    title="Order Shipped",
+    message=f"Your order #{order.order_id} has been shipped",
+)
+
+# Mark as read
+notification.mark_as_read()
+```
+
+---
+
+## ⚙️ Background Tasks & Celery
+
+### Celery Configuration
+
+```python
+# e_commerce_api/celery.py
+import os
+from celery import Celery
+from celery.schedules import crontab
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'e_commerce_api.settings')
+
+app = Celery('e_commerce_api')
+app.config_from_object('django.conf:settings', namespace='CELERY')
+app.autodiscover_tasks()
+
+# Beat schedule for periodic tasks
+app.conf.beat_schedule = {
+    'send-pending-notifications': {
+        'task': 'users.tasks.send_pending_notifications',
+        'schedule': crontab(minute='*/15'),  # Every 15 minutes
+    },
+    'process-refunds': {
+        'task': 'transactions.tasks.process_pending_refunds',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+    },
+    'generate-payouts': {
+        'task': 'users.tasks.generate_vendor_payouts',
+        'schedule': crontab(hour=6, minute=0),  # Daily at 6 AM
+    },
+}
+```
+
+### Running Celery Workers
+
+```bash
+# Start Celery worker (in a separate terminal)
+celery -A e_commerce_api worker -l info
+
+# Start Celery Beat (periodic task scheduler)
+celery -A e_commerce_api beat -l info
+
+# Start both with Gevent pool (better performance)
+celery -A e_commerce_api worker -l info -P gevent -c 1000
+```
+
+### Common Celery Tasks
+
+#### Email Tasks
+```python
+# authentication/verification/tasks.py
+@shared_task
+def send_verification_email(user_email, token):
+    """Send email verification link"""
+    pass
+
+@shared_task
+def send_password_reset_email(user_email, token):
+    """Send password reset link"""
+    pass
+```
+
+#### Transaction Tasks
+```python
+# transactions/tasks.py
+@shared_task
+def process_order_payment(order_id):
+    """Process payment after order creation"""
+    pass
+
+@shared_task
+def send_delivery_notification(order_id):
+    """Notify customer of delivery"""
+    pass
+
+@shared_task
+def process_refund(refund_id):
+    """Process refund to customer wallet"""
+    pass
+```
+
+#### User Tasks
+```python
+# users/tasks.py
+@shared_task
+def generate_vendor_payouts():
+    """Generate daily payouts for vendors"""
+    pass
+
+@shared_task
+def send_notification_to_user(user_id, title, message):
+    """Create and possibly send notification"""
+    pass
+```
+
+### Monitoring Celery
+
+```bash
+# View active tasks
+celery -A e_commerce_api inspect active
+
+# View scheduled tasks
+celery -A e_commerce_api inspect scheduled
+
+# View statistics
+celery -A e_commerce_api inspect stats
+
+# Purge all tasks
+celery -A e_commerce_api purge
+```
+
+---
+
+## 🛠️ API Endpoints Summary
+
+### Authentication
+```
+POST   /api/auth/register/              - User registration
+POST   /api/auth/login/                 - User login
+POST   /api/auth/refresh/               - Refresh access token
+POST   /api/auth/logout/                - Logout
+POST   /api/auth/password-reset/        - Request password reset
+POST   /api/auth/password-reset-confirm/- Confirm password reset
+POST   /api/auth/verify-email/          - Verify email address
+```
+
+### Products & Store
+```
+GET    /api/products/                   - List all products
+POST   /api/products/                   - Create product (Vendor only)
+GET    /api/products/{id}/              - Get product details
+PUT    /api/products/{id}/              - Update product (Owner only)
+DELETE /api/products/{id}/              - Delete product (Owner only)
+POST   /api/products/{id}/review/       - Add review
+
+GET    /api/cart/                       - Get user cart
+POST   /api/cart/add/                   - Add item to cart
+DELETE /api/cart/remove/{item_id}/      - Remove from cart
+
+GET    /api/favorites/                  - Get favorites
+POST   /api/favorites/add/              - Add to favorites
+DELETE /api/favorites/{id}/             - Remove from favorites
+```
+
+### Orders & Transactions
+```
+GET    /api/orders/                     - List user orders
+POST   /api/orders/                     - Create order
+GET    /api/orders/{id}/                - Get order details
+PUT    /api/orders/{id}/                - Update order status
+POST   /api/orders/{id}/cancel/         - Cancel order
+
+POST   /api/payments/initialize/        - Initialize payment
+POST   /api/payments/verify/            - Verify payment
+POST   /api/payments/webhook/           - Paystack webhook
+```
+
+### User Profiles
+```
+GET    /api/users/profile/              - Get user profile
+PUT    /api/users/profile/              - Update profile
+GET    /api/users/notifications/        - Get notifications
+POST   /api/users/notifications/{id}/read/ - Mark notification as read
+```
+
+### Admin Endpoints
+```
+GET    /api/admin/vendors/              - List vendors
+PUT    /api/admin/vendors/{id}/approve/ - Approve vendor
+PUT    /api/admin/vendors/{id}/reject/  - Reject vendor
+GET    /api/admin/orders/               - List all orders
+GET    /api/admin/analytics/            - Business analytics
+```
+
+---
+
 ## 🐛 Troubleshooting
 
 ### Common Issues & Solutions
@@ -1888,9 +2238,9 @@ for log in logs:
 ```
 Error: could not connect to server
 Solution:
-- Ensure PostgreSQL is running
+- Ensure PostgreSQL is running: docker-compose up db
 - Check DB_HOST, DB_USER, DB_PASSWORD in .env
-- docker-compose exec db psql -U postgres
+- Test connection: docker-compose exec db psql -U postgres
 ```
 
 #### 2. Redis Connection Failed
@@ -1898,27 +2248,92 @@ Solution:
 Error: ConnectionError: Error 111 connecting to 127.0.0.1:6379
 Solution:
 - Start Redis: docker-compose up redis
-- Check Redis URL in .env
-- redis-cli ping
+- Check REDIS_URL in .env (should be redis://redis:6379/0)
+- Test connection: docker-compose exec redis redis-cli ping
 ```
 
-#### 3. Migration Conflicts
+#### 3. Email Verification Timeout
 ```
-Error: Conflicting migrations
+Error: EmailException - Timeout waiting for SMTP response
 Solution:
-- Check for multiple migration files in same app
-- Delete conflicting migrations if not in production
-- python manage.py migrate --fake-initial
+- Check EMAIL_TIMEOUT setting (default: 60 seconds)
+- Verify EMAIL_HOST and EMAIL_PORT are correct
+- Check firewall/network access to SMTP server
+- Review EMAIL_CONNECTION_RETRY_ATTEMPTS setting
 ```
 
-#### 4. Static Files Not Loading
+#### 4. Celery Tasks Not Running
 ```
-Error: 404 on /static/ URLs
+Error: Task not executing
 Solution:
-- python manage.py collectstatic --noinput
-- Check STATIC_URL in settings
-- Check WhiteNoise configuration
+- Ensure Celery worker is running: celery -A e_commerce_api worker -l info
+- Check CELERY_BROKER_URL points to Redis
+- Verify tasks are imported in worker: celery -A e_commerce_api inspect active
+- Check task logs: celery -A e_commerce_api events
 ```
+
+#### 5. Static Files Not Loading
+```
+Error: 404 on /static/ URLs in production
+Solution:
+- Collect static files: python manage.py collectstatic --noinput
+- Check STATIC_URL and STATIC_ROOT in settings
+- Verify WhiteNoise middleware is enabled
+- Check STATICFILES_STORAGE setting
+```
+
+#### 6. Payment Processing Fails
+```
+Error: Paystack webhook not received or payment not marked as paid
+Solution:
+- Verify PAYSTACK_SECRET_KEY is correct
+- Check webhook signature validation in paystack.py
+- Ensure PAYSTACK_WEBHOOK_URL is publicly accessible
+- Test webhook: curl -X POST https://api.dandelionz.com.ng/transactions/paystack/webhook/
+- Check transaction logs for error details
+```
+
+#### 7. Migration Issues
+```
+Error: No such table / Migration conflicts
+Solution:
+- Create new migration: python manage.py makemigrations
+- Apply migrations: python manage.py migrate
+- Check for conflicting migration files in migrations/
+- If stuck: python manage.py migrate --fake-initial
+```
+
+#### 8. Vendor Account Not Found
+```
+Error: Vendor profile does not exist
+Solution:
+- Ensure Vendor profile is created via signals on user creation
+- Manually create: Vendor.objects.create(user=user, store_name="Store")
+- Check signals.py for proper connection to post_save
+```
+
+---
+
+## 📞 Support & Contributions
+
+For issues, feature requests, or contributions:
+
+1. **Report Issues**: Create a GitHub issue with detailed error logs
+2. **Feature Requests**: Describe the feature and expected behavior
+3. **Pull Requests**: Follow code style and include tests
+4. **Documentation**: Update README for any API changes
+
+---
+
+## 📄 License
+
+This project is proprietary software owned by Dandelionz. All rights reserved.
+
+---
+
+**Last Updated**: January 2026  
+**API Version**: 1.0.0  
+**Maintainer**: Development Team
 
 #### 5. Email Not Sending
 ```

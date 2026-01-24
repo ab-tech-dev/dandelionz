@@ -7,7 +7,9 @@ from .views import (
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
-    ProductSummaryView, ProductReviewView, VendorAdminProductDetailView
+    ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
+    UploadProductImagesView, UpdateProductImageView, DeleteProductImageView, ListProductImagesView,
+    UploadProductVideoView, UpdateProductVideoView, DeleteProductVideoView, GetProductVideoView
 )
 
 urlpatterns = [
@@ -70,4 +72,20 @@ urlpatterns = [
     path('vendor/drafts/<slug:slug>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
     path('vendor/drafts/<slug:slug>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
     path('vendor/drafts/<slug:slug>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
+
+    # ==================
+    # PRODUCT IMAGES
+    # ==================
+    path('products/<slug:slug>/images/', ListProductImagesView.as_view(), name='list-product-images'),
+    path('products/<slug:slug>/images/upload/', UploadProductImagesView.as_view(), name='upload-product-images'),
+    path('products/<slug:slug>/images/<int:image_id>/', UpdateProductImageView.as_view(), name='update-product-image'),
+    path('products/<slug:slug>/images/<int:image_id>/delete/', DeleteProductImageView.as_view(), name='delete-product-image'),
+
+    # ==================
+    # PRODUCT VIDEOS
+    # ==================
+    path('products/<slug:slug>/video/', GetProductVideoView.as_view(), name='get-product-video'),
+    path('products/<slug:slug>/video/upload/', UploadProductVideoView.as_view(), name='upload-product-video'),
+    path('products/<slug:slug>/video/update/', UpdateProductVideoView.as_view(), name='update-product-video'),
+    path('products/<slug:slug>/video/delete/', DeleteProductVideoView.as_view(), name='delete-product-video'),
 ]
