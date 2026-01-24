@@ -33,8 +33,8 @@ class CategoryAdmin(admin.ModelAdmin):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'store', 'category', 'price', 'discounted_price', 'brand', 'stock', 'in_stock', 'approval_status', 'created_at')
-    list_filter = ('category', 'created_at', 'store', 'brand', 'approval_status')
+    list_display = ('name', 'store', 'category', 'price', 'discounted_price', 'brand', 'stock', 'in_stock', 'approval_status', 'publish_status', 'created_at')
+    list_filter = ('category', 'created_at', 'store', 'brand', 'approval_status', 'publish_status')
     search_fields = ('name', 'description', 'brand', 'tags')
     readonly_fields = ('slug', 'created_at', 'updated_at', 'approved_by', 'approval_date')
     fieldsets = (
@@ -48,9 +48,9 @@ class ProductAdmin(admin.ModelAdmin):
             'fields': ('tags', 'variants'),
             'description': 'Tags: comma-separated or JSON array. Variants: JSON with color and/or size.'
         }),
-        ('Approval Status', {
-            'fields': ('approval_status', 'approved_by', 'approval_date', 'rejection_reason'),
-            'description': 'Manage product approval. Pending products must be approved before they appear in customer listings.'
+        ('Publishing & Approval', {
+            'fields': ('publish_status', 'approval_status', 'approved_by', 'approval_date', 'rejection_reason'),
+            'description': 'Publish Status: Set to "submitted" to make visible. Approval Status: Pending products must be approved before they appear in customer listings.'
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),
