@@ -35,7 +35,7 @@ class AdminDashboardUserDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'uuid', 'email', 'full_name', 'phone_number', 'address', 'status', 'role',
+            'uuid', 'email', 'full_name', 'phone_number', 'status', 'role',
             'is_verified', 'created_at', 'updated_at', 'total_orders', 'total_spend',
             'suspension_history'
         ]
