@@ -158,7 +158,6 @@ class ProductImage(models.Model):
 
     class Meta:
         ordering = ['-is_main', 'display_order', 'uploaded_at']
-        unique_together = ('product', 'image')  # Prevent duplicate images
 
     def __str__(self):
         return f"{'Main ' if self.is_main else ''}Image for {self.product.name}"
