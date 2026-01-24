@@ -164,6 +164,12 @@ class ProductSerializer(CloudinarySerializer):
     vendor = VendorSerializer(source='store', read_only=True)
     vendorName = serializers.CharField(source='store.store_name', read_only=True)
     category_name = serializers.CharField(source='category.name', read_only=True)
+    category = serializers.SlugRelatedField(
+        slug_field='slug',
+        queryset=Category.objects.all(),
+        required=False,
+        allow_null=True
+    )
     in_stock = serializers.BooleanField(read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
     images = ProductImageSerializer(many=True, read_only=True)
