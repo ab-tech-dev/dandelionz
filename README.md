@@ -2169,64 +2169,596 @@ celery -A e_commerce_api purge
 
 ## 🛠️ API Endpoints Summary
 
-### Authentication
+### API Base URL
 ```
-POST   /api/auth/register/              - User registration
-POST   /api/auth/login/                 - User login
-POST   /api/auth/refresh/               - Refresh access token
-POST   /api/auth/logout/                - Logout
-POST   /api/auth/password-reset/        - Request password reset
-POST   /api/auth/password-reset-confirm/- Confirm password reset
-POST   /api/auth/verify-email/          - Verify email address
+http://localhost:8000 (Development)
+https://api.dandelionz.com.ng (Production)
 ```
 
-### Products & Store
-```
-GET    /api/products/                   - List all products
-POST   /api/products/                   - Create product (Vendor only)
-GET    /api/products/{id}/              - Get product details
-PUT    /api/products/{id}/              - Update product (Owner only)
-DELETE /api/products/{id}/              - Delete product (Owner only)
-POST   /api/products/{id}/review/       - Add review
+### Authentication Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `POST` | `/auth/register/` | Register new user | ❌ |
+| `POST` | `/auth/login/` | Login and get tokens | ❌ |
+| `POST` | `/auth/token/refresh/` | Refresh access token | ❌ |
+| `POST` | `/auth/token/validate/` | Validate token | ✅ |
+| `POST` | `/auth/logout/` | Logout | ✅ |
+| `POST` | `/auth/email-verify/` | Verify email with token | ❌ |
+| `POST` | `/auth/send-verification/` | Send verification email | ✅ |
+| `POST` | `/auth/check-verification/` | Check if email verified | ✅ |
+| `POST` | `/auth/password-reset/` | Request password reset | ❌ |
+| `POST` | `/auth/password-reset/confirm/` | Confirm password reset | ❌ |
 
-GET    /api/cart/                       - Get user cart
-POST   /api/cart/add/                   - Add item to cart
-DELETE /api/cart/remove/{item_id}/      - Remove from cart
+### Product Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/store/products/` | List all approved products (paginated) | ❌ |
+| `GET` | `/store/products/filtered/` | Filter products by category, price, rating | ❌ |
+| `GET` | `/store/products/stats/` | Product statistics | ❌ |
+| `GET` | `/store/products/summary/` | Product summary view | ❌ |
+| `POST` | `/store/products/create/` | Create new product (Vendor) | ✅ |
+| `GET` | `/store/products/<slug>/` | Get product details | ❌ |
+| `PUT` | `/store/products/<slug>/` | Update product (Owner only) | ✅ |
+| `PATCH` | `/store/products/<slug>/patch/` | Partial update product | ✅ |
+| `DELETE` | `/store/products/<slug>/delete/` | Delete product (Owner only) | ✅ |
 
-GET    /api/favorites/                  - Get favorites
-POST   /api/favorites/add/              - Add to favorites
-DELETE /api/favorites/{id}/             - Remove from favorites
-```
+### Cart & Favorites Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/store/cart/` | Get user's cart with items | ✅ |
+| `POST` | `/store/cart/add/` | Add item to cart | ✅ |
+| `DELETE` | `/store/cart/remove/<slug>/` | Remove item from cart | ✅ |
+| `GET` | `/store/favourites/` | List user's favorite products | ✅ |
+| `POST` | `/store/favourites/add/` | Add product to favorites | ✅ |
+| `DELETE` | `/store/favourites/remove/<slug>/` | Remove from favorites | ✅ |
 
 ### Orders & Transactions
-```
-GET    /api/orders/                     - List user orders
-POST   /api/orders/                     - Create order
-GET    /api/orders/{id}/                - Get order details
-PUT    /api/orders/{id}/                - Update order status
-POST   /api/orders/{id}/cancel/         - Cancel order
-
-POST   /api/payments/initialize/        - Initialize payment
-POST   /api/payments/verify/            - Verify payment
-POST   /api/payments/webhook/           - Paystack webhook
-```
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/transactions/orders/` | List user's orders (paginated) | ✅ |
+| `POST` | `/transactions/orders/` | Create new order from cart | ✅ |
+| `GET` | `/transactions/orders/<order_id>/` | Get order details | ✅ |
+| `PUT` | `/transactions/orders/<order_id>/` | Update order (Status tracking) | ✅ |
+| `DELETE` | `/transactions/orders/<order_id>/` | Delete order (draft only) | ✅ |
+| `GET` | `/transactions/orders/<order_id>/receipt/` | Get order receipt | ✅ |
+| `POST` | `/transactions/checkout/` | Initialize payment (Paystack) | ✅ |
+| `POST` | `/transactions/verify-payment/` | Verify payment with Paystack reference | ✅ |
+| `POST` | `/transactions/webhook/` | Paystack webhook (system) | ❌ |
 
 ### User Profiles
-```
-GET    /api/users/profile/              - Get user profile
-PUT    /api/users/profile/              - Update profile
-GET    /api/users/notifications/        - Get notifications
-POST   /api/users/notifications/{id}/read/ - Mark notification as read
-```
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/user/profile/` | Get user profile | ✅ |
+| `PUT` | `/user/profile/` | Update user profile | ✅ |
+| `PATCH` | `/user/profile/` | Partial update profile | ✅ |
+| `POST` | `/user/profile/change-password/` | Change password | ✅ |
+| `GET` | `/user/notifications/` | Get user notifications (paginated) | ✅ |
+| `POST` | `/user/notifications/<id>/mark-read/` | Mark notification as read | ✅ |
+| `GET` | `/user/notifications/unread-count/` | Get unread notification count | ✅ |
+
+### Vendor Profile Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/user/vendor/` | Get vendor profile | ✅ |
+| `PUT` | `/user/vendor/` | Update vendor profile | ✅ |
+| `PATCH` | `/user/vendor/` | Partial update vendor | ✅ |
+| `GET` | `/user/vendor/stats/` | Get vendor statistics | ✅ |
+| `GET` | `/user/vendor/earnings/` | Get vendor earnings | ✅ |
+| `POST` | `/user/vendor/payout/` | Request vendor payout | ✅ |
+| `GET` | `/user/vendor/orders/` | Get vendor's orders | ✅ |
 
 ### Admin Endpoints
+| Method | Endpoint | Description | Auth Required |
+|--------|----------|-------------|---|
+| `GET` | `/user/admin/vendors/` | List vendors with filters (Admin) | ✅ |
+| `GET` | `/user/admin/vendors/<id>/` | Get vendor details (Admin) | ✅ |
+| `PUT` | `/user/admin/vendors/<id>/approve/` | Approve vendor (Admin) | ✅ |
+| `PUT` | `/user/admin/vendors/<id>/reject/` | Reject vendor (Admin) | ✅ |
+| `GET` | `/user/admin/orders/` | List all orders (Admin) | ✅ |
+| `GET` | `/user/admin/orders/<order_id>/` | Get order details (Admin) | ✅ |
+| `GET` | `/user/admin/analytics/dashboard/` | Dashboard metrics (Admin) | ✅ |
+| `GET` | `/user/admin/analytics/sales/` | Sales analytics (Admin) | ✅ |
+| `GET` | `/user/admin/analytics/users/` | User analytics (Admin) | ✅ |
+
+---
+
+## 📊 Database Models - Complete Reference
+
+### CustomUser Model (authentication/models.py)
+
+**Roles:**
+- `ADMIN` - Platform administrator
+- `BUSINESS_ADMIN` - Business staff with specific permissions
+- `VENDOR` - Store owner
+- `CUSTOMER` - Regular customer
+- `DELIVERY_AGENT` - Delivery personnel
+
+**Status:**
+- `ACTIVE` - Account is active
+- `SUSPENDED` - Account suspended by admin
+
+**Fields:**
+```python
+uuid                    # UUID Primary Key (editable=False)
+email                   # EmailField (unique)
+full_name              # CharField (max 150)
+phone_number           # CharField (max 15, optional)
+profile_picture        # CloudinaryField (optional)
+role                   # Choice field (default: CUSTOMER)
+referral_code          # CharField (unique, auto-generated 12-char)
+status                 # Choice: ACTIVE, SUSPENDED (default: ACTIVE)
+is_verified            # Boolean (email verification status)
+is_active              # Boolean (default: True)
+is_staff               # Boolean (for admin access)
+created_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
 ```
-GET    /api/admin/vendors/              - List vendors
-PUT    /api/admin/vendors/{id}/approve/ - Approve vendor
-PUT    /api/admin/vendors/{id}/reject/  - Reject vendor
-GET    /api/admin/orders/               - List all orders
-GET    /api/admin/analytics/            - Business analytics
+
+**Key Methods:**
+- `_generate_unique_referral_code()` - Generates 12-char unique codes
+- `is_admin`, `is_business_admin`, `is_vendor`, `is_customer`, `is_delivery_agent` - Role properties
+
+---
+
+### Category Model (store/models.py)
+
+**Fields:**
+```python
+name                    # CharField (unique)
+slug                    # SlugField (unique, auto-generated)
+description            # TextField (optional)
+image                  # CloudinaryField (optional)
+is_active              # Boolean (default: True)
+created_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
 ```
+
+**Properties:**
+- `product_count` - Count of approved submitted products
+- `total_sales` - Total sales quantity from category products
+
+---
+
+### Product Model (store/models.py)
+
+**Approval Status:**
+- `pending` - Awaiting admin approval
+- `approved` - Admin approved
+- `rejected` - Admin rejected
+
+**Publish Status:**
+- `draft` - Not submitted
+- `submitted` - Submitted for approval
+
+**Fields:**
+```python
+uuid                    # UUIDField (unique, db_indexed)
+store (Vendor FK)      # ForeignKey to Vendor
+category (Category FK) # ForeignKey to Category
+name                    # CharField (max 255)
+slug                    # SlugField (unique, auto-generated)
+description            # TextField
+price                  # DecimalField(10,2)
+discounted_price       # DecimalField(10,2) (optional)
+stock                  # PositiveIntegerField
+image                  # CloudinaryField (deprecated, use ProductImage)
+brand                  # CharField (optional)
+tags                   # TextField (comma-separated or JSON)
+variants               # JSONField (color/size options as JSON)
+publish_status         # Choice: draft, submitted (default: draft)
+approval_status        # Choice: pending, approved, rejected
+approved_by (User FK)  # ForeignKey to CustomUser (who approved)
+approval_date          # DateTimeField (when approved)
+rejection_reason       # TextField (if rejected)
+created_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+**Properties:**
+- `in_stock` - Boolean (stock > 0)
+- `has_main_image` - Check if main image exists
+- `main_image` - Get ProductImage marked as main
+- `all_images` - Get all ProductImages ordered
+- `video` - Get first ProductVideo
+
+---
+
+### ProductImage Model (store/models.py)
+
+**Fields:**
+```python
+product (Product FK)   # ForeignKey to Product
+image                  # CloudinaryField (required)
+is_main                # Boolean (default: False, primary image)
+alt_text               # CharField (accessibility text, optional)
+variant_association    # JSONField (e.g., {"colors": ["red"]}, optional)
+display_order          # PositiveIntegerField (for ordering)
+uploaded_at            # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+**Constraints:**
+- Unique: (product, image)
+- Auto-sets is_main=False on other images when setting one as main
+
+---
+
+### ProductVideo Model (store/models.py)
+
+**Fields:**
+```python
+product (Product FK)   # ForeignKey to Product
+video                  # CloudinaryField (video resource type)
+title                  # CharField (optional)
+description            # TextField (optional)
+duration               # PositiveIntegerField (seconds, optional)
+file_size              # PositiveIntegerField (bytes, optional)
+uploaded_at            # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+---
+
+### Cart & CartItem Models (store/models.py)
+
+**Cart Fields:**
+```python
+customer (User FK)     # ForeignKey to CustomUser
+created_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+**CartItem Fields:**
+```python
+cart (Cart FK)         # ForeignKey to Cart
+product (Product FK)   # ForeignKey to Product
+quantity               # PositiveIntegerField
+```
+
+**Cart Properties:**
+- `total` - Sum of all item subtotals
+
+---
+
+### Review Model (store/models.py)
+
+**Fields:**
+```python
+product (Product FK)   # ForeignKey to Product
+customer (User FK)     # ForeignKey to CustomUser
+rating                 # PositiveIntegerField (1-5+)
+comment                # TextField
+created_at             # DateTimeField (auto_now_add)
+```
+
+---
+
+### Favourite Model (store/models.py)
+
+**Fields:**
+```python
+customer (User FK)     # ForeignKey to CustomUser
+product (Product FK)   # ForeignKey to Product
+added_at               # DateTimeField (auto_now_add)
+```
+
+**Constraints:**
+- Unique: (customer, product)
+
+---
+
+### Order Model (transactions/models.py)
+
+**Status:**
+- `PENDING` - Order created
+- `PAID` - Payment confirmed
+- `SHIPPED` - Order shipped
+- `DELIVERED` - Order delivered
+- `CANCELED` - Order canceled
+
+**Fields:**
+```python
+order_id               # UUIDField (unique)
+customer (User FK)     # ForeignKey to CustomUser
+status                 # Choice (default: PENDING)
+total_price            # DecimalField(12,2)
+delivery_fee           # DecimalField(10,2) (default: 0)
+discount               # DecimalField(10,2) (default: 0)
+tracking_number        # CharField (optional)
+payment_status         # CharField (UNPAID/PAID)
+assigned_at            # DateTimeField (delivery agent assignment)
+shipped_at             # DateTimeField
+delivered_at           # DateTimeField
+returned_at            # DateTimeField
+ordered_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+**Methods:**
+- `calculate_total()` - Returns: subtotal - discount + delivery_fee
+- `update_total()` - Updates total_price field
+- Properties: `subtotal`, `total_with_delivery`, `is_paid`, `is_delivered`
+
+---
+
+### OrderItem Model (transactions/models.py)
+
+**Fields:**
+```python
+order (Order FK)       # ForeignKey to Order
+product (Product FK)   # ForeignKey to Product
+quantity               # PositiveIntegerField
+price_at_purchase      # DecimalField(10,2) (snapshot of price)
+```
+
+**Properties:**
+- `item_subtotal` - price_at_purchase × quantity
+- `vendor` - Gets product.store
+
+---
+
+### OrderStatusHistory Model (transactions/models.py)
+
+**Changed By:**
+- `ADMIN` - Administrator changed status
+- `SYSTEM` - Automatic/system change
+- `VENDOR` - Vendor changed status
+- `CUSTOMER` - Customer initiated change
+
+**Fields:**
+```python
+order (Order FK)       # ForeignKey to Order
+status                 # Choice (PENDING/PAID/SHIPPED/DELIVERED/CANCELED)
+changed_by             # Choice (ADMIN/SYSTEM/VENDOR/CUSTOMER)
+admin (User FK)        # ForeignKey to CustomUser (who changed it)
+reason                 # TextField (reason for change)
+changed_at             # DateTimeField (default: now())
+```
+
+---
+
+### Payment Model (transactions/models.py)
+
+**Status:**
+- `PENDING` - Payment initiated
+- `SUCCESS` - Payment successful
+- `FAILED` - Payment failed
+
+**Fields:**
+```python
+order (Order OneToOne) # OneToOneField to Order
+reference              # CharField (unique, Paystack reference)
+amount                 # DecimalField(10,2)
+status                 # Choice (default: PENDING)
+gateway                # CharField (default: 'Paystack')
+paid_at                # DateTimeField (when payment succeeded)
+verified               # Boolean (payment verified, default: False)
+created_at             # DateTimeField (auto_now_add)
+```
+
+**Methods:**
+- `mark_as_successful()` - Sets status=SUCCESS, verified=True, paid_at=now()
+
+---
+
+### Wallet Model (transactions/models.py)
+
+**Fields:**
+```python
+user (User OneToOne)   # OneToOneField to CustomUser
+balance                # DecimalField(12,2) (default: 0)
+updated_at             # DateTimeField (auto_now)
+```
+
+**Methods:**
+- `credit(amount, source)` - Add funds + creates WalletTransaction
+- `debit(amount, source)` - Subtract funds + creates WalletTransaction (validates balance)
+
+---
+
+### WalletTransaction Model (transactions/models.py)
+
+**Type:**
+- `CREDIT` - Funds received
+- `DEBIT` - Funds withdrawn
+
+**Fields:**
+```python
+wallet (Wallet FK)     # ForeignKey to Wallet
+transaction_type       # Choice (CREDIT/DEBIT)
+amount                 # DecimalField(10,2)
+source                 # CharField (reason/source)
+created_at             # DateTimeField (auto_now_add)
+```
+
+---
+
+### ShippingAddress Model (transactions/models.py)
+
+**Fields:**
+```python
+order (Order OneToOne) # OneToOneField to Order
+full_name              # CharField
+address                # TextField
+city                   # CharField
+state                  # CharField
+country                # CharField
+postal_code            # CharField
+phone_number           # CharField
+```
+
+---
+
+### Refund Model (transactions/models.py)
+
+**Status:**
+- `PENDING` - Refund requested
+- `APPROVED` - Refund approved
+- `REJECTED` - Refund rejected
+- `COMPLETED` - Refund processed
+
+**Fields:**
+```python
+order (Order FK)       # ForeignKey to Order
+reason                 # TextField (refund reason)
+amount                 # DecimalField(10,2)
+status                 # Choice (default: PENDING)
+created_at             # DateTimeField (auto_now_add)
+updated_at             # DateTimeField (auto_now)
+```
+
+---
+
+### InstallmentPlan Model (transactions/models.py)
+
+**Fields:**
+```python
+order (Order OneToOne) # OneToOneField to Order
+total_amount           # DecimalField(10,2)
+installment_count      # PositiveIntegerField (number of payments)
+installment_amount     # DecimalField(10,2) (per installment)
+```
+
+---
+
+### Vendor Model (users/models.py)
+
+**Vendor Status:**
+- `pending` - Awaiting approval
+- `approved` - Approved vendor
+- `rejected` - Rejected vendor
+- `suspended` - Suspended vendor
+
+**Fields:**
+```python
+user (User OneToOne)   # OneToOneField to CustomUser
+store_name             # CharField (default: "Unnamed Store")
+store_description      # TextField
+business_registration_number # CharField (max 50)
+address                # CharField (max 255)
+bank_name              # CharField (max 100)
+account_number         # CharField (max 20)
+recipient_code         # CharField (Paystack recipient code)
+is_verified_vendor     # Boolean (default: False)
+vendor_status          # Choice (default: pending)
+```
+
+---
+
+### Customer Model (users/models.py)
+
+**Fields:**
+```python
+user (User OneToOne)   # OneToOneField to CustomUser
+shipping_address       # TextField
+city                   # CharField
+country                # CharField
+postal_code            # CharField (max 20)
+loyalty_points         # PositiveIntegerField (default: 0)
+```
+
+---
+
+### BusinessAdmin Model (users/models.py)
+
+**Fields:**
+```python
+user (User OneToOne)   # OneToOneField to CustomUser
+position               # CharField (role description, max 100)
+can_manage_vendors     # Boolean (default: True)
+can_manage_orders      # Boolean (default: True)
+can_manage_payouts     # Boolean (default: True)
+can_manage_inventory   # Boolean (default: True)
+```
+
+---
+
+### DeliveryAgent Model (users/models.py)
+
+**Fields:**
+```python
+user (User OneToOne)   # OneToOneField to CustomUser
+phone                  # CharField
+is_active              # Boolean (default: True)
+created_at             # DateTimeField (auto_now_add)
+```
+
+---
+
+### Notification Model (users/models.py)
+
+**Fields:**
+```python
+recipient (User FK)    # ForeignKey to CustomUser
+title                  # CharField
+message                # TextField
+is_read                # Boolean (default: False)
+created_at             # DateTimeField (auto_now_add)
+```
+
+**Methods:**
+- `mark_as_read()` - Sets is_read=True
+
+---
+
+## ✅ Feature Checklist
+
+### Core Features
+- ✅ Multi-vendor marketplace
+- ✅ User role management (5 roles)
+- ✅ JWT authentication with refresh tokens
+- ✅ Email verification workflow
+- ✅ Referral system with unique codes
+- ✅ Product catalog with categories
+- ✅ Draft & approval workflow for products
+- ✅ Multiple product images & videos
+- ✅ Product variants (JSON-based)
+- ✅ Shopping cart management
+- ✅ Favorites/wishlist
+- ✅ Product reviews & ratings
+- ✅ Order management with status tracking
+- ✅ Order status history logging
+- ✅ Paystack payment integration
+- ✅ Payment webhook handling
+- ✅ Installment payment plans
+- ✅ Refund management system
+- ✅ User wallets with transactions
+- ✅ Order receipts
+
+### Admin Features
+- ✅ User management
+- ✅ Vendor approval/rejection
+- ✅ Product approval workflow
+- ✅ Order management
+- ✅ Finance/payout processing
+- ✅ Analytics dashboard
+- ✅ Marketplace statistics
+- ✅ Vendor analytics
+- ✅ User analytics
+- ✅ Sales analytics
+
+### User Features
+- ✅ Profile management
+- ✅ Password change
+- ✅ Vendor profiles with earnings
+- ✅ Delivery agent profiles
+- ✅ Notification system
+- ✅ Unread notification count
+- ✅ Notification read status
+
+### Technical Features
+- ✅ Celery async task processing
+- ✅ Celery Beat periodic tasks
+- ✅ Redis caching
+- ✅ Cloudinary image/video storage
+- ✅ PostgreSQL database
+- ✅ Docker containerization
+- ✅ Swagger/OpenAPI documentation
+- ✅ CORS configuration
+- ✅ Rate limiting
+- ✅ Admin interface security
+- ✅ Email sending with retry logic
+- ✅ Transaction logging
 
 ---
 
