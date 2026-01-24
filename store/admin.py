@@ -2,6 +2,23 @@ from django.contrib import admin
 from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
 
 
+# Inline admins for Product relationships
+class ProductImageInline(admin.TabularInline):
+    """Inline admin for product images"""
+    model = ProductImage
+    extra = 1
+    fields = ('image', 'is_main', 'alt_text', 'variant_association', 'display_order')
+    ordering = ['-is_main', 'display_order']
+
+
+class ProductVideoInline(admin.TabularInline):
+    """Inline admin for product videos"""
+    model = ProductVideo
+    extra = 1
+    fields = ('video', 'title', 'description', 'duration', 'file_size')
+    readonly_fields = ('duration', 'file_size')
+
+
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'product_count', 'total_sales', 'is_active', 'created_at')
@@ -36,10 +53,11 @@ class ProductAdmin(admin.ModelAdmin):
     list_display = ('name', 'store', 'category', 'price', 'discounted_price', 'brand', 'stock', 'in_stock', 'approval_status', 'publish_status', 'created_at')
     list_filter = ('category', 'created_at', 'store', 'brand', 'approval_status', 'publish_status')
     search_fields = ('name', 'description', 'brand', 'tags')
-    readonly_fields = ('slug', 'created_at', 'updated_at', 'approved_by', 'approval_date')
+    readonly_fields = ('slug', 'created_at', 'updated_at', 'approved_by', 'approval_date', 'uuid')
+    inlines = [ProductImageInline, ProductVideoInline]
     fieldsets = (
         ('Basic Information', {
-            'fields': ('name', 'store', 'category', 'brand')
+            'fields': ('uuid', 'name', 'slug', 'store', 'category', 'brand')
         }),
         ('Details', {
             'fields': ('description', 'price', 'discounted_price', 'stock', 'image')
