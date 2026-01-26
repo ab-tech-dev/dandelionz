@@ -195,7 +195,7 @@ class DeliveryAgent(models.Model):
 
 class PaymentPIN(models.Model):
     """Model to store payment PIN for withdrawals (for vendors and customers)"""
-    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='payment_pin')
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='payment_pin', null=True, blank=True)
     pin_hash = models.CharField(max_length=255)  # Hashed PIN, never store plain text
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
