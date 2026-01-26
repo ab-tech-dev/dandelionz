@@ -102,6 +102,14 @@ urlpatterns = [
     # CUSTOMER
     path("customer/profile/", customer_profile, name="customer-profile"),
     path("customer/change-password/", customer_change_password, name="customer-change-password"),
+    
+    # CUSTOMER WALLET & PAYMENT
+    path("customer/wallet/", CustomerProfileViewSet.as_view({"get": "wallet_balance"}), name="customer-wallet-balance"),
+    path("customer/wallet/transactions/", CustomerProfileViewSet.as_view({"get": "wallet_transactions"}), name="customer-wallet-transactions"),
+    path("customer/wallet/withdraw/", CustomerProfileViewSet.as_view({"post": "request_withdrawal"}), name="customer-request-withdrawal"),
+    
+    # CUSTOMER PAYMENT SETTINGS & PIN
+    path("customer/payment-settings/pin/", CustomerProfileViewSet.as_view({"post": "set_payment_pin"}), name="customer-set-pin"),
 
     # VENDOR
     path("vendor/profile/", vendor_profile, name="vendor-profile"),

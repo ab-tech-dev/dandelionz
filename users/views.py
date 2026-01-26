@@ -276,6 +276,241 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             status=status.HTTP_204_NO_CONTENT,
         )
 
+    # ============================
+    # WALLET & PAYMENT
+    # ============================
+
+    @swagger_auto_schema(
+        operation_id="customer_wallet_balance",
+        operation_summary="Get Wallet Balance",
+        operation_description="Retrieve customer's current wallet balance and transaction summary.",
+        tags=["Customer Wallet"],
+        responses={
+            200: openapi.Response(
+                "Wallet balance retrieved successfully",
+                WalletBalanceSerializer()
+            ),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def wallet_balance(self, request):
+        """Get wallet balance and transaction summary"""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from django.db.models import Sum
+        from django.utils import timezone
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        
+        # Calculate totals
+        total_credits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        total_debits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='DEBIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        # This month earnings
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        this_month_earnings = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            created_at__gte=month_start
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        data = {
+            'balance': float(wallet.balance),
+            'total_credits': float(total_credits),
+            'total_debits': float(total_debits),
+            'this_month_earnings': float(this_month_earnings),
+        }
+        
+        return Response(
+            {"success": True, "data": data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="customer_wallet_transactions",
+        operation_summary="Get Transaction History",
+        operation_description="Retrieve paginated wallet transaction history.",
+        tags=["Customer Wallet"],
+        manual_parameters=[
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+            openapi.Parameter('type', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='credit or debit'),
+        ],
+        responses={
+            200: openapi.Response(
+                "Transactions retrieved successfully",
+            ),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def wallet_transactions(self, request):
+        """Get wallet transaction history"""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from rest_framework.pagination import LimitOffsetPagination
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        
+        # Filter by type if provided
+        transactions = WalletTransaction.objects.filter(wallet=wallet)
+        txn_type = request.query_params.get('type')
+        if txn_type and txn_type.upper() in ['CREDIT', 'DEBIT']:
+            transactions = transactions.filter(transaction_type=txn_type.upper())
+        
+        # Paginate
+        paginator = LimitOffsetPagination()
+        paginated_txns = paginator.paginate_queryset(
+            transactions.order_by('-created_at'),
+            request
+        )
+        
+        serializer = WalletTransactionListSerializer(paginated_txns, many=True)
+        
+        return paginator.get_paginated_response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_id="customer_set_payment_pin",
+        operation_summary="Set/Change Payment PIN",
+        operation_description="Set or change the 4-digit payment PIN for withdrawals.",
+        tags=["Customer Payment Settings"],
+        request_body=PaymentPINSerializer,
+        responses={
+            200: openapi.Response("PIN set successfully"),
+            400: openapi.Response("Invalid PIN"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def set_payment_pin(self, request):
+        """Set or change payment PIN"""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = PaymentPINSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        from users.models import PaymentPIN
+        
+        # Create or update PIN
+        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
+        pin_obj.set_pin(serializer.validated_data['pin'])
+        
+        message = "PIN set successfully" if created else "PIN changed successfully"
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="customer_request_withdrawal",
+        operation_summary="Request Withdrawal",
+        operation_description="Initiate a withdrawal request from customer's wallet balance.",
+        tags=["Customer Wallet"],
+        request_body=WithdrawalRequestSerializer,
+        responses={
+            200: openapi.Response(
+                "Withdrawal request submitted",
+                WithdrawalResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def request_withdrawal(self, request):
+        """Request a withdrawal"""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = WithdrawalRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify PIN
+        from users.models import PaymentPIN
+        try:
+            pin_obj = PaymentPIN.objects.get(user=request.user)
+            if not pin_obj.verify_pin(serializer.validated_data['pin']):
+                return Response(
+                    {"success": False, "message": "Invalid PIN"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except PaymentPIN.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Payment PIN not set. Please set your PIN first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Check balance
+        from transactions.models import Wallet
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        amount = serializer.validated_data['amount']
+        
+        if wallet.balance < amount:
+            return Response(
+                {"success": False, "message": "Insufficient balance"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Create withdrawal request
+        from users.models import PayoutRequest
+        import uuid as uuid_lib
+        
+        # Create withdrawal request for customer
+        payout = PayoutRequest.objects.create(
+            user=request.user,
+            vendor=None,
+            amount=amount,
+            bank_name=request.data.get('bank_name', ''),
+            account_number=request.data.get('account_number', ''),
+            account_name=request.data.get('account_name', ''),
+            recipient_code='',
+            reference=f"WTH-{uuid_lib.uuid4().hex[:12].upper()}",
+        )
+        
+        # Debit wallet
+        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        
+        message = f"Withdrawal request of ₦{amount:,.2f} is being processed."
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
 
 
 
@@ -1079,7 +1314,7 @@ class VendorWalletViewSet(viewsets.ViewSet):
         # Verify PIN
         from users.models import PaymentPIN
         try:
-            pin_obj = PaymentPIN.objects.get(vendor=vendor)
+            pin_obj = PaymentPIN.objects.get(user=request.user)
             if not pin_obj.verify_pin(serializer.validated_data['pin']):
                 return Response(
                     {"success": False, "message": "Invalid PIN"},
@@ -1235,7 +1470,7 @@ class VendorPaymentSettingsViewSet(viewsets.ViewSet):
         from users.models import PaymentPIN
         
         # Create or update PIN
-        pin_obj, created = PaymentPIN.objects.get_or_create(vendor=vendor)
+        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
         pin_obj.set_pin(serializer.validated_data['pin'])
         
         message = "PIN set successfully" if created else "PIN changed successfully"

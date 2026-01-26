@@ -194,8 +194,8 @@ class DeliveryAgent(models.Model):
 
 
 class PaymentPIN(models.Model):
-    """Model to store vendor payment PIN for withdrawals"""
-    vendor = models.OneToOneField(Vendor, on_delete=models.CASCADE, related_name='payment_pin')
+    """Model to store payment PIN for withdrawals (for vendors and customers)"""
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='payment_pin')
     pin_hash = models.CharField(max_length=255)  # Hashed PIN, never store plain text
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -216,7 +216,7 @@ class PaymentPIN(models.Model):
 
 
 class PayoutRequest(models.Model):
-    """Model to track withdrawal requests from vendors"""
+    """Model to track withdrawal requests from vendors and customers"""
     STATUS_CHOICES = [
         ('pending', 'Pending'),
         ('processing', 'Processing'),
@@ -225,7 +225,8 @@ class PayoutRequest(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     
-    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='payout_requests')
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='payout_requests', null=True, blank=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='withdrawal_requests', null=True, blank=True)
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     status = models.CharField(
         max_length=20,
@@ -243,12 +244,15 @@ class PayoutRequest(models.Model):
     failure_reason = models.TextField(blank=True, null=True)
     
     def __str__(self):
-        return f"Payout {self.id} - {self.vendor.store_name} - {self.status}"
+        if self.vendor:
+            return f"Payout {self.id} - {self.vendor.store_name} - {self.status}"
+        else:
+            return f"Withdrawal {self.id} - {self.user.email} - {self.status}"
     
     class Meta:
         ordering = ['-created_at']
         indexes = [
             models.Index(fields=['vendor', 'status']),
-            models.Index(fields=['created_at']),
+            models.Index(fields=['user', 'status']),
         ]
 
