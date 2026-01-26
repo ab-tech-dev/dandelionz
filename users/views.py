@@ -944,23 +944,32 @@ class VendorViewSet(viewsets.ViewSet):
         from transactions.models import Order
         from rest_framework.pagination import LimitOffsetPagination
 
-        # Get all orders for this vendor
+        # Get all orders for this vendor - use distinct('order_id') to avoid duplicates from joins
         orders = Order.objects.filter(
             order_items__product__store=vendor
-        ).select_related('customer__user').prefetch_related('order_items__product').distinct()
+        ).select_related('customer__user').prefetch_related('order_items__product').distinct('order_id').order_by('order_id')
 
         # Filter by status if provided
         status_filter = request.query_params.get('status')
         if status_filter:
             orders = orders.filter(status=status_filter)
 
-        # Sort orders - default by -created_at (newest first)
+        # Sort orders - default by -ordered_at (newest first)
         ordering = request.query_params.get('ordering', '-ordered_at')
-        orders = orders.order_by(ordering)
+        try:
+            orders = orders.order_by(ordering)
+        except Exception as e:
+            logger.error(f"Invalid ordering parameter: {ordering}. Error: {str(e)}")
+            orders = orders.order_by('-ordered_at')
 
         # Paginate results
         paginator = LimitOffsetPagination()
         paginated_orders = paginator.paginate_queryset(orders, request)
+
+        if paginated_orders is None:
+            # Handle case where pagination fails
+            serializer = VendorOrderListItemSerializer(orders, many=True)
+            return Response(serializer.data)
 
         # Serialize and return
         serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
