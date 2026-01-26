@@ -38,10 +38,11 @@ class ProductFilterSet(FilterSet):
     min_price = NumberFilter(field_name='price', lookup_expr='gte', label='Minimum Price')
     max_price = NumberFilter(field_name='price', lookup_expr='lte', label='Maximum Price')
     store = CharFilter(field_name='store__id', lookup_expr='exact')
+    category = CharFilter(field_name='category__slug', lookup_expr='iexact', label='Category Slug')
     
     class Meta:
         model = Product
-        fields = ['store', 'category']
+        fields = ['store']
 
 
 # ---------------------------
