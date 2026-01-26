@@ -2,6 +2,9 @@ from django.urls import path, re_path
 from .views import (
     CustomerProfileViewSet,
     VendorViewSet,
+    VendorWalletViewSet,
+    VendorPaymentSettingsViewSet,
+    VendorAccountViewSet,
     AdminProfileViewSet,
     AdminVendorViewSet,
     AdminMarketplaceViewSet,
@@ -107,8 +110,23 @@ urlpatterns = [
     path("vendor/products/", VendorViewSet.as_view({"get": "list_products"}), name="vendor-list-products"),
     path("vendor/products/<slug:slug>/", VendorViewSet.as_view({"put": "update_product", "patch": "update_product", "delete": "delete_product"}), name="vendor-product-detail"),
     path("vendor/orders/", VendorViewSet.as_view({"get": "orders"}), name="vendor-orders"),
+    path("vendor/orders/list/", VendorViewSet.as_view({"get": "list_orders"}), name="vendor-orders-list"),
+    re_path(r"^vendor/orders/(?P<order_uuid>[^/]+)/$", VendorViewSet.as_view({"get": "order_detail"}), name="vendor-order-detail"),
     path("vendor/analytics/", VendorViewSet.as_view({"get": "analytics"}), name="vendor-analytics"),
     path("vendor/notifications/", VendorViewSet.as_view({"get": "notifications"}), name="vendor-notifications"),
+    
+    # VENDOR WALLET & PAYMENT
+    path("vendor/wallet/", VendorWalletViewSet.as_view({"get": "wallet_balance"}), name="vendor-wallet-balance"),
+    path("vendor/wallet/transactions/", VendorWalletViewSet.as_view({"get": "wallet_transactions"}), name="vendor-wallet-transactions"),
+    path("vendor/wallet/withdraw/", VendorWalletViewSet.as_view({"post": "request_withdrawal"}), name="vendor-request-withdrawal"),
+    
+    # VENDOR PAYMENT SETTINGS & PIN
+    path("vendor/payment-settings/", VendorPaymentSettingsViewSet.as_view({"get": "payment_settings", "put": "update_payment_settings"}), name="vendor-payment-settings"),
+    path("vendor/payment-settings/pin/", VendorPaymentSettingsViewSet.as_view({"post": "set_payment_pin"}), name="vendor-set-pin"),
+    path("vendor/payment-settings/pin/forgot/", VendorPaymentSettingsViewSet.as_view({"post": "forgot_payment_pin"}), name="vendor-forgot-pin"),
+    
+    # VENDOR ACCOUNT
+    path("vendor/account/", VendorAccountViewSet.as_view({"delete": "delete_account"}), name="vendor-delete-account"),
 
     # ADMIN PROFILE
     path("admin/profile/", admin_profile, name="admin-profile"),
@@ -136,6 +154,7 @@ urlpatterns = [
 
     # ADMIN ANALYTICS
     path("admin/analytics/", admin_analytics, name="admin-analytics"),
+    path("admin/analytics/detailed/", AdminAnalyticsViewSet.as_view({"get": "detailed"}), name="admin-analytics-detailed"),
 
     # DELIVERY AGENT
     path("delivery/profile/", delivery_profile, name="delivery-profile"),

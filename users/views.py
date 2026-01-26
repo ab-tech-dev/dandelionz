@@ -13,6 +13,7 @@ from users.serializers import (
     CustomerProfileUpdateSerializer,
     ChangePasswordSerializer,
     AdminAnalyticsSerializer,
+    AdminDetailedAnalyticsSerializer,
     AdminFinancePayoutSerializer,
     AdminFinancePaymentSerializer,
     AdminOrderActionSerializer,
@@ -42,6 +43,18 @@ from users.serializers import (
     DeliveryAgentStatsSerializer,
     DeliveryAgentCreateSerializer,
     DeliveryAgentListSerializer,
+    WalletBalanceSerializer,
+    WalletTransactionListSerializer,
+    WithdrawalRequestSerializer,
+    WithdrawalResponseSerializer,
+    PaymentSettingsSerializer,
+    PaymentSettingsUpdateSerializer,
+    PaymentPINSerializer,
+    PINResetRequestSerializer,
+    PayoutRequestSerializer,
+    VendorOrderSummarySerializer,
+    VendorOrderListItemSerializer,
+    VendorOrderDetailSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
@@ -636,7 +649,138 @@ class VendorViewSet(viewsets.ViewSet):
             "canceled": orders.filter(status=Order.Status.CANCELED).count(),
         }
 
-        return Response({"success": True, "data": data})
+        serializer = VendorOrderSummarySerializer(data)
+        return Response({"success": True, "data": serializer.data})
+
+    @swagger_auto_schema(
+        operation_id="vendor_orders_list",
+        operation_summary="List Vendor Orders",
+        operation_description="Get paginated list of vendor's orders with optional filtering and sorting.",
+        tags=["Vendor Orders"],
+        manual_parameters=[
+            openapi.Parameter(
+                'limit',
+                openapi.IN_QUERY,
+                description='Number of results to return per page',
+                type=openapi.TYPE_INTEGER,
+                required=False,
+            ),
+            openapi.Parameter(
+                'offset',
+                openapi.IN_QUERY,
+                description='Number of results to skip',
+                type=openapi.TYPE_INTEGER,
+                required=False,
+            ),
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                description='Filter by order status (PENDING, PAID, SHIPPED, DELIVERED, CANCELED)',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'ordering',
+                openapi.IN_QUERY,
+                description='Sort results. Default: -created_at (newest first). Use -created_at or created_at',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+        ],
+        responses={
+            200: openapi.Response(
+                "Orders retrieved successfully",
+                VendorOrderListItemSerializer(many=True)
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"], url_path="list")
+    def list_orders(self, request):
+        """Get paginated list of vendor's orders"""
+        vendor = self.get_vendor(request)
+
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from transactions.models import Order
+        from rest_framework.pagination import LimitOffsetPagination
+
+        # Get all orders for this vendor
+        orders = Order.objects.filter(
+            order_items__product__store=vendor
+        ).select_related('customer__user').prefetch_related('order_items__product').distinct()
+
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            orders = orders.filter(status=status_filter)
+
+        # Sort orders - default by -created_at (newest first)
+        ordering = request.query_params.get('ordering', '-ordered_at')
+        orders = orders.order_by(ordering)
+
+        # Paginate results
+        paginator = LimitOffsetPagination()
+        paginated_orders = paginator.paginate_queryset(orders, request)
+
+        # Serialize and return
+        serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
+        return paginator.get_paginated_response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_id="vendor_order_detail",
+        operation_summary="Get Vendor Order Details",
+        operation_description="Get complete details for a specific order including itemized list of products.",
+        tags=["Vendor Orders"],
+        responses={
+            200: openapi.Response(
+                "Order details retrieved successfully",
+                VendorOrderDetailSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+            404: openapi.Response("Order not found"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"], url_path=r"(?P<order_uuid>[^/.]+)")
+    def order_detail(self, request, order_uuid=None):
+        """Get detailed information for a specific order"""
+        vendor = self.get_vendor(request)
+
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        from transactions.models import Order
+
+        try:
+            # Get the order and ensure vendor has products in it
+            order = Order.objects.filter(
+                order_items__product__store=vendor,
+                order_id=order_uuid
+            ).select_related('customer__user').prefetch_related('order_items__product').distinct().first()
+
+            if not order:
+                return Response(
+                    {"success": False, "message": "Order not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            serializer = VendorOrderDetailSerializer(order)
+            return Response({"success": True, "data": serializer.data})
+
+        except Exception as e:
+            return Response(
+                {"success": False, "message": str(e)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
     # ============================
     # ANALYTICS & INSIGHTS
@@ -757,6 +901,438 @@ from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from users.services.profile_resolver import ProfileResolver
+
+
+# ============================
+# VENDOR WALLET & PAYMENT VIEWS
+# ============================
+
+class VendorWalletViewSet(viewsets.ViewSet):
+    """
+    ViewSet for managing vendor wallet, transactions, and withdrawals.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_vendor(self, request):
+        """Returns vendor profile or None if user is not a vendor."""
+        return ProfileResolver.resolve_vendor(request.user)
+
+    @swagger_auto_schema(
+        operation_id="vendor_wallet_balance",
+        operation_summary="Get Wallet Balance",
+        operation_description="Retrieve vendor's current wallet balance and earnings summary.",
+        tags=["Vendor Wallet"],
+        responses={
+            200: openapi.Response(
+                "Wallet balance retrieved successfully",
+                WalletBalanceSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def wallet_balance(self, request):
+        """Get wallet balance and earnings summary with available vs pending breakdown"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from django.db.models import Sum
+        from django.utils import timezone
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        
+        # Calculate available and pending balances
+        available_balance = vendor.get_available_balance()
+        pending_balance = vendor.get_pending_balance()
+        total_earnings = vendor.get_total_earnings()
+        
+        # Calculate totals
+        total_credits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        total_debits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='DEBIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        # This month earnings (from completed deliveries)
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        this_month_earnings = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            created_at__gte=month_start
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        # Count total withdrawals
+        from users.models import PayoutRequest
+        total_withdrawals = PayoutRequest.objects.filter(
+            vendor=vendor,
+            status='successful'
+        ).count()
+        
+        # Get pending order count
+        pending_order_count = vendor.get_pending_order_count()
+        
+        data = {
+            'withdrawable_balance': float(available_balance),
+            'available_balance': float(available_balance),
+            'pending_balance': float(pending_balance),
+            'pending_order_count': pending_order_count,
+            'total_earnings': float(total_earnings),
+            'total_credits': float(total_credits),
+            'total_debits': float(total_debits),
+            'total_withdrawals': total_withdrawals,
+            'this_month_earnings': float(this_month_earnings),
+        }
+        
+        return Response(
+            {"success": True, "data": data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="vendor_wallet_transactions",
+        operation_summary="Get Transaction History",
+        operation_description="Retrieve paginated wallet transaction history.",
+        tags=["Vendor Wallet"],
+        manual_parameters=[
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+            openapi.Parameter('type', openapi.IN_QUERY, type=openapi.TYPE_STRING, description='credit or debit'),
+        ],
+        responses={
+            200: openapi.Response(
+                "Transactions retrieved successfully",
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def wallet_transactions(self, request):
+        """Get wallet transaction history"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from rest_framework.pagination import LimitOffsetPagination
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        
+        # Filter by type if provided
+        transactions = WalletTransaction.objects.filter(wallet=wallet)
+        txn_type = request.query_params.get('type')
+        if txn_type and txn_type.upper() in ['CREDIT', 'DEBIT']:
+            transactions = transactions.filter(transaction_type=txn_type.upper())
+        
+        # Paginate
+        paginator = LimitOffsetPagination()
+        paginated_txns = paginator.paginate_queryset(
+            transactions.order_by('-created_at'),
+            request
+        )
+        
+        serializer = WalletTransactionListSerializer(paginated_txns, many=True)
+        
+        return paginator.get_paginated_response(serializer.data)
+
+    @swagger_auto_schema(
+        operation_id="vendor_request_withdrawal",
+        operation_summary="Request Withdrawal",
+        operation_description="Initiate a withdrawal request to vendor's bank account.",
+        tags=["Vendor Wallet"],
+        request_body=WithdrawalRequestSerializer,
+        responses={
+            200: openapi.Response(
+                "Withdrawal request submitted",
+                WithdrawalResponseSerializer()
+            ),
+            400: openapi.Response("Invalid request"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def request_withdrawal(self, request):
+        """Request a withdrawal"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = WithdrawalRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify PIN
+        from users.models import PaymentPIN
+        try:
+            pin_obj = PaymentPIN.objects.get(vendor=vendor)
+            if not pin_obj.verify_pin(serializer.validated_data['pin']):
+                return Response(
+                    {"success": False, "message": "Invalid PIN"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except PaymentPIN.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Payment PIN not set. Please set your PIN first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Check balance
+        from transactions.models import Wallet
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        amount = serializer.validated_data['amount']
+        
+        if wallet.balance < amount:
+            return Response(
+                {"success": False, "message": "Insufficient balance"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Create withdrawal request
+        from users.models import PayoutRequest
+        import uuid as uuid_lib
+        
+        payout = PayoutRequest.objects.create(
+            vendor=vendor,
+            amount=amount,
+            bank_name=vendor.bank_name,
+            account_number=vendor.account_number,
+            account_name=vendor.account_name or '',
+            recipient_code=vendor.recipient_code or '',
+            reference=f"WTH-{uuid_lib.uuid4().hex[:12].upper()}",
+        )
+        
+        # Debit wallet
+        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        
+        message = f"Withdrawal request of ₦{amount:,.2f} is being processed."
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+
+class VendorPaymentSettingsViewSet(viewsets.ViewSet):
+    """
+    ViewSet for managing vendor payment settings and PIN.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_vendor(self, request):
+        """Returns vendor profile or None if user is not a vendor."""
+        return ProfileResolver.resolve_vendor(request.user)
+
+    @swagger_auto_schema(
+        operation_id="vendor_payment_settings_get",
+        operation_summary="Get Payment Settings",
+        operation_description="Retrieve vendor's payment settings and bank account details.",
+        tags=["Vendor Payment Settings"],
+        responses={
+            200: openapi.Response(
+                "Payment settings retrieved",
+                PaymentSettingsSerializer()
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def payment_settings(self, request):
+        """Get payment settings"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = PaymentSettingsSerializer(vendor)
+        return Response(
+            {"success": True, "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="vendor_payment_settings_update",
+        operation_summary="Update Payment Settings",
+        operation_description="Update vendor's bank account details.",
+        tags=["Vendor Payment Settings"],
+        request_body=PaymentSettingsUpdateSerializer,
+        responses={
+            200: openapi.Response("Settings updated successfully"),
+            400: openapi.Response("Invalid data"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def update_payment_settings(self, request):
+        """Update payment settings"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = PaymentSettingsUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Update vendor fields
+        if 'bank_name' in serializer.validated_data:
+            vendor.bank_name = serializer.validated_data['bank_name']
+        if 'account_number' in serializer.validated_data:
+            vendor.account_number = serializer.validated_data['account_number']
+        if 'account_name' in serializer.validated_data:
+            vendor.account_name = serializer.validated_data['account_name']
+        
+        vendor.save()
+        
+        return Response(
+            {"success": True, "message": "Payment settings updated successfully"},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="vendor_set_payment_pin",
+        operation_summary="Set/Change Payment PIN",
+        operation_description="Set or change the 4-digit payment PIN for withdrawals.",
+        tags=["Vendor Payment Settings"],
+        request_body=PaymentPINSerializer,
+        responses={
+            200: openapi.Response("PIN set successfully"),
+            400: openapi.Response("Invalid PIN"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def set_payment_pin(self, request):
+        """Set or change payment PIN"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = PaymentPINSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        from users.models import PaymentPIN
+        
+        # Create or update PIN
+        pin_obj, created = PaymentPIN.objects.get_or_create(vendor=vendor)
+        pin_obj.set_pin(serializer.validated_data['pin'])
+        
+        message = "PIN set successfully" if created else "PIN changed successfully"
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="vendor_forgot_payment_pin",
+        operation_summary="Request PIN Reset",
+        operation_description="Send a PIN reset link to the vendor's registered email.",
+        tags=["Vendor Payment Settings"],
+        responses={
+            200: openapi.Response("Reset link sent"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def forgot_payment_pin(self, request):
+        """Request PIN reset"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # TODO: In production, generate a token and send reset email
+        # For now, just send a success response
+        
+        return Response(
+            {
+                "success": True,
+                "message": "A PIN reset link has been sent to your email."
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class VendorAccountViewSet(viewsets.ViewSet):
+    """
+    ViewSet for vendor account management operations.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get_vendor(self, request):
+        """Returns vendor profile or None if user is not a vendor."""
+        return ProfileResolver.resolve_vendor(request.user)
+
+    @swagger_auto_schema(
+        operation_id="vendor_delete_account",
+        operation_summary="Delete Vendor Account",
+        operation_description="Permanently delete the vendor account. Requires password confirmation.",
+        tags=["Vendor Account"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'password': openapi.Schema(type=openapi.TYPE_STRING, description='Current password'),
+            },
+            required=['password']
+        ),
+        responses={
+            204: openapi.Response("Account deleted successfully"),
+            400: openapi.Response("Invalid password"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def delete_account(self, request):
+        """Delete vendor account"""
+        vendor = self.get_vendor(request)
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        # Verify password
+        password = request.data.get('password')
+        if not password:
+            return Response(
+                {"success": False, "message": "Password is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        if not request.user.check_password(password):
+            return Response(
+                {"success": False, "message": "Invalid password"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Delete user and related data (cascade)
+        user = request.user
+        user.delete()
+        
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AdminBaseViewSet(viewsets.ViewSet):
@@ -1361,17 +1937,181 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
 
         from authentication.models import CustomUser
         from users.models import Vendor
-        from store.models import Product
+        from decimal import Decimal
+        
+        # Count total vendors
+        total_vendors = Vendor.objects.count()
+        
+        # Count total orders
+        total_orders = Order.objects.count()
+        
+        # Count pending orders (not delivered or canceled)
+        pending_orders = Order.objects.exclude(
+            status__in=[Order.Status.DELIVERED, Order.Status.CANCELED, Order.Status.RETURNED]
+        ).count()
+        
+        # Calculate total revenue from delivered and paid orders
+        delivered_paid_orders = Order.objects.filter(
+            status=Order.Status.DELIVERED,
+            payment_status='PAID'
+        )
+        total_revenue = Decimal('0.00')
+        for order in delivered_paid_orders:
+            total_revenue += order.total_price
         
         data = {
-            "total_users": CustomUser.objects.filter(role='CUSTOMER').count(),
-            "total_vendors": Vendor.objects.count(),
-            "total_orders": Order.objects.count(),
-            "total_products": Product.objects.count(),
+            "total_revenue": total_revenue,
+            "total_orders": total_orders,
+            "pending_orders": pending_orders,
+            "total_vendors": total_vendors,
         }
 
         serializer = AdminAnalyticsSerializer(data)
         return Response({"success": True, "data": serializer.data})
+
+    @swagger_auto_schema(
+        operation_id="admin_analytics_detailed",
+        operation_summary="Admin Detailed Analytics",
+        operation_description="Get detailed admin analytics including sales chart data and order status breakdown.",
+        tags=["Analytics"],
+        manual_parameters=[
+            openapi.Parameter(
+                'sales_period',
+                openapi.IN_QUERY,
+                description='Sales period: daily, weekly, or annually (default: annually)',
+                type=openapi.TYPE_STRING,
+                required=False,
+            )
+        ],
+        responses={
+            200: openapi.Response(
+                "Detailed analytics data retrieved successfully",
+                AdminDetailedAnalyticsSerializer()
+            ),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"], url_path="detailed")
+    def detailed(self, request):
+        """Get detailed analytics with sales chart and order status breakdown"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from authentication.models import CustomUser
+        from users.models import Vendor
+        from decimal import Decimal
+        from django.db.models import Sum, Q
+        from django.utils import timezone
+        from datetime import timedelta
+        
+        sales_period = request.query_params.get('sales_period', 'annually')
+        
+        # Get total counts
+        total_users = CustomUser.objects.filter(role='CUSTOMER').count()
+        total_vendors = Vendor.objects.count()
+        total_orders = Order.objects.count()
+        
+        # Calculate total sales from delivered and paid orders
+        delivered_paid_orders = Order.objects.filter(
+            status=Order.Status.DELIVERED,
+            payment_status='PAID'
+        )
+        total_sales = Decimal('0.00')
+        for order in delivered_paid_orders:
+            total_sales += order.total_price
+        
+        # Generate sales chart data based on sales_period
+        sales_chart_data = self._generate_sales_chart(sales_period)
+        
+        # Get order status breakdown
+        order_stats = {
+            "completed": Order.objects.filter(status=Order.Status.DELIVERED).count(),
+            "pending": Order.objects.exclude(
+                status__in=[Order.Status.DELIVERED, Order.Status.CANCELED, Order.Status.RETURNED]
+            ).count(),
+            "cancelled": Order.objects.filter(status=Order.Status.CANCELED).count(),
+            "returned": Order.objects.filter(status=Order.Status.RETURNED).count(),
+        }
+        
+        data = {
+            "total_sales": total_sales,
+            "total_vendors": total_vendors,
+            "total_orders": total_orders,
+            "total_users": total_users,
+            "sales_chart_data": sales_chart_data,
+            "order_stats": order_stats,
+        }
+        
+        serializer = AdminDetailedAnalyticsSerializer(data)
+        return Response({"success": True, "data": serializer.data})
+
+    def _generate_sales_chart(self, period):
+        """Generate sales chart data based on the specified period"""
+        from decimal import Decimal
+        from django.utils import timezone
+        from datetime import timedelta
+        from django.db.models import Sum
+        
+        now = timezone.now()
+        chart_data = []
+        
+        if period == 'daily':
+            # Last 7 days
+            for i in range(6, -1, -1):
+                day = now - timedelta(days=i)
+                start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_of_day = day.replace(hour=23, minute=59, second=59, microsecond=999999)
+                
+                sales = Order.objects.filter(
+                    status=Order.Status.DELIVERED,
+                    payment_status='PAID',
+                    delivered_at__range=[start_of_day, end_of_day]
+                ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+                
+                chart_data.append({
+                    "period": day.strftime('%Y-%m-%d'),
+                    "sales": sales
+                })
+        
+        elif period == 'weekly':
+            # Last 12 weeks
+            for i in range(11, -1, -1):
+                week_start = now - timedelta(weeks=i+1)
+                week_end = week_start + timedelta(weeks=1)
+                
+                sales = Order.objects.filter(
+                    status=Order.Status.DELIVERED,
+                    payment_status='PAID',
+                    delivered_at__range=[week_start, week_end]
+                ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+                
+                # Format as "Week 1" or date range
+                chart_data.append({
+                    "period": f"Week of {week_start.strftime('%Y-%m-%d')}",
+                    "sales": sales
+                })
+        
+        else:  # annually (default)
+            # Last 3 years
+            for i in range(2, -1, -1):
+                year = now.year - i
+                year_start = timezone.make_aware(timezone.datetime(year, 1, 1))
+                year_end = timezone.make_aware(timezone.datetime(year, 12, 31, 23, 59, 59))
+                
+                sales = Order.objects.filter(
+                    status=Order.Status.DELIVERED,
+                    payment_status='PAID',
+                    delivered_at__range=[year_start, year_end]
+                ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+                
+                chart_data.append({
+                    "period": str(year),
+                    "sales": sales
+                })
+        
+        return chart_data
 
 
 # =====================================================
@@ -1532,8 +2272,20 @@ class DeliveryAgentViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
+        # Mark order as delivered
         order.status = Order.Status.DELIVERED
-        order.save(update_fields=['status', 'updated_at'])
+        order.delivered_at = timezone.now()
+        order.save(update_fields=['status', 'delivered_at', 'updated_at'])
+        
+        # Credit vendors for delivered order (only if not already credited)
+        if not order.vendors_credited:
+            from transactions.views import credit_vendors_for_order
+            try:
+                credit_vendors_for_order(order)
+                order.vendors_credited = True
+                order.save(update_fields=['vendors_credited'])
+            except Exception as e:
+                logger.error(f"Failed to credit vendors for delivered order {order.order_id}: {e}")
         
         # Create notification for customer
         Notification.objects.create(

@@ -179,6 +179,14 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '100/hour',
+        'user': '1000/hour',
+        # Stricter limits for sensitive operations
+        'payment_verification': '5/min',  # Payment verification: 5 requests per minute
+        'installment_verification': '5/min',  # Installment payment verification: 5 requests per minute
+        'checkout': '10/min',  # Checkout endpoint: 10 requests per minute
+    }
 }
 
 # Celery (Redis on VPS)

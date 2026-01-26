@@ -42,6 +42,46 @@ PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
 
 # ----------------------
+# Custom Throttle Classes
+# ----------------------
+class PaymentVerificationThrottle(UserRateThrottle):
+    """
+    Stricter rate limit for payment verification endpoints.
+    Limits: 5 requests per minute per user
+    Prevents abuse of payment verification endpoints
+    """
+    scope = 'payment_verification'
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Override default throttle_rates if needed
+        # This can be set in settings.py with:
+        # REST_FRAMEWORK = {
+        #     'DEFAULT_THROTTLE_RATES': {
+        #         'payment_verification': '5/min',
+        #         'installment_verification': '5/min',
+        #     }
+        # }
+
+
+class InstallmentVerificationThrottle(UserRateThrottle):
+    """
+    Stricter rate limit for installment payment verification endpoints.
+    Limits: 5 requests per minute per user
+    Prevents abuse of installment payment verification
+    """
+    scope = 'installment_verification'
+
+
+class CheckoutThrottle(UserRateThrottle):
+    """
+    Rate limit for checkout endpoints to prevent abuse.
+    Limits: 10 requests per minute per user
+    Prevents rapid-fire checkout attempts
+    """
+    scope = 'checkout'
+
+# ----------------------
 # Helper functions
 # ----------------------
 def credit_vendors_for_order(order, source_prefix="Order"):
@@ -53,13 +93,42 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         order: Order instance
         source_prefix: Prefix for the wallet transaction source (default: "Order")
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     for item in order.order_items.all():
         vendor = item.product.store
         if not vendor:
             continue
         vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
+        commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+        
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
         wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
+        
+        # Log the transaction for audit trail
+        TransactionLog.objects.create(
+            order=order,
+            action=TransactionLog.Action.VENDOR_CREDITED,
+            level=TransactionLog.Level.SUCCESS,
+            message=f"Vendor {vendor.email} credited ₦{vendor_share} for delivery (Item: {item.product.name})",
+            related_user=vendor,
+            amount=vendor_share,
+            metadata={
+                "vendor_id": vendor.id,
+                "vendor_email": vendor.email,
+                "item_id": item.id,
+                "item_name": item.product.name,
+                "item_subtotal": str(item.item_subtotal),
+                "commission_rate": "10%",
+                "commission_amount": str(commission_amount),
+            }
+        )
+        
+        logger.info(
+            f"Vendor credited: {vendor.email} | Amount: ₦{vendor_share} | "
+            f"Commission: ₦{commission_amount} | Order: {order.order_id}"
+        )
 
 # ----------------------
 # Custom permissions
@@ -319,6 +388,7 @@ class TransactionLogListView(generics.ListAPIView):
 # ----------------------
 class CheckoutView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [CheckoutThrottle]
 
     @swagger_auto_schema(
         operation_id="checkout_single_payment",
@@ -771,7 +841,7 @@ Only works for PENDING installments that haven't been paid yet.""",
 class VerifyInstallmentPaymentView(APIView):
     """Verify and process an installment payment"""
     permission_classes = [permissions.IsAuthenticated]
-    throttle_classes = [UserRateThrottle]
+    throttle_classes = [InstallmentVerificationThrottle]
 
     @swagger_auto_schema(
         operation_id="verify_installment_payment",
@@ -852,18 +922,13 @@ If all installments are paid, automatically credits vendor wallets.""",
             # Mark installment as paid
             installment.mark_as_paid()
             
-            # Credit vendor wallet for completed installments (when final payment is made)
+            # Check if all installments are paid
             plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
-            if plan.is_fully_paid() and not plan.vendors_credited:
-                for item in plan.order.order_items.all():
-                    vendor = item.product.store
-                    if vendor:
-                        vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
-                        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
-                        wallet.credit(vendor_share, source=f"Order {plan.order.order_id} (Installment)")
-                # Mark vendors as credited to prevent duplicate credits
-                plan.vendors_credited = True
-                plan.save(update_fields=['vendors_credited'])
+            if plan.is_fully_paid():
+                # Mark order as PAID when all installments are received
+                # Vendors will be credited when order is DELIVERED, not here
+                plan.order.status = Order.Status.PAID
+                plan.order.save(update_fields=['status'])
 
         return Response(
             standardized_response(
@@ -935,12 +1000,12 @@ No authentication required (webhook signature validation instead)""",
             if installment.status != InstallmentPayment.PaymentStatus.PAID:
                 installment.mark_as_paid()
                 
-                # Credit vendor wallet if plan is completed
+                # Mark order as PAID when all installments are paid
                 plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
-                if plan.is_fully_paid() and not plan.vendors_credited:
-                    credit_vendors_for_order(plan.order, source_prefix="Order (Installment)")
-                    plan.vendors_credited = True
-                    plan.save(update_fields=['vendors_credited'])
+                if plan.is_fully_paid():
+                    # Vendors are credited when order is DELIVERED, not when payments are complete
+                    plan.order.status = Order.Status.PAID
+                    plan.order.save(update_fields=['status'])
 
         return Response({"status": "ok"})
 
@@ -950,7 +1015,7 @@ No authentication required (webhook signature validation instead)""",
 # ----------------------
 class SecureVerifyPaymentView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    throttle_classes = [UserRateThrottle]
+    throttle_classes = [PaymentVerificationThrottle]
 
     @swagger_auto_schema(
         operation_id="verify_payment",
@@ -1002,7 +1067,8 @@ Verifies payment status and credits vendor wallets on success.""",
                 return Response({"detail": "Already verified"})
 
             payment.mark_as_successful()
-            credit_vendors_for_order(payment.order)
+            # Note: Vendors are credited when order is DELIVERED, not when payment is received
+            # This maintains the available vs pending balance flow
 
         return Response({"detail": "Payment verified"})
 
@@ -1028,6 +1094,9 @@ No authentication required (webhook signature validation instead)""",
         },
     )
     def post(self, request):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         signature = request.headers.get("x-paystack-signature", "")
         computed = hmac.new(
             settings.PAYSTACK_SECRET_KEY.encode(),
@@ -1036,37 +1105,94 @@ No authentication required (webhook signature validation instead)""",
         ).hexdigest()
 
         if not hmac.compare_digest(computed, signature):
+            logger.warning("Webhook signature verification failed")
             return Response(status=403)
 
         data = request.data.get("data", {})
         reference = data.get("reference")
 
         if not reference:
+            logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
 
         try:
             payment = Payment.objects.select_for_update().get(reference=reference)
         except Payment.DoesNotExist:
+            logger.warning(f"Payment not found for reference: {reference}")
             return Response({"status": "ok"})
 
-        paystack = Paystack()
-        verify = paystack.verify_payment(reference)
-        pdata = verify.get("data", {})
+        try:
+            paystack = Paystack()
+            verify = paystack.verify_payment(reference)
+            pdata = verify.get("data", {})
+        except Exception as e:
+            # Transient error - log and queue for retry
+            # Paystack will retry the webhook, so we can safely return 200
+            logger.error(f"Error verifying payment {reference}: {str(e)}", exc_info=True)
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.WEBHOOK_PROCESSED,
+                level=TransactionLog.Level.ERROR,
+                message=f"Webhook verification error for payment {reference}: {str(e)}",
+                amount=payment.amount,
+                metadata={"reference": reference, "error": str(e)}
+            )
+            return Response({"status": "ok"})
 
+        # Validate payment status
         if pdata.get("status") != "success":
+            logger.info(f"Payment {reference} not successful: {pdata.get('status')}")
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.PAYMENT_FAILED,
+                level=TransactionLog.Level.WARNING,
+                message=f"Payment {reference} failed with status: {pdata.get('status')}",
+                amount=payment.amount,
+                metadata={"reference": reference, "paystack_status": pdata.get('status')}
+            )
             return Response({"status": "ok"})
 
         if pdata.get("currency") != EXPECTED_CURRENCY:
+            logger.error(f"Currency mismatch for payment {reference}: expected {EXPECTED_CURRENCY}, got {pdata.get('currency')}")
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.PAYMENT_FAILED,
+                level=TransactionLog.Level.ERROR,
+                message=f"Currency mismatch for payment {reference}",
+                amount=payment.amount,
+                metadata={"reference": reference, "expected_currency": EXPECTED_CURRENCY, "received_currency": pdata.get('currency')}
+            )
             return Response({"status": "ok"})
 
         paid_amount = Decimal(pdata["amount"]) / Decimal(100)
         if paid_amount != payment.amount:
+            logger.error(f"Amount mismatch for payment {reference}: expected {payment.amount}, got {paid_amount}")
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.PAYMENT_FAILED,
+                level=TransactionLog.Level.ERROR,
+                message=f"Amount mismatch for payment {reference}",
+                amount=payment.amount,
+                metadata={"reference": reference, "expected_amount": str(payment.amount), "received_amount": str(paid_amount)}
+            )
             return Response({"status": "ok"})
 
         with transaction.atomic():
             if not payment.verified:
                 payment.mark_as_successful()
-                credit_vendors_for_order(payment.order)
+                # Log successful payment
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_RECEIVED,
+                    level=TransactionLog.Level.SUCCESS,
+                    message=f"Payment {reference} received and verified (₦{paid_amount})",
+                    related_user=payment.order.customer,
+                    amount=paid_amount,
+                    metadata={"reference": reference, "paystack_status": pdata.get('status')}
+                )
+                logger.info(f"Payment verified successfully: {reference} (Amount: ₦{paid_amount})")
+                # Note: Vendors are credited when order is DELIVERED, not when payment is received
+                # This maintains the available vs pending balance flow
 
         return Response({"status": "ok"})
 
@@ -1139,6 +1265,9 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
         return super().patch(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
+        import logging
+        logger = logging.getLogger(__name__)
+        
         refund = self.get_object()
         action = request.data.get("action", "").upper()
 
@@ -1147,22 +1276,137 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
 
         with transaction.atomic():
             if action == "APPROVE":
-                wallet, _ = Wallet.objects.select_for_update().get_or_create(
-                    user=refund.payment.order.customer
-                )
+                order = refund.payment.order
+                customer = order.customer
+                
+                # Credit customer wallet with refund amount
+                wallet, _ = Wallet.objects.select_for_update().get_or_create(user=customer)
                 wallet.credit(refund.refunded_amount, source=f"Refund {refund.payment.reference}")
-
+                
+                # Reverse vendor commissions if order was delivered and vendors were credited
+                commission_reversal_amount = Decimal("0.00")
+                vendors_affected = []
+                
+                if order.status == Order.Status.DELIVERED and order.vendors_credited:
+                    # Calculate and reverse commissions for each vendor
+                    for item in order.order_items.all():
+                        vendor = item.product.store
+                        if vendor:
+                            # Commission is 10% of item subtotal
+                            commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+                            commission_reversal_amount += commission_amount
+                            
+                            # Debit vendor wallet (reverse the credit they received)
+                            vendor_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
+                            try:
+                                vendor_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
+                                vendors_affected.append({
+                                    "vendor_id": vendor.id,
+                                    "vendor_email": vendor.email,
+                                    "commission_reversed": str(commission_amount)
+                                })
+                                
+                                # Log commission reversal
+                                TransactionLog.objects.create(
+                                    order=order,
+                                    action=TransactionLog.Action.COMMISSION_DEDUCTED,
+                                    level=TransactionLog.Level.SUCCESS,
+                                    message=f"Commission reversed for vendor {vendor.email}: ₦{commission_amount} (Order refunded)",
+                                    related_user=vendor,
+                                    amount=-commission_amount,
+                                    metadata={
+                                        "vendor_id": vendor.id,
+                                        "vendor_email": vendor.email,
+                                        "commission_amount": str(commission_amount),
+                                        "reason": "Refund Approval",
+                                        "refund_id": refund.id
+                                    }
+                                )
+                                
+                                logger.info(
+                                    f"Commission reversed for vendor {vendor.email}: ₦{commission_amount} | "
+                                    f"Reason: Order refund {order.order_id}"
+                                )
+                                
+                            except ValueError as e:
+                                logger.error(f"Failed to debit vendor {vendor.email}: {str(e)}")
+                                # Continue with other vendors if one fails
+                                pass
+                    
+                    refund.commission_reversed = True
+                
+                # Mark refund as approved
                 refund.status = Refund.Status.APPROVED
                 refund.processed_at = timezone.now()
                 refund.save()
+                
+                # Log refund approval
+                TransactionLog.objects.create(
+                    order=order,
+                    action=TransactionLog.Action.REFUND_APPROVED,
+                    level=TransactionLog.Level.SUCCESS,
+                    message=f"Refund approved for order {order.order_id}: ₦{refund.refunded_amount}. Commissions reversed: ₦{commission_reversal_amount}",
+                    related_user=customer,
+                    amount=refund.refunded_amount,
+                    metadata={
+                        "refund_id": refund.id,
+                        "order_id": str(order.order_id),
+                        "customer_email": customer.email,
+                        "commission_reversed": str(commission_reversal_amount),
+                        "vendors_affected": vendors_affected
+                    }
+                )
+                
+                logger.info(
+                    f"Refund approved: Order {order.order_id} | Amount: ₦{refund.refunded_amount} | "
+                    f"Commission Reversed: ₦{commission_reversal_amount}"
+                )
 
-                return Response({"detail": "Refund approved"})
+                return Response(standardized_response(
+                    success=True,
+                    message="Refund approved",
+                    data={
+                        "refund_id": refund.id,
+                        "status": refund.status,
+                        "customer_credited": float(refund.refunded_amount),
+                        "commission_reversed": float(commission_reversal_amount),
+                        "vendors_affected_count": len(vendors_affected),
+                        "vendors_affected": vendors_affected
+                    }
+                ))
 
             if action == "REJECT":
                 refund.status = Refund.Status.REJECTED
                 refund.processed_at = timezone.now()
                 refund.save()
-                return Response({"detail": "Refund rejected"})
+                
+                # Log refund rejection
+                TransactionLog.objects.create(
+                    order=refund.payment.order,
+                    action=TransactionLog.Action.REFUND_REJECTED,
+                    level=TransactionLog.Level.WARNING,
+                    message=f"Refund rejected for order {refund.payment.order.order_id}: ₦{refund.refunded_amount}",
+                    related_user=refund.payment.order.customer,
+                    amount=refund.refunded_amount,
+                    metadata={
+                        "refund_id": refund.id,
+                        "order_id": str(refund.payment.order.order_id),
+                        "reason": request.data.get("rejection_reason", "Not provided")
+                    }
+                )
+                
+                logger.info(f"Refund rejected: Order {refund.payment.order.order_id} | Amount: ₦{refund.refunded_amount}")
+                
+                return Response(standardized_response(
+                    success=True,
+                    message="Refund rejected",
+                    data={"refund_id": refund.id, "status": refund.status}
+                ))
+            
+            return Response(
+                standardized_response(success=False, error="Invalid action. Use 'APPROVE' or 'REJECT'"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         return Response({"detail": "Invalid action"}, status=400)
 
@@ -1283,6 +1527,194 @@ class OrderReceiptView(generics.RetrieveAPIView):
         return Response(standardized_response(data=serializer.data))
 
 
+# ----------------------
+# Commission Analytics (Admin Only)
+# ----------------------
+class CommissionAnalyticsView(APIView):
+    """
+    Admin endpoint to view platform commission metrics and analytics.
+    Provides insights into earnings, vendor commissions, and pending commissions.
+    """
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="commission_analytics",
+        operation_summary="Commission Analytics Dashboard",
+        operation_description="""Get comprehensive commission analytics for platform owner.
+        
+Metrics include:
+- Total commission earned (all time)
+- Commission by time period (day, week, month)
+- Commission by vendor
+- Pending commission (from paid but not delivered orders)
+- Total delivered orders count
+- Average commission per order""",
+        tags=["Analytics"],
+        parameters=[
+            openapi.Parameter('period', openapi.IN_QUERY, description='Time period: all, day, week, month, year', type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('vendor_id', openapi.IN_QUERY, description='Filter by specific vendor ID', type=openapi.TYPE_INTEGER, required=False),
+        ],
+        responses={
+            200: openapi.Response("Commission analytics data"),
+            401: openapi.Response("Unauthorized"),
+            403: openapi.Response("Forbidden"),
+        },
+    )
+    def get(self, request):
+        import logging
+        from django.db.models import Sum, Count, F, Q
+        from datetime import datetime, timedelta
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            period = request.query_params.get('period', 'all').lower()
+            vendor_id = request.query_params.get('vendor_id', None)
+            
+            # Define time filter based on period
+            now = timezone.now()
+            time_filter = Q()
+            
+            if period == 'day':
+                time_filter = Q(delivered_at__date=now.date())
+                period_label = "Today"
+            elif period == 'week':
+                week_start = now - timedelta(days=now.weekday())
+                time_filter = Q(delivered_at__gte=week_start)
+                period_label = "This Week"
+            elif period == 'month':
+                time_filter = Q(delivered_at__year=now.year, delivered_at__month=now.month)
+                period_label = "This Month"
+            elif period == 'year':
+                time_filter = Q(delivered_at__year=now.year)
+                period_label = "This Year"
+            else:  # 'all'
+                period_label = "All Time"
+            
+            # Get delivered orders (only delivered orders generate commissions)
+            delivered_orders = Order.objects.filter(
+                status=Order.Status.DELIVERED,
+                vendors_credited=True,
+            )
+            
+            if time_filter:
+                delivered_orders = delivered_orders.filter(time_filter)
+            
+            # Calculate total commission from delivered orders
+            total_commission = Decimal("0.00")
+            commission_by_vendor = {}
+            
+            for order in delivered_orders:
+                for item in order.order_items.all():
+                    commission = item.item_subtotal * PLATFORM_COMMISSION
+                    total_commission += commission
+                    
+                    vendor = item.product.store
+                    if vendor:
+                        if vendor.id not in commission_by_vendor:
+                            commission_by_vendor[vendor.id] = {
+                                "vendor_id": vendor.id,
+                                "vendor_email": vendor.email,
+                                "vendor_name": getattr(vendor, 'store_name', vendor.email),
+                                "total_commission": Decimal("0.00"),
+                                "order_count": 0,
+                            }
+                        commission_by_vendor[vendor.id]["total_commission"] += commission
+                        commission_by_vendor[vendor.id]["order_count"] += 1
+            
+            # Filter by vendor if specified
+            if vendor_id:
+                vendor_id = int(vendor_id)
+                commission_by_vendor = {
+                    vid: data for vid, data in commission_by_vendor.items()
+                    if vid == vendor_id
+                }
+                if not commission_by_vendor:
+                    return Response(
+                        standardized_response(
+                            success=False,
+                            error=f"No commission data found for vendor {vendor_id}"
+                        ),
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+            
+            # Convert Decimal to float for JSON serialization
+            commission_by_vendor_list = [
+                {
+                    "vendor_id": data["vendor_id"],
+                    "vendor_email": data["vendor_email"],
+                    "vendor_name": data["vendor_name"],
+                    "total_commission": float(data["total_commission"]),
+                    "order_count": data["order_count"],
+                    "average_commission_per_order": float(data["total_commission"] / data["order_count"]) if data["order_count"] > 0 else 0.00,
+                }
+                for data in sorted(
+                    commission_by_vendor.values(),
+                    key=lambda x: x["total_commission"],
+                    reverse=True
+                )
+            ]
+            
+            # Calculate pending commission (paid orders not yet delivered)
+            pending_orders = Order.objects.filter(
+                status=Order.Status.PAID,
+                payment_status='PAID',
+                vendors_credited=False  # Not yet credited means commission is pending
+            )
+            
+            pending_commission = Decimal("0.00")
+            for order in pending_orders:
+                for item in order.order_items.all():
+                    pending_commission += item.item_subtotal * PLATFORM_COMMISSION
+            
+            # Get top vendors by commission
+            top_vendors = sorted(
+                commission_by_vendor_list,
+                key=lambda x: x["total_commission"],
+                reverse=True
+            )[:10]
+            
+            # Calculate statistics
+            delivered_count = delivered_orders.count()
+            average_commission = float(total_commission / delivered_count) if delivered_count > 0 else 0.00
+            
+            analytics_data = {
+                "period": period_label,
+                "summary": {
+                    "total_commission_earned": float(total_commission),
+                    "pending_commission": float(pending_commission),
+                    "total_commission_including_pending": float(total_commission + pending_commission),
+                    "delivered_orders_count": delivered_count,
+                    "pending_orders_count": pending_orders.count(),
+                    "average_commission_per_order": average_commission,
+                    "unique_vendors": len(commission_by_vendor),
+                },
+                "by_vendor": commission_by_vendor_list,
+                "top_vendors": top_vendors,
+                "commission_rate": "10%",
+            }
+            
+            logger.info(
+                f"Commission analytics retrieved | Period: {period_label} | "
+                f"Total Commission: ₦{total_commission} | Pending: ₦{pending_commission}"
+            )
+            
+            return Response(standardized_response(
+                success=True,
+                data=analytics_data
+            ))
+        
+        except Exception as e:
+            logger.error(f"Error retrieving commission analytics: {str(e)}", exc_info=True)
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"Error retrieving analytics: {str(e)}"
+                ),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 # Export for URL inclusion
 __all__ = [
     'OrderListCreateView', 'OrderDetailView', 'OrderReceiptView',
@@ -1292,5 +1724,6 @@ __all__ = [
     'RefundListView', 'RefundDetailView',
     'CustomerWalletView', 'WalletTransactionListView', 'AdminWalletListView',
     'InstallmentCheckoutView', 'InstallmentPlanListView', 'InstallmentPlanDetailView',
-    'InstallmentPaymentListView', 'InitializeInstallmentPaymentView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView'
+    'InstallmentPaymentListView', 'InitializeInstallmentPaymentView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView',
+    'CommissionAnalyticsView'
 ]

@@ -79,6 +79,7 @@ class Order(models.Model):
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tracking_number = models.CharField(max_length=100, blank=True, null=True)
     payment_status = models.CharField(max_length=20, default='UNPAID')
+    vendors_credited = models.BooleanField(default=False, help_text="Track if vendors have been credited for this delivered order")
     assigned_at = models.DateTimeField(null=True, blank=True)
     shipped_at = models.DateTimeField(null=True, blank=True)
     delivered_at = models.DateTimeField(null=True, blank=True)
@@ -192,8 +193,8 @@ class Payment(models.Model):
         self.verified = True
         self.paid_at = timezone.now()
         self.order.payment_status = 'PAID'
-        # Note: Do not change order.status - it stays PENDING until shipped
-        self.order.save(update_fields=['payment_status'])
+        self.order.status = Order.Status.PAID  # Mark order as paid when payment succeeds
+        self.order.save(update_fields=['payment_status', 'status'])
         self.save(update_fields=['status', 'verified', 'paid_at'])
 
     class Meta:
@@ -227,26 +228,61 @@ class ShippingAddress(models.Model):
 
 
 class TransactionLog(models.Model):
+    class Level(models.TextChoices):
+        INFO = 'INFO', 'Info'
+        WARNING = 'WARNING', 'Warning'
+        ERROR = 'ERROR', 'Error'
+        SUCCESS = 'SUCCESS', 'Success'
+    
+    class Action(models.TextChoices):
+        PAYMENT_RECEIVED = 'PAYMENT_RECEIVED', 'Payment Received'
+        PAYMENT_FAILED = 'PAYMENT_FAILED', 'Payment Failed'
+        VENDOR_CREDITED = 'VENDOR_CREDITED', 'Vendor Credited'
+        COMMISSION_DEDUCTED = 'COMMISSION_DEDUCTED', 'Commission Deducted'
+        ORDER_SHIPPED = 'ORDER_SHIPPED', 'Order Shipped'
+        ORDER_DELIVERED = 'ORDER_DELIVERED', 'Order Delivered'
+        REFUND_APPROVED = 'REFUND_APPROVED', 'Refund Approved'
+        REFUND_REJECTED = 'REFUND_REJECTED', 'Refund Rejected'
+        WEBHOOK_PROCESSED = 'WEBHOOK_PROCESSED', 'Webhook Processed'
+        OTHER = 'OTHER', 'Other'
+
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='logs', null=True, blank=True)
     message = models.TextField()
+    action = models.CharField(max_length=50, choices=Action.choices, default=Action.OTHER)
+    level = models.CharField(max_length=10, choices=Level.choices, default=Level.INFO)
+    related_user = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='transaction_logs')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    metadata = models.JSONField(default=dict, blank=True, help_text="Additional context data for the transaction")
     created_at = models.DateTimeField(auto_now_add=True)
-    level = models.CharField(max_length=10, default='INFO')  # INFO, WARNING, ERROR
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         permissions = [
             ("view_transactionlog_admin", "Can view transaction logs (admin only)"),
         ]
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['order', '-created_at']),
+            models.Index(fields=['action', '-created_at']),
+            models.Index(fields=['level', '-created_at']),
+        ]
 
     def __str__(self):
-        return f"[{self.level}] {self.order.order_id}: {self.message[:50]}"
+        order_info = f"{self.order.order_id}" if self.order else "SYSTEM"
+        return f"[{self.level}] {order_info}: {self.message[:50]}"
 
 
 class Refund(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        APPROVED = 'APPROVED', 'Approved'
+        REJECTED = 'REJECTED', 'Rejected'
+    
     payment = models.OneToOneField(Payment, on_delete=models.CASCADE, related_name='refund')
     reason = models.TextField(blank=True, null=True)
     refunded_amount = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(max_length=20, default='PENDING')  # PENDING, APPROVED, REJECTED
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    commission_reversed = models.BooleanField(default=False, help_text="Track if commissions have been reversed for this refund")
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
 

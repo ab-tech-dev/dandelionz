@@ -423,6 +423,55 @@ class OrderActionSerializer(serializers.Serializer):
         return value
 
 
+# =====================================================
+# VENDOR ORDER SERIALIZERS
+# =====================================================
+class VendorOrderCustomerSerializer(serializers.Serializer):
+    """Serializer for customer information in order responses"""
+    full_name = serializers.CharField(source='user.full_name')
+    email = serializers.EmailField(source='user.email')
+    phone_number = serializers.CharField(source='user.phone_number', required=False, allow_blank=True)
+
+
+class VendorOrderItemSerializer(serializers.Serializer):
+    """Serializer for order items in vendor order responses"""
+    product_name = serializers.CharField(source='product.name')
+    quantity = serializers.IntegerField()
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, source='price_at_purchase')
+
+
+class VendorOrderListItemSerializer(serializers.Serializer):
+    """Serializer for order items in the order list (paginated results)"""
+    uuid = serializers.UUIDField(source='order_id')
+    order_id = serializers.CharField()
+    customer = VendorOrderCustomerSerializer(read_only=True)
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, source='total_price')
+    status = serializers.CharField()
+    created_at = serializers.DateTimeField(source='ordered_at')
+
+
+class VendorOrderDetailSerializer(serializers.Serializer):
+    """Serializer for detailed order information"""
+    uuid = serializers.UUIDField(source='order_id')
+    order_id = serializers.CharField()
+    customer = VendorOrderCustomerSerializer(read_only=True)
+    items = VendorOrderItemSerializer(source='order_items', many=True, read_only=True)
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, source='total_price')
+    status = serializers.CharField()
+    shipping_address = serializers.CharField()
+    created_at = serializers.DateTimeField(source='ordered_at')
+    updated_at = serializers.DateTimeField()
+
+
+class VendorOrderSummarySerializer(serializers.Serializer):
+    """Serializer for order summary with status counts"""
+    pending = serializers.IntegerField()
+    paid = serializers.IntegerField()
+    shipped = serializers.IntegerField()
+    delivered = serializers.IntegerField()
+    canceled = serializers.IntegerField()
+
+
 from rest_framework import serializers
 from store.models import Product
 
@@ -492,10 +541,34 @@ class TriggerPayoutSerializer(serializers.Serializer):
 
 
 class AdminAnalyticsSerializer(serializers.Serializer):
-    total_users = serializers.IntegerField()
+    total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_orders = serializers.IntegerField()
+    pending_orders = serializers.IntegerField()
+    total_vendors = serializers.IntegerField()
+
+
+class SalesChartDataSerializer(serializers.Serializer):
+    """Serializer for individual sales chart data points"""
+    period = serializers.CharField()
+    sales = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class OrderStatsSerializer(serializers.Serializer):
+    """Serializer for order status breakdown"""
+    completed = serializers.IntegerField()
+    pending = serializers.IntegerField()
+    cancelled = serializers.IntegerField()
+    returned = serializers.IntegerField()
+
+
+class AdminDetailedAnalyticsSerializer(serializers.Serializer):
+    """Serializer for detailed admin analytics page data"""
+    total_sales = serializers.DecimalField(max_digits=12, decimal_places=2)
     total_vendors = serializers.IntegerField()
     total_orders = serializers.IntegerField()
-    total_products = serializers.IntegerField()
+    total_users = serializers.IntegerField()
+    sales_chart_data = SalesChartDataSerializer(many=True)
+    order_stats = OrderStatsSerializer()
 
 
 
@@ -728,3 +801,98 @@ class DeliveryAgentListSerializer(serializers.ModelSerializer):
     
     def get_total_delivered(self, obj):
         return obj.assigned_orders.filter(status='DELIVERED').count()
+
+# =====================================================
+# VENDOR WALLET & PAYMENT SERIALIZERS
+# =====================================================
+
+class WalletBalanceSerializer(serializers.Serializer):
+    """Serializer for wallet balance response with available vs pending breakdown"""
+    withdrawable_balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    available_balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    pending_balance = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    pending_order_count = serializers.IntegerField(read_only=True)
+    total_earnings = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    total_credits = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    total_debits = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    total_withdrawals = serializers.IntegerField(read_only=True)
+    this_month_earnings = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
+
+class WalletTransactionListSerializer(serializers.Serializer):
+    """Serializer for individual wallet transactions in list"""
+    id = serializers.CharField(read_only=True)
+    type = serializers.CharField(source='transaction_type', read_only=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    description = serializers.CharField(source='source', read_only=True)
+    status = serializers.SerializerMethodField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    
+    def get_status(self, obj):
+        # All wallet transactions are recorded as successful
+        return 'successful'
+
+
+class WithdrawalRequestSerializer(serializers.Serializer):
+    """Serializer for withdrawal requests"""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    
+    def validate_pin(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError("PIN must contain only digits.")
+        return value
+
+
+class WithdrawalResponseSerializer(serializers.Serializer):
+    """Response serializer for withdrawal requests"""
+    success = serializers.BooleanField()
+    message = serializers.CharField()
+
+
+class PaymentSettingsSerializer(serializers.Serializer):
+    """Serializer for payment settings"""
+    bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    account_name = serializers.CharField(max_length=200, read_only=True)
+    recipient_code = serializers.CharField(max_length=100, read_only=True)
+    has_pin = serializers.SerializerMethodField(read_only=True)
+    
+    def get_has_pin(self, obj):
+        return hasattr(obj, 'payment_pin') and obj.payment_pin is not None
+
+
+class PaymentSettingsUpdateSerializer(serializers.Serializer):
+    """Serializer for updating payment settings"""
+    bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class PaymentPINSerializer(serializers.Serializer):
+    """Serializer for setting/changing payment PIN"""
+    pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    confirm_pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    
+    def validate(self, data):
+        if data['pin'] != data['confirm_pin']:
+            raise serializers.ValidationError("PINs do not match.")
+        if not data['pin'].isdigit():
+            raise serializers.ValidationError("PIN must contain only digits.")
+        return data
+
+
+class PINResetRequestSerializer(serializers.Serializer):
+    """Serializer for PIN reset requests"""
+    email = serializers.EmailField(read_only=True)
+
+
+class PayoutRequestSerializer(serializers.Serializer):
+    """Serializer for payout requests"""
+    id = serializers.CharField(read_only=True)
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    status = serializers.CharField(read_only=True)
+    bank_name = serializers.CharField(read_only=True)
+    account_number = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    processed_at = serializers.DateTimeField(read_only=True)
