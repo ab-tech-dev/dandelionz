@@ -947,7 +947,7 @@ class VendorViewSet(viewsets.ViewSet):
         # Get all orders for this vendor - use distinct('order_id') to avoid duplicates from joins
         orders = Order.objects.filter(
             order_items__product__store=vendor
-        ).select_related('customer__user').prefetch_related('order_items__product').distinct('order_id').order_by('order_id')
+        ).select_related('customer').prefetch_related('order_items__product').distinct('order_id').order_by('order_id')
 
         # Filter by status if provided
         status_filter = request.query_params.get('status')
