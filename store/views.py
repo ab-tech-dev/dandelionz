@@ -33,6 +33,17 @@ from authentication.core.permissions import IsAdminOrVendor, IsAdmin, IsVendor
 # ---------------------------
 # Products FilterSet
 # ---------------------------
+# Category FilterSet
+# ---------------------------
+class CategoryFilterSet(FilterSet):
+    name = CharFilter(field_name='name', lookup_expr='iexact', label='Category Name')
+    
+    class Meta:
+        model = Category
+        fields = ['name']
+
+
+# ---------------------------
 class ProductFilterSet(FilterSet):
     price = NumberFilter(field_name='price', lookup_expr='exact', label='Exact Price')
     min_price = NumberFilter(field_name='price', lookup_expr='gte', label='Minimum Price')
@@ -1054,7 +1065,8 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
     queryset = Category.objects.filter(is_active=True)
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]  # GET is public, POST requires admin check
-    filter_backends = [SearchFilter, OrderingFilter]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_class = CategoryFilterSet
     search_fields = ['name', 'description']
     ordering_fields = ['name', 'created_at']
     ordering = ['name']
@@ -1068,6 +1080,11 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
     @extend_schema(
         summary="List all active categories",
         description="Returns all active categories with aggregated product counts and total sales.",
+        parameters=[
+            OpenApiParameter(name='name', description='Filter by category name (case-insensitive)', required=False, type=str),
+            OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
+            OpenApiParameter(name='ordering', description='Order by name or created_at', required=False, type=str),
+        ],
         responses={200: CategorySerializer(many=True)}
     )
     def get(self, request, *args, **kwargs):
