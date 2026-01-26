@@ -152,6 +152,7 @@ urlpatterns = [
     path("admin/products/update/", admin_update_product, name="admin-update-product"),
     path("admin/products/<slug:slug>/delete/", AdminMarketplaceViewSet.as_view({"delete": "delete_product"}), name="admin-delete-product"),
     # ADMIN ORDERS
+    path("admin/orders/", AdminOrderListView.as_view(), name="admin-orders"),
     path("admin/orders/summary/", admin_orders_summary, name="admin-orders-summary"),
     path("admin/orders/assign-logistics/", admin_assign_logistics, name="admin-assign-logistics"),
     path("admin/orders/refund/", admin_process_refund, name="admin-process-refund"),
