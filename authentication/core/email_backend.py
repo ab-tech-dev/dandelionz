@@ -4,10 +4,14 @@ Custom email backend with better logging
 import logging
 import smtplib
 import time
+import re
 from django.conf import settings
 from django.core.mail.backends.smtp import EmailBackend as DjangoEmailBackend
 
 logger = logging.getLogger(__name__)
+
+# Simple email validation regex
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 
 class RobustSMTPEmailBackend(DjangoEmailBackend):
@@ -79,6 +83,29 @@ class RobustSMTPEmailBackend(DjangoEmailBackend):
             logger.warning("send_messages called with empty email_messages list")
             return 0
 
+        # Validate all recipient emails before sending
+        invalid_emails = []
+        for message in email_messages:
+            for recipient in message.to:
+                if not self._is_valid_email(recipient):
+                    invalid_emails.append(recipient)
+                    logger.error(f"Invalid email address detected: '{recipient}' - skipping this message")
+
+        if invalid_emails:
+            # Filter out messages with invalid recipients
+            valid_messages = [
+                msg for msg in email_messages
+                if not any(not self._is_valid_email(r) for r in msg.to)
+            ]
+            
+            if not valid_messages:
+                logger.error(f"All messages contain invalid email addresses. Aborting send operation.")
+                logger.error(f"Invalid emails: {invalid_emails}")
+                raise ValueError(f"No valid recipients found. Invalid emails: {', '.join(invalid_emails)}")
+            
+            logger.warning(f"Filtered out {len(email_messages) - len(valid_messages)} messages with invalid emails")
+            email_messages = valid_messages
+
         logger.info(f"Attempting to send {len(email_messages)} message(s)")
         msg_count = 0
         
@@ -92,6 +119,42 @@ class RobustSMTPEmailBackend(DjangoEmailBackend):
             import traceback
             logger.error(traceback.format_exc())
             raise
+
+    @staticmethod
+    def _is_valid_email(email):
+        """
+        Validate email format using regex.
+        Returns True if email matches standard format, False otherwise.
+        """
+        if not email or not isinstance(email, str):
+            return False
+        
+        email = email.strip()
+        
+        # Check basic format
+        if not EMAIL_REGEX.match(email):
+            return False
+        
+        # Ensure it has both local and domain parts
+        if '@' not in email:
+            return False
+        
+        local_part, domain = email.rsplit('@', 1)
+        
+        # Local part should not be empty
+        if not local_part:
+            return False
+        
+        # Domain should have at least one dot
+        if '.' not in domain:
+            return False
+        
+        # Domain parts should not be empty
+        parts = domain.split('.')
+        if any(not part for part in parts):
+            return False
+        
+        return True
 
     def close(self):
         """Close SMTP connection with error handling"""

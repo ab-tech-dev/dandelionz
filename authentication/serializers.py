@@ -1,5 +1,9 @@
 from rest_framework import serializers
 from .models import CustomUser
+import re
+
+# Email validation regex
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 # ------------------------------------------------------
 # BASE USER SERIALIZER
@@ -69,6 +73,40 @@ class UserRegistrationSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Referral code from an existing user for affiliate tracking"
     )
+
+    def validate_email(self, value):
+        """Validate email format and ensure it's a complete email address"""
+        if not value or not isinstance(value, str):
+            raise serializers.ValidationError("Email must be a non-empty string")
+        
+        value = value.strip()
+        
+        # Check basic format
+        if not EMAIL_REGEX.match(value):
+            raise serializers.ValidationError(
+                "Invalid email format. Email must contain both local part (username) and domain (e.g., user@example.com)"
+            )
+        
+        # Ensure it has both local and domain parts
+        if '@' not in value:
+            raise serializers.ValidationError("Email must contain @ symbol")
+        
+        local_part, domain = value.rsplit('@', 1)
+        
+        # Local part should not be empty
+        if not local_part:
+            raise serializers.ValidationError("Email local part (before @) cannot be empty")
+        
+        # Domain should have at least one dot
+        if '.' not in domain:
+            raise serializers.ValidationError("Email domain must contain a dot (e.g., example.com)")
+        
+        # Domain parts should not be empty
+        parts = domain.split('.')
+        if any(not part for part in parts):
+            raise serializers.ValidationError("Email domain parts cannot be empty")
+        
+        return value
 
 
 class UserLoginSerializer(serializers.Serializer):
