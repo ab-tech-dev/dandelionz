@@ -25,6 +25,7 @@ from .models import Order, OrderItem, Payment, TransactionLog, Refund
 from store.models import Cart, CartItem
 from .serializers import (
     OrderSerializer,
+    OrderReceiptSerializer,
     OrderItemSerializer,
     TransactionLogSerializer,
     PaymentSerializer,
@@ -198,7 +199,17 @@ class OrderDetailView(generics.RetrieveUpdateDestroyAPIView):
     @swagger_auto_schema(
         operation_id="retrieve_order",
         operation_summary="Get Order Details",
-        operation_description="Retrieve details of a specific order.",
+        operation_description="""Retrieve complete order details including tracking timeline.
+
+Returns:
+- order_id: Unique order identifier
+- status: Current order status (PENDING, PAID, SHIPPED, DELIVERED, RETURNED, CANCELED)
+- timeline: Array of status progression events with timestamps and completion status
+- order_items: Items in the order
+- payment: Payment information
+- shipping_address: Delivery address
+- tracking_number: For shipment tracking
+- Financial summary: subtotal, delivery_fee, discount, total_price""",
         tags=["Orders"],
         responses={
             200: OrderSerializer,
@@ -1498,9 +1509,15 @@ class AdminWalletListView(generics.ListAPIView):
 class OrderReceiptView(generics.RetrieveAPIView):
     """
     Retrieve order receipt/invoice details for display or export.
-    Includes all order information needed for receipts, invoices, and tracking.
+    Includes all granular financial details:
+    - subtotal (sum of items before fees)
+    - delivery_fee
+    - discount (if any)
+    - total_price (final amount paid)
+    - payment_method (e.g., "Paystack", "Card")
+    - transaction_reference (payment reference)
     """
-    serializer_class = OrderSerializer
+    serializer_class = OrderReceiptSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrAdmin]
     lookup_field = 'order_id'
     lookup_url_kwarg = 'order_id'
@@ -1513,10 +1530,21 @@ class OrderReceiptView(generics.RetrieveAPIView):
     @swagger_auto_schema(
         operation_id="order_receipt",
         operation_summary="Get Order Receipt",
-        operation_description="Retrieve order receipt/invoice details including items, shipping address, payment info, and tracking number. Can be used for display or export to PDF.",
+        operation_description="""Retrieve order receipt/invoice with granular financial details.
+        
+Returns:
+- subtotal: Sum of all items before fees
+- delivery_fee: Shipping/delivery cost
+- discount: Applied discount amount
+- total_price: Final amount paid
+- payment_method: Gateway used (e.g., Paystack)
+- transaction_reference: Payment reference ID
+- order_items: List of purchased items
+- shipping_address: Delivery address
+- tracking_number: For order tracking""",
         tags=["Orders"],
         responses={
-            200: OrderSerializer,
+            200: OrderReceiptSerializer,
             404: openapi.Response("Order not found"),
             403: openapi.Response("Permission denied"),
         },
