@@ -290,6 +290,7 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
             'ordered_at', 'shipped_at', 'delivered_at', 'tracking_number',
             # Financial details
             'subtotal',
+            'total_with_delivery',
             'delivery_fee',
             'discount',
             'total_price',
