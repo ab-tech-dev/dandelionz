@@ -100,26 +100,35 @@ class Command(BaseCommand):
 
         for category_data in DEFAULT_CATEGORIES:
             slug = category_data['slug']
-            defaults = {
-                'name': category_data['name'],
-                'description': category_data.get('description', ''),
-                'is_active': True
-            }
-            category, created = Category.objects.get_or_create(
-                slug=slug,
-                defaults=defaults
-            )
+            name = category_data['name']
             
-            if created:
-                created_count += 1
-                self.stdout.write(
-                    self.style.SUCCESS(f'✓ Created category: {category_data["name"]}')
-                )
-            else:
+            # Try to get existing category by slug or name
+            try:
+                category = Category.objects.get(slug=slug)
                 existing_count += 1
                 self.stdout.write(
-                    self.style.WARNING(f'✓ Category already exists: {category_data["name"]}')
+                    self.style.WARNING(f'✓ Category already exists: {name}')
                 )
+            except Category.DoesNotExist:
+                # Check if category exists by name
+                try:
+                    category = Category.objects.get(name=name)
+                    existing_count += 1
+                    self.stdout.write(
+                        self.style.WARNING(f'✓ Category already exists: {name}')
+                    )
+                except Category.DoesNotExist:
+                    # Create new category
+                    category = Category.objects.create(
+                        slug=slug,
+                        name=name,
+                        description=category_data.get('description', ''),
+                        is_active=True
+                    )
+                    created_count += 1
+                    self.stdout.write(
+                        self.style.SUCCESS(f'✓ Created category: {name}')
+                    )
 
         total = created_count + existing_count
         self.stdout.write(
