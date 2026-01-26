@@ -974,14 +974,10 @@ class VendorViewSet(viewsets.ViewSet):
         paginator = LimitOffsetPagination()
         paginated_orders = paginator.paginate_queryset(orders, request)
 
-        if paginated_orders is None:
-            # Handle case where pagination fails
-            paginated_orders = list(orders)
-
         # Serialize and return
         serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
         
-        if paginator.count is not None:
+        if paginated_orders is not None:
             return paginator.get_paginated_response(serializer.data)
         else:
             return Response(serializer.data)
