@@ -896,3 +896,100 @@ class PayoutRequestSerializer(serializers.Serializer):
     account_number = serializers.CharField(read_only=True)
     created_at = serializers.DateTimeField(read_only=True)
     processed_at = serializers.DateTimeField(read_only=True)
+
+
+# =====================================================
+# ADMIN WALLET & PAYMENT SERIALIZERS
+# =====================================================
+class AdminWalletBalanceSerializer(serializers.Serializer):
+    """Serializer for admin wallet balance information"""
+    withdrawable_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    available_balance = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_withdrawals = serializers.IntegerField()
+    this_month_earnings = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+
+class AdminWalletTransactionSerializer(serializers.Serializer):
+    """Serializer for admin wallet transactions"""
+    id = serializers.CharField()
+    type = serializers.CharField()  # DEBIT or CREDIT
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    description = serializers.CharField()
+    status = serializers.CharField()  # SUCCESSFUL, FAILED, etc.
+    created_at = serializers.DateTimeField()
+
+
+class AdminPaymentSettingsSerializer(serializers.Serializer):
+    """Serializer for admin payment settings (bank details)"""
+    bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+
+
+class AdminWithdrawalSerializer(serializers.Serializer):
+    """Serializer for admin withdrawal requests"""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    
+    def validate_pin(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError("PIN must contain only digits.")
+        return value
+
+
+class AdminPaymentPINSerializer(serializers.Serializer):
+    """Serializer for admin payment PIN management"""
+    current_pin = serializers.CharField(write_only=True, min_length=4, max_length=4, required=False, allow_blank=True)
+    new_pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    confirm_pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    
+    def validate(self, data):
+        if data['new_pin'] != data['confirm_pin']:
+            raise serializers.ValidationError("PINs do not match.")
+        if not data['new_pin'].isdigit():
+            raise serializers.ValidationError("PIN must contain only digits.")
+        return data
+
+
+# =====================================================
+# SETTLEMENT & DISPUTE SERIALIZERS
+# =====================================================
+class SettlementSummarySerializer(serializers.Serializer):
+    """Serializer for settlement summary statistics"""
+    total_revenue = serializers.DecimalField(max_digits=12, decimal_places=2)
+    total_payouts = serializers.DecimalField(max_digits=12, decimal_places=2)
+    pending_settlements = serializers.DecimalField(max_digits=12, decimal_places=2)
+    upcoming_payouts = serializers.IntegerField()
+
+
+class VendorSettlementSerializer(serializers.Serializer):
+    """Serializer for individual vendor settlements"""
+    id = serializers.CharField()
+    vendor_name = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    payout_date = serializers.DateTimeField()
+    status = serializers.CharField()  # PENDING, PROCESSED, FAILED
+
+
+class DisputeSerializer(serializers.Serializer):
+    """Serializer for customer disputes/refunds"""
+    id = serializers.CharField()
+    order_id = serializers.CharField()
+    customer_name = serializers.CharField()
+    vendor_name = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    reason = serializers.CharField()
+    status = serializers.CharField()  # PENDING, APPROVED, REJECTED
+    created_at = serializers.DateTimeField()
+
+
+class DisputeResolutionSerializer(serializers.Serializer):
+    """Serializer for resolving disputes"""
+    action = serializers.CharField(required=True)  # APPROVE or REJECT
+    admin_note = serializers.CharField(required=False, allow_blank=True)
+    
+    def validate_action(self, value):
+        if value not in ['APPROVE', 'REJECT']:
+            raise serializers.ValidationError("Action must be 'APPROVE' or 'REJECT'.")
+        return value

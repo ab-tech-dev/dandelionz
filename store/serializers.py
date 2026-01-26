@@ -304,10 +304,18 @@ class ProductStatsSerializer(serializers.Serializer):
 class CartItemSerializer(CloudinarySerializer):
     product_details = ProductSerializer(source='product', read_only=True)
     subtotal = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    slug = serializers.SlugRelatedField(
+        slug_field='slug',
+        source='product',
+        queryset=Product.objects.all(),
+        write_only=True,
+        required=False
+    )
 
     class Meta:
         model = CartItem
-        fields = ['id', 'product', 'product_details', 'quantity', 'subtotal']
+        fields = ['id', 'product', 'product_details', 'slug', 'quantity', 'subtotal']
+        read_only_fields = ['id', 'product', 'product_details', 'subtotal']
 
 
 # ---------------------------
@@ -327,10 +335,18 @@ class CartSerializer(CloudinarySerializer):
 # ---------------------------
 class FavouriteSerializer(CloudinarySerializer):
     product_details = ProductSerializer(source='product', read_only=True)
+    slug = serializers.SlugRelatedField(
+        slug_field='slug',
+        source='product',
+        queryset=Product.objects.all(),
+        write_only=True,
+        required=False
+    )
 
     class Meta:
         model = Favourite
-        fields = ['id', 'customer', 'product', 'product_details', 'added_at']
+        fields = ['id', 'customer', 'product', 'product_details', 'slug', 'added_at']
+        read_only_fields = ['id', 'customer', 'product', 'product_details', 'added_at']
 
 
 # ---------------------------

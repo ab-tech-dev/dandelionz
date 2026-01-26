@@ -14,6 +14,9 @@ from .views import (
     DeliveryAgentViewSet,
     AdminDeliveryAgentViewSet,
     AdminNotificationViewSet,
+    AdminWalletViewSet,
+    AdminPaymentSettingsViewSet,
+    AdminSettlementsViewSet,
     NotificationsListView,
     NotificationDetailView,
     UnreadNotificationsCountView,
@@ -187,6 +190,21 @@ urlpatterns = [
 
     # ADMIN NOTIFICATIONS
     path("admin/notifications/", AdminNotificationViewSet.as_view({"post": "create", "get": "list_notifications"}), name="admin-notifications"),
+
+    # ADMIN WALLET & EARNINGS
+    path("admin/wallet/", AdminWalletViewSet.as_view({"get": "balance"}), name="admin-wallet-balance"),
+    path("admin/wallet/transactions/", AdminWalletViewSet.as_view({"get": "transactions"}), name="admin-wallet-transactions"),
+    path("admin/wallet/withdraw/", AdminWalletViewSet.as_view({"post": "withdraw"}), name="admin-withdraw"),
+
+    # ADMIN PAYMENT SETTINGS & PIN
+    path("admin/payment-settings/", AdminPaymentSettingsViewSet.as_view({"get": "retrieve_settings", "put": "update_settings"}), name="admin-payment-settings"),
+    path("admin/payment-settings/pin/", AdminPaymentSettingsViewSet.as_view({"post": "set_pin"}), name="admin-set-pin"),
+
+    # ADMIN SETTLEMENTS & DISPUTES
+    path("admin/settlements/summary/", AdminSettlementsViewSet.as_view({"get": "summary"}), name="admin-settlements-summary"),
+    path("admin/settlements/vendor/", AdminSettlementsViewSet.as_view({"get": "vendor"}), name="admin-vendor-settlements"),
+    path("admin/settlements/disputes/", AdminSettlementsViewSet.as_view({"get": "disputes"}), name="admin-disputes"),
+    re_path(r"^admin/settlements/disputes/(?P<dispute_id>[^/]+)/resolve/$", AdminSettlementsViewSet.as_view({"post": "resolve_dispute"}), name="admin-resolve-dispute"),
 
     # NEW ADMIN DASHBOARD ENDPOINTS (User & Order Management + Audit)
     # User Management

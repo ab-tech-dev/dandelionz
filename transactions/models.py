@@ -414,3 +414,76 @@ class PayoutRecord(models.Model):
     amount = models.DecimalField(max_digits=12, decimal_places=2)
     reference = models.UUIDField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+# ========================
+# SETTLEMENTS (Vendor Payouts)
+# ========================
+class Settlement(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        PROCESSED = 'PROCESSED', 'Processed'
+        FAILED = 'FAILED', 'Failed'
+
+    id = models.CharField(max_length=50, primary_key=True, default=uuid.uuid4)  # set_XXXX format
+    vendor = models.ForeignKey('users.Vendor', on_delete=models.CASCADE, related_name='settlements')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    payout_date = models.DateTimeField()  # Scheduled payout date
+    processed_date = models.DateTimeField(null=True, blank=True)
+    failure_reason = models.TextField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['vendor', 'status']),
+            models.Index(fields=['status', '-payout_date']),
+        ]
+
+    def __str__(self):
+        return f"Settlement {self.id} - {self.vendor.store_name} - {self.status}"
+
+
+class SettlementItem(models.Model):
+    """Links orders/order items to a settlement"""
+    settlement = models.ForeignKey(Settlement, on_delete=models.CASCADE, related_name='items')
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='settlement_items')
+    order_item = models.ForeignKey(OrderItem, on_delete=models.CASCADE, null=True, blank=True)
+    vendor_share = models.DecimalField(max_digits=12, decimal_places=2)  # 90% of item value
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Settlement Item - {self.settlement.id} - Order {self.order.order_id}"
+
+
+class Dispute(models.Model):
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        APPROVED = 'APPROVED', 'Approved'
+        REJECTED = 'REJECTED', 'Rejected'
+
+    id = models.CharField(max_length=50, primary_key=True, default=uuid.uuid4)  # dsp_XXXX format
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='disputes')
+    customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='disputes_created')
+    vendor = models.ForeignKey('users.Vendor', on_delete=models.CASCADE, related_name='disputes_received')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)  # Refund amount
+    reason = models.TextField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    admin_note = models.TextField(blank=True, null=True)
+    resolved_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='disputes_resolved')
+    created_at = models.DateTimeField(auto_now_add=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['vendor', 'status']),
+        ]
+
+    def __str__(self):
+        return f"Dispute {self.id} - Order {self.order.order_id} - {self.status}"

@@ -55,6 +55,10 @@ from users.serializers import (
     VendorOrderSummarySerializer,
     VendorOrderListItemSerializer,
     VendorOrderDetailSerializer,
+    DisputeResolutionSerializer,
+    AdminPaymentSettingsSerializer,
+    AdminWithdrawalSerializer,
+    AdminWalletBalanceSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
@@ -3213,3 +3217,627 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             "count": notifications.count()
         })
 
+
+# =====================================================
+# ADMIN WALLET & PAYMENTS
+# =====================================================
+class AdminWalletViewSet(AdminBaseViewSet):
+    """
+    ViewSet for managing admin wallet, earnings, and withdrawals.
+    Mirrors vendor wallet functionality for admin earnings.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="admin_wallet_balance",
+        operation_summary="Get Admin Wallet Balance",
+        operation_description="Retrieve admin's current wallet balance and earnings summary.",
+        tags=["Admin Wallet"],
+        responses={
+            200: openapi.Response(
+                "Wallet balance retrieved successfully",
+                AdminWalletBalanceSerializer()
+            ),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def balance(self, request):
+        """Get admin wallet balance and earnings summary"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from django.db.models import Sum
+        from django.utils import timezone
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        
+        # Total earnings and withdrawals
+        total_credits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        total_debits = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='DEBIT'
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        # This month earnings
+        now = timezone.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        this_month_earnings = WalletTransaction.objects.filter(
+            wallet=wallet,
+            transaction_type='CREDIT',
+            created_at__gte=month_start
+        ).aggregate(Sum('amount'))['amount__sum'] or 0
+        
+        # Count total withdrawals
+        from users.models import PayoutRequest
+        total_withdrawals = PayoutRequest.objects.filter(
+            user=request.user,
+            status='successful'
+        ).count()
+        
+        data = {
+            'withdrawable_balance': str(wallet.balance),
+            'available_balance': str(wallet.balance),
+            'total_earnings': str(total_credits),
+            'total_withdrawals': total_withdrawals,
+            'this_month_earnings': str(this_month_earnings),
+        }
+        
+        return Response(
+            {"success": True, "data": data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_wallet_transactions",
+        operation_summary="Get Wallet Transaction History",
+        operation_description="Retrieve admin's wallet transaction history.",
+        tags=["Admin Wallet"],
+        manual_parameters=[
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+        ],
+        responses={
+            200: openapi.Response("Transactions retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def transactions(self, request):
+        """Get wallet transaction history"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Wallet, WalletTransaction
+        from rest_framework.pagination import LimitOffsetPagination
+        
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        transactions = WalletTransaction.objects.filter(wallet=wallet).order_by('-created_at')
+        
+        paginator = LimitOffsetPagination()
+        paginated_txns = paginator.paginate_queryset(transactions, request)
+        
+        data = []
+        for txn in paginated_txns:
+            data.append({
+                'id': f"txn_{txn.id:06d}",
+                'type': txn.transaction_type,
+                'amount': str(txn.amount),
+                'description': txn.source or f"{txn.transaction_type.lower()}",
+                'status': 'SUCCESSFUL',
+                'created_at': txn.created_at.isoformat()
+            })
+        
+        return paginator.get_paginated_response(data)
+
+    @swagger_auto_schema(
+        operation_id="admin_request_withdrawal",
+        operation_summary="Request Withdrawal",
+        operation_description="Initiate a withdrawal request from admin wallet to configured bank account.",
+        tags=["Admin Wallet"],
+        request_body=AdminWithdrawalSerializer,
+        responses={
+            200: openapi.Response("Withdrawal request initiated successfully"),
+            400: openapi.Response("Invalid request"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def withdraw(self, request):
+        """Request a withdrawal"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = AdminWithdrawalSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Verify PIN
+        from users.models import PaymentPIN
+        try:
+            pin_obj = PaymentPIN.objects.get(user=request.user)
+            if not pin_obj.verify_pin(serializer.validated_data['pin']):
+                return Response(
+                    {"success": False, "message": "Invalid PIN"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except PaymentPIN.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Payment PIN not set. Please set your PIN first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Check balance
+        from transactions.models import Wallet
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        amount = serializer.validated_data['amount']
+        
+        if wallet.balance < amount:
+            return Response(
+                {"success": False, "message": "Insufficient balance"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Get admin payout settings
+        from users.models import AdminPayoutProfile
+        try:
+            payout_profile = AdminPayoutProfile.objects.get(user=request.user)
+            if not payout_profile.bank_name or not payout_profile.account_number:
+                return Response(
+                    {"success": False, "message": "Bank details not configured"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        except AdminPayoutProfile.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Bank details not configured"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Create withdrawal request
+        from users.models import PayoutRequest
+        import uuid as uuid_lib
+        
+        payout = PayoutRequest.objects.create(
+            user=request.user,
+            amount=amount,
+            bank_name=payout_profile.bank_name,
+            account_number=payout_profile.account_number,
+            account_name=payout_profile.account_name or '',
+            recipient_code=payout_profile.recipient_code or '',
+            reference=f"ADM-{uuid_lib.uuid4().hex[:12].upper()}",
+        )
+        
+        # Debit wallet
+        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        
+        message = f"Withdrawal request of ₦{amount:,.2f} initiated successfully."
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+
+class AdminPaymentSettingsViewSet(AdminBaseViewSet):
+    """
+    ViewSet for managing admin payment settings and PIN.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="admin_payment_settings_get",
+        operation_summary="Get Payment Settings",
+        operation_description="Retrieve admin's payment settings and bank account details.",
+        tags=["Admin Payment Settings"],
+        responses={
+            200: openapi.Response("Payment settings retrieved"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def retrieve_settings(self, request):
+        """Get payment settings"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from users.models import AdminPayoutProfile
+        try:
+            profile = AdminPayoutProfile.objects.get(user=request.user)
+            data = {
+                'bank_name': profile.bank_name or '',
+                'account_number': profile.account_number or '',
+                'account_name': profile.account_name or '',
+            }
+        except AdminPayoutProfile.DoesNotExist:
+            data = {
+                'bank_name': '',
+                'account_number': '',
+                'account_name': '',
+            }
+        
+        return Response(
+            {"success": True, "data": data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_payment_settings_update",
+        operation_summary="Update Payment Settings",
+        operation_description="Update admin's bank account details.",
+        tags=["Admin Payment Settings"],
+        request_body=AdminPaymentSettingsSerializer,
+        responses={
+            200: openapi.Response("Settings updated successfully"),
+            400: openapi.Response("Invalid data"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["put"])
+    def update_settings(self, request):
+        """Update payment settings"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = AdminPaymentSettingsSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        from users.models import AdminPayoutProfile
+        profile, created = AdminPayoutProfile.objects.get_or_create(user=request.user)
+        
+        # Update fields
+        if 'bank_name' in serializer.validated_data:
+            profile.bank_name = serializer.validated_data['bank_name']
+        if 'account_number' in serializer.validated_data:
+            profile.account_number = serializer.validated_data['account_number']
+        if 'account_name' in serializer.validated_data:
+            profile.account_name = serializer.validated_data['account_name']
+        
+        profile.save()
+        
+        return Response(
+            {"success": True, "message": "Payment settings updated successfully"},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_set_payment_pin",
+        operation_summary="Set/Change Payment PIN",
+        operation_description="Set or change the 4-digit payment PIN for withdrawals.",
+        tags=["Admin Payment Settings"],
+        request_body=PaymentPINSerializer,
+        responses={
+            200: openapi.Response("PIN set successfully"),
+            400: openapi.Response("Invalid PIN"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def set_pin(self, request):
+        """Set or change payment PIN"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        serializer = PaymentPINSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        from users.models import PaymentPIN
+        
+        # If changing PIN, verify current PIN
+        if serializer.validated_data.get('current_pin'):
+            try:
+                pin_obj = PaymentPIN.objects.get(user=request.user)
+                if not pin_obj.verify_pin(serializer.validated_data['current_pin']):
+                    return Response(
+                        {"success": False, "message": "Current PIN is incorrect"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            except PaymentPIN.DoesNotExist:
+                return Response(
+                    {"success": False, "message": "Payment PIN not set yet. Omit current_pin for initial setup."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        
+        # Create or update PIN
+        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
+        pin_obj.set_pin(serializer.validated_data['new_pin'])
+        
+        message = "Payment PIN set successfully" if created else "Payment PIN changed successfully"
+        return Response(
+            {"success": True, "message": message},
+            status=status.HTTP_200_OK,
+        )
+
+
+# =====================================================
+# ADMIN SETTLEMENTS & DISPUTES
+# =====================================================
+class AdminSettlementsViewSet(AdminBaseViewSet):
+    """
+    ViewSet for managing vendor settlements and customer dispute resolution.
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="admin_settlements_summary",
+        operation_summary="Settlements Summary",
+        operation_description="Retrieve platform-level settlement summary statistics.",
+        tags=["Admin Settlements"],
+        responses={
+            200: openapi.Response("Settlements summary retrieved"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """Get settlements summary"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Settlement, Order, OrderItem
+        from django.db.models import Sum, Count
+        from django.utils import timezone
+        from decimal import Decimal
+        
+        # Total revenue (GMV) - sum of all order totals
+        total_revenue = Order.objects.filter(
+            payment_status='PAID'
+        ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+        
+        # Total payouts - sum of processed settlements
+        total_payouts = Settlement.objects.filter(
+            status='PROCESSED'
+        ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+        
+        # Pending settlements - sum of pending settlement amounts
+        pending_settlements = Settlement.objects.filter(
+            status__in=['PENDING', 'PROCESSING']
+        ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+        
+        # Upcoming payouts - count of pending settlements
+        upcoming_payouts = Settlement.objects.filter(
+            status='PENDING',
+            payout_date__gt=timezone.now()
+        ).values('vendor').distinct().count()
+        
+        data = {
+            'total_revenue': str(total_revenue),
+            'total_payouts': str(total_payouts),
+            'pending_settlements': str(pending_settlements),
+            'upcoming_payouts': upcoming_payouts,
+        }
+        
+        return Response(
+            {"success": True, "data": data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_vendor_settlements_list",
+        operation_summary="Vendor Settlements List",
+        operation_description="Retrieve vendor settlement records with filtering.",
+        tags=["Admin Settlements"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description='Filter by status: PENDING, PROCESSED, FAILED'
+            ),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+        ],
+        responses={
+            200: openapi.Response("Vendor settlements retrieved"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def vendor(self, request):
+        """Get vendor settlements list"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Settlement
+        from rest_framework.pagination import LimitOffsetPagination
+        
+        settlements = Settlement.objects.select_related('vendor').order_by('-created_at')
+        
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter and status_filter.upper() in ['PENDING', 'PROCESSED', 'FAILED']:
+            settlements = settlements.filter(status=status_filter.upper())
+        
+        # Paginate
+        paginator = LimitOffsetPagination()
+        paginated = paginator.paginate_queryset(settlements, request)
+        
+        data = []
+        for settlement in paginated:
+            data.append({
+                'id': settlement.id,
+                'vendor_name': settlement.vendor.store_name,
+                'amount': str(settlement.amount),
+                'payout_date': settlement.payout_date.isoformat(),
+                'status': settlement.status,
+            })
+        
+        return paginator.get_paginated_response(data)
+
+    @swagger_auto_schema(
+        operation_id="admin_disputes_list",
+        operation_summary="Disputes & Refunds List",
+        operation_description="Retrieve customer disputes and refund requests.",
+        tags=["Admin Settlements"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description='Filter by status: PENDING, APPROVED, REJECTED'
+            ),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+        ],
+        responses={
+            200: openapi.Response("Disputes retrieved"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def disputes(self, request):
+        """Get disputes list"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Dispute
+        from rest_framework.pagination import LimitOffsetPagination
+        
+        disputes = Dispute.objects.select_related(
+            'order', 'customer', 'vendor'
+        ).order_by('-created_at')
+        
+        # Filter by status if provided
+        status_filter = request.query_params.get('status')
+        if status_filter and status_filter.upper() in ['PENDING', 'APPROVED', 'REJECTED']:
+            disputes = disputes.filter(status=status_filter.upper())
+        
+        # Paginate
+        paginator = LimitOffsetPagination()
+        paginated = paginator.paginate_queryset(disputes, request)
+        
+        data = []
+        for dispute in paginated:
+            data.append({
+                'id': dispute.id,
+                'order_id': str(dispute.order.order_id),
+                'customer_name': dispute.customer.full_name,
+                'vendor_name': dispute.vendor.store_name,
+                'amount': str(dispute.amount),
+                'reason': dispute.reason,
+                'status': dispute.status,
+                'created_at': dispute.created_at.isoformat(),
+            })
+        
+        return paginator.get_paginated_response(data)
+
+    @swagger_auto_schema(
+        operation_id="admin_resolve_dispute",
+        operation_summary="Resolve Dispute",
+        operation_description="Approve or reject a customer dispute/refund request.",
+        tags=["Admin Settlements"],
+        request_body=DisputeResolutionSerializer,
+        responses={
+            200: openapi.Response("Dispute resolved successfully"),
+            400: openapi.Response("Invalid request"),
+            403: openapi.Response("Admin access only"),
+            404: openapi.Response("Dispute not found"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"], url_path=r"disputes/(?P<dispute_id>[^/]+)/resolve")
+    def resolve_dispute(self, request, dispute_id=None):
+        """Resolve a dispute"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response(
+                {"success": False, "message": "Admin access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        
+        from transactions.models import Dispute, Wallet
+        from django.utils import timezone
+        
+        try:
+            dispute = Dispute.objects.get(id=dispute_id)
+        except Dispute.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Dispute not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        
+        serializer = DisputeResolutionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        action = serializer.validated_data['action']
+        admin_note = serializer.validated_data.get('admin_note', '')
+        
+        # Update dispute
+        dispute.status = 'APPROVED' if action == 'APPROVE' else 'REJECTED'
+        dispute.admin_note = admin_note
+        dispute.resolved_by = request.user
+        dispute.resolved_at = timezone.now()
+        dispute.save()
+        
+        # If approved, process refund
+        if action == 'APPROVE':
+            # Credit customer wallet
+            customer_wallet, _ = Wallet.objects.get_or_create(user=dispute.customer)
+            customer_wallet.credit(dispute.amount, source=f"Refund for Order {dispute.order.order_id}")
+            
+            # Debit vendor wallet (if they haven't withdrawn yet)
+            vendor_wallet, _ = Wallet.objects.get_or_create(user=dispute.vendor.user)
+            try:
+                vendor_wallet.debit(dispute.amount, source=f"Refund reversal for Order {dispute.order.order_id}")
+            except ValueError:
+                # If vendor wallet is insufficient, log it
+                pass
+        
+        return Response(
+            {
+                "success": True,
+                "message": f"Dispute {action.lower()}ed successfully"
+            },
+            status=status.HTTP_200_OK,
+        )

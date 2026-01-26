@@ -401,13 +401,14 @@ class CartView(BaseAPIView, generics.RetrieveAPIView):
     examples=[
         OpenApiExample(
             "Add item example",
-            summary="Add item to cart",
+            summary="Add item to cart using slug",
             value={"slug": "awesome-product", "quantity": 2}
         )
     ],
     responses={
         201: CartItemSerializer,
-        400: {"description": "Invalid data or product not found"}
+        400: {"description": "Invalid data or product not found"},
+        404: {"description": "Product not found"}
     },
 )
 class AddToCartView(BaseAPIView, generics.CreateAPIView):
@@ -416,7 +417,13 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
 
     def post(self, request):
         slug = request.data.get('slug')
+        if not slug:
+            return Response(standardized_response(success=False, error="Product slug is required"), status=400)
+        
         quantity = int(request.data.get('quantity', 1))
+        if quantity < 1:
+            return Response(standardized_response(success=False, error="Quantity must be at least 1"), status=400)
+        
         product = get_object_or_404(Product, slug=slug)
 
         cart, _ = Cart.objects.get_or_create(customer=request.user)
@@ -429,7 +436,7 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
 
         cart_item.save()
         serializer = self.get_serializer(cart_item)
-        return Response(standardized_response(data=serializer.data, message="Item added to cart"))
+        return Response(standardized_response(data=serializer.data, message="Item added to cart"), status=201)
 
 
 @extend_schema(
@@ -475,13 +482,14 @@ class FavouriteListView(BaseAPIView, generics.ListAPIView):
     examples=[
         OpenApiExample(
             "Add favourite example",
-            summary="Add to favourites",
+            summary="Add to favourites using slug",
             value={"slug": "awesome-product"}
         )
     ],
     responses={
         201: FavouriteSerializer,
-        400: {"description": "Already in favourites"}
+        400: {"description": "Already in favourites"},
+        404: {"description": "Product not found"}
     }
 )
 class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
@@ -490,6 +498,9 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
 
     def post(self, request):
         slug = request.data.get('slug')
+        if not slug:
+            return Response(standardized_response(success=False, error="Product slug is required"), status=400)
+        
         product = get_object_or_404(Product, slug=slug)
 
         fav, created = Favourite.objects.get_or_create(customer=request.user, product=product)
@@ -497,7 +508,7 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
             return Response(standardized_response(success=False, error="Already in favourites"), status=400)
 
         serializer = self.get_serializer(fav)
-        return Response(standardized_response(data=serializer.data, message="Added to favourites"))
+        return Response(standardized_response(data=serializer.data, message="Added to favourites"), status=201)
 
 
 @extend_schema(

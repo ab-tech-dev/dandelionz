@@ -256,3 +256,18 @@ class PayoutRequest(models.Model):
             models.Index(fields=['user', 'status']),
         ]
 
+
+class AdminPayoutProfile(models.Model):
+    """
+    Admin's payout settings for receiving commissions and earnings.
+    Mirrors the Vendor payout structure.
+    """
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_payout_profile')
+    bank_name = models.CharField(max_length=100, blank=True)
+    account_number = models.CharField(max_length=20, blank=True)
+    account_name = models.CharField(max_length=200, blank=True, help_text="Name on the bank account")
+    recipient_code = models.CharField(max_length=100, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Admin Payout Settings - {self.user.email}"
