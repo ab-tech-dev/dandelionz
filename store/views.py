@@ -391,7 +391,7 @@ class CartView(BaseAPIView, generics.RetrieveAPIView):
         OpenApiExample(
             "Add item example",
             summary="Add item to cart",
-            value={"product_id": 3, "quantity": 2}
+            value={"slug": "awesome-product", "quantity": 2}
         )
     ],
     responses={
@@ -404,9 +404,9 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
     serializer_class = CartItemSerializer
 
     def post(self, request):
-        product_id = request.data.get('product_id')
+        slug = request.data.get('slug')
         quantity = int(request.data.get('quantity', 1))
-        product = get_object_or_404(Product, id=product_id)
+        product = get_object_or_404(Product, slug=slug)
 
         cart, _ = Cart.objects.get_or_create(customer=request.user)
         cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product)
@@ -465,7 +465,7 @@ class FavouriteListView(BaseAPIView, generics.ListAPIView):
         OpenApiExample(
             "Add favourite example",
             summary="Add to favourites",
-            value={"product_id": 5}
+            value={"slug": "awesome-product"}
         )
     ],
     responses={
@@ -478,8 +478,8 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
     serializer_class = FavouriteSerializer
 
     def post(self, request):
-        product_id = request.data.get('product_id')
-        product = get_object_or_404(Product, id=product_id)
+        slug = request.data.get('slug')
+        product = get_object_or_404(Product, slug=slug)
 
         fav, created = Favourite.objects.get_or_create(customer=request.user, product=product)
         if not created:
