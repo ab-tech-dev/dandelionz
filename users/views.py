@@ -931,7 +931,6 @@ class VendorViewSet(viewsets.ViewSet):
         },
         security=[{"Bearer": []}],
     )
-    @action(detail=False, methods=["get"], url_path="list")
     def list_orders(self, request):
         """Get paginated list of vendor's orders"""
         vendor = self.get_vendor(request)
