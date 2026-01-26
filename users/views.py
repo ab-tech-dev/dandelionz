@@ -872,9 +872,12 @@ class VendorViewSet(viewsets.ViewSet):
 
         from transactions.models import Order
 
-        orders = Order.objects.filter(
+        # Get distinct order IDs for this vendor
+        order_ids = Order.objects.filter(
             order_items__product__store=vendor
-        ).distinct()
+        ).values_list('order_id', flat=True).distinct()
+        
+        orders = Order.objects.filter(order_id__in=order_ids)
 
         data = {
             "pending": orders.filter(status=Order.Status.PENDING).count(),
@@ -944,10 +947,15 @@ class VendorViewSet(viewsets.ViewSet):
         from transactions.models import Order
         from rest_framework.pagination import LimitOffsetPagination
 
-        # Get all orders for this vendor - use distinct('order_id') to avoid duplicates from joins
-        orders = Order.objects.filter(
+        # Get distinct order IDs for this vendor's products
+        order_ids = Order.objects.filter(
             order_items__product__store=vendor
-        ).select_related('customer').prefetch_related('order_items__product').distinct('order_id').order_by('order_id')
+        ).values_list('order_id', flat=True).distinct()
+
+        # Fetch full orders with optimized queries
+        orders = Order.objects.filter(
+            order_id__in=order_ids
+        ).select_related('customer').prefetch_related('order_items__product')
 
         # Filter by status if provided
         status_filter = request.query_params.get('status')
@@ -968,12 +976,15 @@ class VendorViewSet(viewsets.ViewSet):
 
         if paginated_orders is None:
             # Handle case where pagination fails
-            serializer = VendorOrderListItemSerializer(orders, many=True)
-            return Response(serializer.data)
+            paginated_orders = list(orders)
 
         # Serialize and return
         serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        
+        if paginator.count is not None:
+            return paginator.get_paginated_response(serializer.data)
+        else:
+            return Response(serializer.data)
 
     @swagger_auto_schema(
         operation_id="vendor_order_detail",
@@ -1008,7 +1019,7 @@ class VendorViewSet(viewsets.ViewSet):
             order = Order.objects.filter(
                 order_items__product__store=vendor,
                 order_id=order_uuid
-            ).select_related('customer__user').prefetch_related('order_items__product').distinct().first()
+            ).select_related('customer').prefetch_related('order_items__product').first()
 
             if not order:
                 return Response(
