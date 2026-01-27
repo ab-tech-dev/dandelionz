@@ -1060,8 +1060,9 @@ No authentication required (webhook signature validation instead)""",
 # Payment verification
 # ----------------------
 class SecureVerifyPaymentView(APIView):
-    # throttle_classes = [PaymentVerificationThrottle]
-    # permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [PaymentVerificationThrottle]
+    permission_classes = [permissions.IsAuthenticated]
+    
     @swagger_auto_schema(
         operation_id="verify_payment",
         operation_summary="Verify Single Payment",
