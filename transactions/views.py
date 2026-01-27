@@ -1068,7 +1068,8 @@ class SecureVerifyPaymentView(APIView):
         operation_summary="Verify Single Payment",
         operation_description="""Verify a one-time (non-installment) payment with Paystack.
         
-Verifies payment status and credits vendor wallets on success.""",
+Verifies payment status and credits vendor wallets on success.
+Accepts both GET (from Paystack redirects) and POST requests.""",
         tags=["Payments"],
         manual_parameters=[
             openapi.Parameter('reference', openapi.IN_QUERY, description='Payment reference', type=openapi.TYPE_STRING, required=True),
@@ -1080,8 +1081,8 @@ Verifies payment status and credits vendor wallets on success.""",
             403: openapi.Response("Forbidden"),
         },
     )
-    def get(self, request):
-        reference = request.query_params.get("reference")
+    def _verify_payment(self, request, reference):
+        """Helper method to verify payment (shared by GET and POST)"""
         if not reference:
             return Response({"detail": "reference required"}, status=400)
 
@@ -1117,6 +1118,16 @@ Verifies payment status and credits vendor wallets on success.""",
             # This maintains the available vs pending balance flow
 
         return Response({"detail": "Payment verified"})
+
+    def get(self, request):
+        """Handle GET requests (Paystack redirect callback)"""
+        reference = request.query_params.get("reference")
+        return self._verify_payment(request, reference)
+
+    def post(self, request):
+        """Handle POST requests"""
+        reference = request.data.get("reference") or request.query_params.get("reference")
+        return self._verify_payment(request, reference)
 
 # ----------------------
 # Paystack webhook
