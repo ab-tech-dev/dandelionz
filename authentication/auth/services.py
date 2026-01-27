@@ -9,6 +9,7 @@ from django.core.exceptions import ValidationError
 
 from authentication.serializers import UserBaseSerializer
 from authentication.core.jwt_utils import TokenManager
+from authentication.core.ip_utils import get_client_ip
 from authentication.models import CustomUser
 from rest_framework_simplejwt.tokens import RefreshToken
 from authentication.verification.tasks import send_verification_email_task
@@ -30,7 +31,8 @@ class AuthenticationService:
             }, 400
 
         if request_meta:
-            logger.info(f"Registration attempt from IP: {request_meta.get('REMOTE_ADDR')}")
+            ip = get_client_ip(request_meta)
+            logger.info(f"Registration attempt from IP: {ip}")
 
         try:
             if CustomUser.objects.filter(email=email).exists():
@@ -104,8 +106,9 @@ class AuthenticationService:
             return False, {"success": False, "error": "Email and password are required."}, 400
 
         if request_meta:
+            ip = get_client_ip(request_meta)
             logger.info(
-                f"Login attempt from IP: {request_meta.get('REMOTE_ADDR')}, User-agent: {request_meta.get('HTTP_USER_AGENT')}"
+                f"Login attempt from IP: {ip}, User-agent: {request_meta.get('HTTP_USER_AGENT')}"
             )
 
         try:
@@ -174,7 +177,8 @@ class AuthenticationService:
                 logger.warning(f"Failed to update last login: {str(save_error)}")
 
             if request_meta:
-                logger.info(f"Login successful for user: {user.email} from IP {request_meta.get('REMOTE_ADDR')}")
+                ip = get_client_ip(request_meta)
+                logger.info(f"Login successful for user: {user.email} from IP {ip}")
 
             return True, {
                 "success": True,

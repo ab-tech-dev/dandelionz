@@ -97,11 +97,20 @@ def product_approval_notification(sender, instance, created, **kwargs):
             logger.info(f"New product '{instance.name}' created by vendor {instance.store.user} - Status: pending")
             
             try:
-                # Validate vendor user exists and is saved
-                vendor_user = instance.store.user
-                if not vendor_user or not vendor_user.pk:
-                    logger.error(f"Invalid vendor user for product {instance.name}")
+                # Refresh vendor from database to ensure related user is properly loaded
+                vendor = instance.store
+                if not vendor or not vendor.pk:
+                    logger.error(f"Invalid vendor for product {instance.name}")
                     return
+                
+                # Refresh vendor user from database
+                vendor_user = vendor.user
+                if not vendor_user:
+                    logger.error(f"Vendor {vendor.store_name} has no associated user")
+                    return
+                
+                # Force refresh from database to ensure user is saved
+                vendor_user.refresh_from_db()
                 
                 # Notify vendor that product is pending approval
                 _send_notification_safely(
@@ -135,10 +144,20 @@ def product_approval_notification(sender, instance, created, **kwargs):
                 logger.info(f"Product '{instance.name}' approved successfully")
                 
                 try:
-                    vendor_user = instance.store.user
-                    if not vendor_user or not vendor_user.pk:
-                        logger.error(f"Invalid vendor user for product {instance.name}")
+                    # Refresh vendor from database to ensure related user is properly loaded
+                    vendor = instance.store
+                    if not vendor or not vendor.pk:
+                        logger.error(f"Invalid vendor for product {instance.name}")
                         return
+                    
+                    # Refresh vendor user from database
+                    vendor_user = vendor.user
+                    if not vendor_user:
+                        logger.error(f"Vendor {vendor.store_name} has no associated user")
+                        return
+                    
+                    # Force refresh from database to ensure user is saved
+                    vendor_user.refresh_from_db()
                     
                     # Notify vendor that product is approved
                     _send_notification_safely(
@@ -157,10 +176,20 @@ def product_approval_notification(sender, instance, created, **kwargs):
                 logger.info(f"Product '{instance.name}' rejected with reason: {instance.rejection_reason}")
                 
                 try:
-                    vendor_user = instance.store.user
-                    if not vendor_user or not vendor_user.pk:
-                        logger.error(f"Invalid vendor user for product {instance.name}")
+                    # Refresh vendor from database to ensure related user is properly loaded
+                    vendor = instance.store
+                    if not vendor or not vendor.pk:
+                        logger.error(f"Invalid vendor for product {instance.name}")
                         return
+                    
+                    # Refresh vendor user from database
+                    vendor_user = vendor.user
+                    if not vendor_user:
+                        logger.error(f"Vendor {vendor.store_name} has no associated user")
+                        return
+                    
+                    # Force refresh from database to ensure user is saved
+                    vendor_user.refresh_from_db()
                     
                     # Notify vendor that product is rejected with reason
                     rejection_reason = instance.rejection_reason or "Product did not meet approval criteria"
