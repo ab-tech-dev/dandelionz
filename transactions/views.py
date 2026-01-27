@@ -37,7 +37,12 @@ from .serializers import (
     WalletTransactionSerializer,
     InstallmentPlanSerializer,
     InstallmentPaymentSerializer,
-    InstallmentCheckoutSerializer
+    InstallmentCheckoutSerializer,
+    RefundActionSerializer,
+    InitializeInstallmentPaymentSerializer,
+    VerifyPaymentSerializer,
+    CommissionAnalyticsQuerySerializer,
+    CommissionAnalyticsResponseSerializer
 )
 from .paystack import Paystack
 from authentication.core.response import standardized_response
@@ -792,14 +797,7 @@ class InitializeInstallmentPaymentView(APIView):
         
 Only works for PENDING installments that haven't been paid yet.""",
         tags=["Installments"],
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'plan_id': openapi.Schema(type=openapi.TYPE_INTEGER, description='Installment plan ID'),
-                'payment_number': openapi.Schema(type=openapi.TYPE_INTEGER, description='Which installment (2, 3, etc.)'),
-            },
-            required=['plan_id', 'payment_number']
-        ),
+        request_body=InitializeInstallmentPaymentSerializer,
         responses={
             201: openapi.Response("Payment initialized", schema=openapi.Schema(
                 type=openapi.TYPE_OBJECT,
@@ -818,14 +816,16 @@ Only works for PENDING installments that haven't been paid yet.""",
         },
     )
     def post(self, request):
-        plan_id = request.data.get('plan_id')
-        payment_number = request.data.get('payment_number')
-
-        if not plan_id or not payment_number:
+        # Validate request data using serializer
+        serializer = InitializeInstallmentPaymentSerializer(data=request.data)
+        if not serializer.is_valid():
             return Response(
-                standardized_response(success=False, error="plan_id and payment_number required"),
+                standardized_response(success=False, error=serializer.errors),
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        plan_id = serializer.validated_data['plan_id']
+        payment_number = serializer.validated_data['payment_number']
 
         try:
             installment = InstallmentPayment.objects.select_related(
@@ -1060,7 +1060,6 @@ No authentication required (webhook signature validation instead)""",
 # Payment verification
 # ----------------------
 class SecureVerifyPaymentView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
     throttle_classes = [PaymentVerificationThrottle]
 
     @swagger_auto_schema(
@@ -1069,64 +1068,114 @@ class SecureVerifyPaymentView(APIView):
         operation_description="""Verify a one-time (non-installment) payment with Paystack.
         
 Verifies payment status and credits vendor wallets on success.
-Accepts both GET (from Paystack redirects) and POST requests.""",
+Accepts both GET (from Paystack redirects) and POST requests.
+
+GET requests from Paystack redirects will auto-authenticate using the payment's owner.
+Use the 'reference' or 'trxref' query parameter.""",
         tags=["Payments"],
         manual_parameters=[
-            openapi.Parameter('reference', openapi.IN_QUERY, description='Payment reference', type=openapi.TYPE_STRING, required=True),
+            openapi.Parameter('reference', openapi.IN_QUERY, description='Payment reference', type=openapi.TYPE_STRING, required=False),
+            openapi.Parameter('trxref', openapi.IN_QUERY, description='Paystack transaction reference (alternative)', type=openapi.TYPE_STRING, required=False),
         ],
         responses={
             200: openapi.Response("Payment verified", schema=PaymentSerializer()),
             400: openapi.Response("Invalid payment or currency mismatch"),
-            401: openapi.Response("Unauthorized"),
-            403: openapi.Response("Forbidden"),
+            404: openapi.Response("Payment not found"),
         },
     )
     def _verify_payment(self, request, reference):
         """Helper method to verify payment (shared by GET and POST)"""
         if not reference:
-            return Response({"detail": "reference required"}, status=400)
+            return Response(
+                standardized_response(success=False, error="reference or trxref parameter required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate reference format
+        serializer = VerifyPaymentSerializer(data={'reference': reference})
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error="Invalid reference format"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            payment = Payment.objects.select_related("order").get(reference=reference)
+        except Payment.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Payment not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        payment = get_object_or_404(
-            Payment.objects.select_related("order"),
-            reference=reference
-        )
-
-        if payment.order.customer != request.user and not request.user.is_staff:
-            return Response({"detail": "Forbidden"}, status=403)
+        # For GET requests from Paystack redirects, auto-authenticate with payment owner
+        # For POST requests with user auth, verify ownership
+        if request.user and request.user.is_authenticated:
+            if payment.order.customer != request.user and not request.user.is_staff:
+                return Response(
+                    standardized_response(success=False, error="Forbidden"),
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         paystack = Paystack()
-        resp = paystack.verify_payment(reference)
+        try:
+            resp = paystack.verify_payment(reference)
+        except Exception as e:
+            return Response(
+                standardized_response(success=False, error=f"Paystack verification failed: {str(e)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         data = resp.get("data", {})
 
         if data.get("status") != "success":
-            return Response({"detail": "Payment not successful"}, status=400)
+            return Response(
+                standardized_response(success=False, error="Payment not successful"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if data.get("currency") != EXPECTED_CURRENCY:
-            return Response({"detail": "Invalid currency"}, status=400)
+            return Response(
+                standardized_response(success=False, error="Invalid currency"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         paid_amount = Decimal(data["amount"]) / Decimal(100)
         if paid_amount != payment.amount:
-            return Response({"detail": "Amount mismatch"}, status=400)
+            return Response(
+                standardized_response(success=False, error="Amount mismatch"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         with transaction.atomic():
             payment = Payment.objects.select_for_update().get(pk=payment.pk)
             if payment.verified:
-                return Response({"detail": "Already verified"})
+                return Response(
+                    standardized_response(
+                        data=PaymentSerializer(payment).data,
+                        message="Payment already verified"
+                    )
+                )
 
             payment.mark_as_successful()
             # Note: Vendors are credited when order is DELIVERED, not when payment is received
             # This maintains the available vs pending balance flow
 
-        return Response({"detail": "Payment verified"})
+        return Response(
+            standardized_response(
+                data=PaymentSerializer(payment).data,
+                message="Payment verified successfully"
+            )
+        )
 
     def get(self, request):
         """Handle GET requests (Paystack redirect callback)"""
-        reference = request.query_params.get("reference")
+        # Support both 'reference' and 'trxref' parameters from Paystack
+        reference = request.query_params.get("reference") or request.query_params.get("trxref")
         return self._verify_payment(request, reference)
 
     def post(self, request):
         """Handle POST requests"""
-        reference = request.data.get("reference") or request.query_params.get("reference")
+        reference = request.data.get("reference") or request.query_params.get("reference") or request.query_params.get("trxref")
         return self._verify_payment(request, reference)
 
 # ----------------------
@@ -1301,15 +1350,9 @@ class RefundDetailView(generics.RetrieveUpdateAPIView):
         operation_summary="Approve or Reject Refund",
         operation_description="""Update refund status: approve to credit customer wallet, or reject.
         
-Request body: {"action": "APPROVE" or "REJECT"}""",
+Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}""",
         tags=["Refunds"],
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'action': openapi.Schema(type=openapi.TYPE_STRING, enum=['APPROVE', 'REJECT']),
-            },
-            required=['action']
-        ),
+        request_body=RefundActionSerializer,
         responses={
             200: RefundSerializer,
             400: openapi.Response("Already processed or invalid action"),
@@ -1319,17 +1362,29 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
         },
     )
     def patch(self, request, *args, **kwargs):
-        return super().patch(request, *args, **kwargs)
+        # Validate request data using serializer
+        serializer = RefundActionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        refund = self.get_object()
+        action = serializer.validated_data['action']
+        rejection_reason = serializer.validated_data.get('rejection_reason', 'Not provided')
+        
+        return self.process_refund_action(refund, action, rejection_reason, request)
 
-    def update(self, request, *args, **kwargs):
+    def process_refund_action(self, refund, action, rejection_reason, request):
         import logging
         logger = logging.getLogger(__name__)
         
-        refund = self.get_object()
-        action = request.data.get("action", "").upper()
-
         if refund.status != Refund.Status.PENDING:
-            return Response({"detail": "Already processed"}, status=400)
+            return Response(
+                standardized_response(success=False, error="Already processed"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         with transaction.atomic():
             if action == "APPROVE":
@@ -1432,7 +1487,7 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
                     }
                 ))
 
-            if action == "REJECT":
+            elif action == "REJECT":
                 refund.status = Refund.Status.REJECTED
                 refund.processed_at = timezone.now()
                 refund.save()
@@ -1448,7 +1503,7 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
                     metadata={
                         "refund_id": refund.id,
                         "order_id": str(refund.payment.order.order_id),
-                        "reason": request.data.get("rejection_reason", "Not provided")
+                        "reason": rejection_reason
                     }
                 )
                 
@@ -1457,15 +1512,13 @@ Request body: {"action": "APPROVE" or "REJECT"}""",
                 return Response(standardized_response(
                     success=True,
                     message="Refund rejected",
-                    data={"refund_id": refund.id, "status": refund.status}
+                    data=RefundSerializer(refund).data
                 ))
             
             return Response(
                 standardized_response(success=False, error="Invalid action. Use 'APPROVE' or 'REJECT'"),
                 status=status.HTTP_400_BAD_REQUEST
             )
-
-        return Response({"detail": "Invalid action"}, status=400)
 
 # ----------------------
 # Wallet Management
@@ -1624,12 +1677,13 @@ Metrics include:
 - Total delivered orders count
 - Average commission per order""",
         tags=["Analytics"],
-        parameters=[
+        request_body=CommissionAnalyticsQuerySerializer,
+        manual_parameters=[
             openapi.Parameter('period', openapi.IN_QUERY, description='Time period: all, day, week, month, year', type=openapi.TYPE_STRING, required=False),
             openapi.Parameter('vendor_id', openapi.IN_QUERY, description='Filter by specific vendor ID', type=openapi.TYPE_INTEGER, required=False),
         ],
         responses={
-            200: openapi.Response("Commission analytics data"),
+            200: CommissionAnalyticsResponseSerializer(),
             401: openapi.Response("Unauthorized"),
             403: openapi.Response("Forbidden"),
         },
@@ -1641,9 +1695,21 @@ Metrics include:
         
         logger = logging.getLogger(__name__)
         
+        # Validate query parameters using serializer
+        serializer = CommissionAnalyticsQuerySerializer(data={
+            'period': request.query_params.get('period', 'all'),
+            'vendor_id': request.query_params.get('vendor_id')
+        })
+        
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         try:
-            period = request.query_params.get('period', 'all').lower()
-            vendor_id = request.query_params.get('vendor_id', None)
+            period = serializer.validated_data['period']
+            vendor_id = serializer.validated_data.get('vendor_id')
             
             # Define time filter based on period
             now = timezone.now()
@@ -1698,7 +1764,6 @@ Metrics include:
             
             # Filter by vendor if specified
             if vendor_id:
-                vendor_id = int(vendor_id)
                 commission_by_vendor = {
                     vid: data for vid, data in commission_by_vendor.items()
                     if vid == vendor_id

@@ -417,3 +417,80 @@ class InstallmentCheckoutSerializer(serializers.Serializer):
         if value not in InstallmentPlan.DURATION_INSTALLMENTS:
             raise serializers.ValidationError("Invalid installment duration.")
         return value
+
+
+# ========================
+# REQUEST/RESPONSE SERIALIZERS
+# ========================
+class RefundActionSerializer(serializers.Serializer):
+    """Serializer for refund action (approve/reject) requests"""
+    action = serializers.ChoiceField(choices=['APPROVE', 'REJECT'])
+    rejection_reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=500,
+        help_text="Optional reason for rejection"
+    )
+    
+    def validate_action(self, value):
+        if value.upper() not in ['APPROVE', 'REJECT']:
+            raise serializers.ValidationError("Action must be 'APPROVE' or 'REJECT'.")
+        return value.upper()
+
+
+class InitializeInstallmentPaymentSerializer(serializers.Serializer):
+    """Serializer for initializing installment payment requests"""
+    plan_id = serializers.IntegerField(required=True)
+    payment_number = serializers.IntegerField(required=True)
+    
+    def validate_plan_id(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("plan_id must be a positive integer.")
+        return value
+    
+    def validate_payment_number(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("payment_number must be a positive integer.")
+        return value
+
+
+class VerifyPaymentSerializer(serializers.Serializer):
+    """Serializer for payment verification requests"""
+    reference = serializers.CharField(required=True, max_length=255)
+    
+    def validate_reference(self, value):
+        if not value or len(value.strip()) == 0:
+            raise serializers.ValidationError("Payment reference cannot be empty.")
+        return value
+
+
+class CommissionAnalyticsQuerySerializer(serializers.Serializer):
+    """Serializer for commission analytics query parameters"""
+    PERIOD_CHOICES = [
+        ('all', 'All Time'),
+        ('day', 'Today'),
+        ('week', 'This Week'),
+        ('month', 'This Month'),
+        ('year', 'This Year'),
+    ]
+    
+    period = serializers.ChoiceField(
+        choices=PERIOD_CHOICES,
+        required=False,
+        default='all'
+    )
+    vendor_id = serializers.IntegerField(required=False, allow_null=True)
+    
+    def validate_vendor_id(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("vendor_id must be a positive integer.")
+        return value
+
+
+class CommissionAnalyticsResponseSerializer(serializers.Serializer):
+    """Serializer for commission analytics response data"""
+    period = serializers.CharField()
+    summary = serializers.DictField()
+    by_vendor = serializers.ListField(child=serializers.DictField())
+    top_vendors = serializers.ListField(child=serializers.DictField())
+    commission_rate = serializers.CharField()
