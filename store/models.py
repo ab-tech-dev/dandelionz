@@ -130,6 +130,14 @@ class Product(models.Model):
         """Get the main video for this product"""
         return self.videos.first()
 
+    @property
+    def get_final_price(self):
+        """Calculate final price after applying discount percentage"""
+        if not self.price:
+            return Decimal('0.00')
+        discount_amount = (self.price * self.discount) / Decimal('100')
+        return self.price - discount_amount
+
 
 # ==========================================
 # Product Image Model

@@ -440,13 +440,13 @@ class CheckoutView(APIView):
             # 1. Create Order
             order = Order.objects.create(customer=user)
 
-            # 2. Convert CartItems → OrderItems
+            # 2. Convert CartItems → OrderItems (using discounted price)
             for item in cart_items:
                 OrderItem.objects.create(
                     order=order,
                     product=item.product,
                     quantity=item.quantity,
-                    price_at_purchase=item.product.price
+                    price_at_purchase=item.product.get_final_price
                 )
 
             # 3. Calculate total
@@ -569,13 +569,13 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
             # 1. Create Order
             order = Order.objects.create(customer=user)
 
-            # 2. Convert CartItems → OrderItems
+            # 2. Convert CartItems → OrderItems (using discounted price)
             for item in cart_items:
                 OrderItem.objects.create(
                     order=order,
                     product=item.product,
                     quantity=item.quantity,
-                    price_at_purchase=item.product.price,
+                    price_at_purchase=item.product.get_final_price,
                 )
 
             # 3. Calculate total
