@@ -5,6 +5,7 @@ from users.models import Vendor
 from django.utils.text import slugify
 from django.utils import timezone
 from cloudinary.models import CloudinaryField
+from decimal import Decimal
 import json
 import uuid
 
@@ -212,7 +213,7 @@ class Cart(models.Model):
 
     @property
     def total(self):
-        return sum(item.subtotal for item in self.items.all())
+        return sum((item.subtotal for item in self.items.all()), Decimal('0.00'))
     
     def __str__(self):
         return f"Cart for {self.customer.email}"
@@ -231,7 +232,7 @@ class CartItem(models.Model):
     def subtotal(self):
         """Calculate item subtotal using discounted price if available, else regular price"""
         price = self.product.discounted_price if self.product.discounted_price else self.product.price
-        return price * self.quantity if price else 0
+        return price * self.quantity if price else Decimal('0.00')
 
 
 class Favourite(models.Model):
