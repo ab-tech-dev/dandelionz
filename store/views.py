@@ -136,7 +136,7 @@ class ProductDetailView(BaseAPIView):
                 "category": "electronics",
                 "brand": "AudioBrand",
                 "price": 150.00,
-                "discounted_price": 120.00,
+                "discount": 20,
                 "stock": 50,
                 "tags": "headphones, wireless, audio",
                 "variants": {
@@ -307,7 +307,7 @@ class PatchProductView(BaseAPIView, generics.UpdateAPIView):
         product = self.get_object()
 
         # Only allow patching specific fields
-        allowed_fields = ['price', 'discounted_price', 'stock', 'description', 'category', 'brand', 'tags', 'variants', 'image']
+        allowed_fields = ['price', 'discount', 'stock', 'description', 'category', 'brand', 'tags', 'variants', 'image']
         data = {k: v for k, v in request.data.items() if k in allowed_fields}
 
         serializer = self.get_serializer(product, data=data, partial=True)

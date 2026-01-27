@@ -480,7 +480,7 @@ class CheckoutView(APIView):
             vendors = {item.vendor for item in order.order_items.all() if item.vendor}
             for vendor in vendors:
                 Notification.objects.create(
-                    recipient=vendor,
+                    recipient=vendor.user,
                     title="New Order Received",
                     message=f"You received a new order {order.order_id}."
                 )

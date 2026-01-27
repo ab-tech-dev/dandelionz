@@ -11,7 +11,7 @@ from django.utils import timezone
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'description', 'tags', 'brand', 'variants', 'discounted_price']
+        fields = ['id', 'name', 'price', 'description', 'tags', 'brand', 'variants', 'discount']
         read_only_fields = fields
         ref_name = "TransactionProductSerializer"
 

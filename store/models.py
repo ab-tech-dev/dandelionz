@@ -74,7 +74,7 @@ class Product(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    discounted_price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    discount = models.PositiveIntegerField(default=0, help_text="Discount percentage applied to the original price (0-100)")
     stock = models.PositiveIntegerField(null=True, blank=True)
     brand = models.CharField(max_length=255, null=True, blank=True)
     tags = models.TextField(null=True, blank=True, help_text="Comma-separated tags or JSON array")
@@ -230,9 +230,12 @@ class CartItem(models.Model):
 
     @property
     def subtotal(self):
-        """Calculate item subtotal using discounted price if available, else regular price"""
-        price = self.product.discounted_price if self.product.discounted_price else self.product.price
-        return price * self.quantity if price else Decimal('0.00')
+        """Calculate item subtotal applying discount percentage to the original price"""
+        if not self.product.price:
+            return Decimal('0.00')
+        discount_amount = (self.product.price * self.product.discount) / Decimal('100')
+        final_price = self.product.price - discount_amount
+        return final_price * self.quantity
 
 
 class Favourite(models.Model):

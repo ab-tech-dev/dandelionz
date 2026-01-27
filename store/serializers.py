@@ -181,7 +181,7 @@ class ProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'store', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
-            'category_name', 'price', 'discounted_price', 'stock', 'brand', 'tags', 
+            'category_name', 'price', 'discount', 'stock', 'brand', 'tags', 
             'variants', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date', 
             'created_at', 'updated_at', 'reviews'
         ]
@@ -226,7 +226,7 @@ class CreateProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'name', 'slug', 'description', 'category', 'brand',
-            'price', 'discounted_price', 'stock', 'tags', 'variants', 'image', 
+            'price', 'discount', 'stock', 'tags', 'variants', 'image', 
             'images', 'videos', 'images_data', 'video_data',
             'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at'
         ]
@@ -372,7 +372,7 @@ class PendingProductsSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'store', 'vendor', 'vendorName', 'store_owner_email', 'name', 'slug', 
-            'description', 'category', 'category_name', 'price', 'discounted_price', 'stock', 
+            'description', 'category', 'category_name', 'price', 'discount', 'stock', 
             'brand', 'tags', 'variants', 'image', 'images', 'videos', 'in_stock', 'uploaded_date',
             'publish_status', 'approval_status', 'approved_by', 'approved_by_email', 'approval_date', 
             'rejection_reason', 'created_at', 'updated_at'

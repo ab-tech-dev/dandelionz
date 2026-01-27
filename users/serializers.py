@@ -481,7 +481,7 @@ class AdminProductUpdateSerializer(serializers.Serializer):
     name = serializers.CharField(required=False, help_text="Product name")
     description = serializers.CharField(required=False, help_text="Product description")
     price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, help_text="Product price")
-    discounted_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True, help_text="Discounted price if applicable")
+    discount = serializers.IntegerField(required=False, help_text="Discount percentage (0-100)")
     stock = serializers.IntegerField(required=False, help_text="Stock quantity")
     is_active = serializers.BooleanField(required=False, help_text="Whether product is active")
 
