@@ -1,6 +1,7 @@
 import hmac
 import hashlib
 import uuid
+import logging
 from decimal import Decimal
 from datetime import timedelta
 from django.conf import settings
@@ -20,6 +21,8 @@ from drf_yasg import openapi
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
 from users.models import Notification
+
+logger = logging.getLogger(__name__)
 
 from .models import Order, OrderItem, Payment, TransactionLog, Refund
 from store.models import Cart, CartItem
@@ -422,8 +425,11 @@ class CheckoutView(APIView):
     )
     def post(self, request):
         user = request.user
+        logger.info(f"Checkout initiated for user: {user.id}")
+        
         cart = Cart.objects.filter(customer=user).first()
         if not cart:
+            logger.warning(f"Checkout failed: No cart found for user {user.id}")
             return Response(
                 standardized_response(success=False, error="Cart is empty"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -431,75 +437,87 @@ class CheckoutView(APIView):
 
         cart_items = CartItem.objects.select_related("product").filter(cart=cart)
         if not cart_items.exists():
+            logger.warning(f"Checkout failed: Cart {cart.id} has no items for user {user.id}")
             return Response(
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        with transaction.atomic():
-            # 1. Create Order
-            order = Order.objects.create(customer=user)
+        try:
+            with transaction.atomic():
+                # 1. Create Order
+                order = Order.objects.create(customer=user)
+                logger.info(f"Order created: {order.order_id} for user {user.id}")
 
-            # 2. Convert CartItems → OrderItems (using discounted price)
-            for item in cart_items:
-                OrderItem.objects.create(
+                # 2. Convert CartItems → OrderItems (using discounted price)
+                for item in cart_items:
+                    OrderItem.objects.create(
+                        order=order,
+                        product=item.product,
+                        quantity=item.quantity,
+                        price_at_purchase=item.product.get_final_price
+                    )
+
+                # 3. Calculate total
+                order.update_total()
+                logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
+
+                # 4. Create or reset Payment
+                reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
+                payment, _ = Payment.objects.get_or_create(
                     order=order,
-                    product=item.product,
-                    quantity=item.quantity,
-                    price_at_purchase=item.product.get_final_price
+                    defaults={
+                        "amount": order.total_price,
+                        "reference": reference,
+                    }
                 )
+                payment.amount = order.total_price
+                payment.reference = reference
+                payment.verified = False
+                payment.status = 'PENDING'
+                payment.save()
 
-            # 3. Calculate total
-            order.update_total()
-
-            # 4. Create or reset Payment
-            reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
-            payment, _ = Payment.objects.get_or_create(
-                order=order,
-                defaults={
-                    "amount": order.total_price,
-                    "reference": reference,
-                }
-            )
-            payment.amount = order.total_price
-            payment.reference = reference
-            payment.verified = False
-            payment.status = 'PENDING'
-            payment.save()
-
-            # 5. Initialize Paystack
-            paystack = Paystack()
-            response = paystack.initialize_payment(
-                email=user.email,
-                amount=payment.amount,
-                reference=payment.reference,
-                callback_url=settings.PAYSTACK_CALLBACK_URL
-            )
-
-            # 6. Notify vendors
-            vendors = {item.vendor for item in order.order_items.all() if item.vendor}
-            for vendor in vendors:
-                Notification.objects.create(
-                    recipient=vendor.user,
-                    title="New Order Received",
-                    message=f"You received a new order {order.order_id}."
+                # 5. Initialize Paystack
+                paystack = Paystack()
+                response = paystack.initialize_payment(
+                    email=user.email,
+                    amount=payment.amount,
+                    reference=payment.reference,
+                    callback_url=settings.PAYSTACK_CALLBACK_URL
                 )
+                logger.info(f"Paystack payment initialized for order {order.order_id}")
 
-            # 7. Clear cart
-            cart_items.delete()
+                # 6. Notify vendors
+                vendors = {item.vendor for item in order.order_items.all() if item.vendor}
+                for vendor in vendors:
+                    Notification.objects.create(
+                        recipient=vendor.user,
+                        title="New Order Received",
+                        message=f"You received a new order {order.order_id}."
+                    )
 
-        return Response(
-            standardized_response(
-                data={
-                    "order_id": order.order_id,
-                    "authorization_url": response["data"]["authorization_url"],
-                    "reference": payment.reference,
-                    "amount": float(payment.amount)
-                },
-                message="Checkout initialized successfully"
-            ),
-            status=status.HTTP_201_CREATED
-        )
+                # 7. Clear cart
+                cart_items.delete()
+                logger.info(f"Cart cleared for user {user.id}")
+
+            return Response(
+                standardized_response(
+                    data={
+                        "order_id": str(order.order_id),
+                        "authorization_url": response["data"]["authorization_url"],
+                        "reference": payment.reference,
+                        "amount": float(payment.amount)
+                    },
+                    message="Checkout initialized successfully"
+                ),
+                status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            logger.error(f"Checkout error for user {user.id}: {str(e)}", exc_info=True)
+            return Response(
+                standardized_response(success=False, error=f"Checkout failed: {str(e)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 # ----------------------
@@ -540,9 +558,12 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
     )
     def post(self, request):
         user = request.user
+        logger.info(f"Installment checkout initiated for user: {user.id}")
+        
         cart = Cart.objects.filter(customer=user).first()
         
         if not cart:
+            logger.warning(f"Installment checkout failed: No cart found for user {user.id}")
             return Response(
                 standardized_response(success=False, error="Cart is empty"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -550,6 +571,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
 
         cart_items = CartItem.objects.select_related("product").filter(cart=cart)
         if not cart_items.exists():
+            logger.warning(f"Installment checkout failed: Cart {cart.id} has no items for user {user.id}")
             return Response(
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -558,6 +580,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
         # Validate installment duration
         serializer = InstallmentCheckoutSerializer(data=request.data)
         if not serializer.is_valid():
+            logger.warning(f"Installment checkout validation failed for user {user.id}: {serializer.errors}")
             return Response(
                 standardized_response(success=False, error=serializer.errors),
                 status=status.HTTP_400_BAD_REQUEST
@@ -565,94 +588,106 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
 
         duration = serializer.validated_data['duration']
 
-        with transaction.atomic():
-            # 1. Create Order
-            order = Order.objects.create(customer=user)
+        try:
+            with transaction.atomic():
+                # 1. Create Order
+                order = Order.objects.create(customer=user)
+                logger.info(f"Order created: {order.order_id} for user {user.id}")
 
-            # 2. Convert CartItems → OrderItems (using discounted price)
-            for item in cart_items:
-                OrderItem.objects.create(
+                # 2. Convert CartItems → OrderItems (using discounted price)
+                for item in cart_items:
+                    OrderItem.objects.create(
+                        order=order,
+                        product=item.product,
+                        quantity=item.quantity,
+                        price_at_purchase=item.product.get_final_price,
+                    )
+
+                # 3. Calculate total
+                order.update_total()
+                logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
+
+                # 4. Create Installment Plan
+                num_installments = InstallmentPlan.DURATION_INSTALLMENTS.get(duration, 1)
+                # Calculate base amount, rounded down to avoid overcharge
+                base_amount = (order.total_price / Decimal(num_installments)).quantize(
+                    Decimal("0.01"), rounding='ROUND_DOWN'
+                )
+                remainder = order.total_price - (base_amount * num_installments)
+                
+                installment_plan = InstallmentPlan.objects.create(
                     order=order,
-                    product=item.product,
-                    quantity=item.quantity,
-                    price_at_purchase=item.product.get_final_price,
+                    duration=duration,
+                    total_amount=order.total_price,
+                    installment_amount=base_amount,
+                    number_of_installments=num_installments,
+                    status='ACTIVE',
+                    vendors_credited=False
                 )
+                logger.info(f"Installment plan created: {installment_plan.id} for order {order.order_id}")
 
-            # 3. Calculate total
-            order.update_total()
+                # 5. Create individual installment payment records
+                current_date = timezone.now()
+                interval = timedelta(days=30)  # 30 days between each installment
 
-            # 4. Create Installment Plan
-            num_installments = InstallmentPlan.DURATION_INSTALLMENTS.get(duration, 1)
-            # Calculate base amount, rounded down to avoid overcharge
-            base_amount = (order.total_price / Decimal(num_installments)).quantize(
-                Decimal("0.01"), rounding='ROUND_DOWN'
-            )
-            remainder = order.total_price - (base_amount * num_installments)
-            
-            installment_plan = InstallmentPlan.objects.create(
-                order=order,
-                duration=duration,
-                total_amount=order.total_price,
-                installment_amount=base_amount,
-                number_of_installments=num_installments,
-                status='ACTIVE',
-                vendors_credited=False
-            )
+                for i in range(1, num_installments + 1):
+                    due_date = current_date + (interval * i)
+                    # Add remainder to last installment to ensure total equals order total
+                    amount = base_amount + remainder if i == num_installments else base_amount
+                    InstallmentPayment.objects.create(
+                        installment_plan=installment_plan,
+                        payment_number=i,
+                        amount=amount,
+                        due_date=due_date,
+                        reference=f"{order.order_id}-installment-{i}"
+                    )
 
-            # 5. Create individual installment payment records
-            current_date = timezone.now()
-            interval = timedelta(days=30)  # 30 days between each installment
-
-            for i in range(1, num_installments + 1):
-                due_date = current_date + (interval * i)
-                # Add remainder to last installment to ensure total equals order total
-                amount = base_amount + remainder if i == num_installments else base_amount
-                InstallmentPayment.objects.create(
-                    installment_plan=installment_plan,
-                    payment_number=i,
-                    amount=amount,
-                    due_date=due_date,
-                    reference=f"{order.order_id}-installment-{i}"
+                # 6. Initialize payment for first installment
+                first_installment = installment_plan.installments.first()
+                paystack = Paystack()
+                response = paystack.initialize_payment(
+                    email=user.email,
+                    amount=first_installment.amount,
+                    reference=first_installment.reference,
+                    callback_url=settings.PAYSTACK_CALLBACK_URL
                 )
+                logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
 
-            # 6. Initialize payment for first installment
-            first_installment = installment_plan.installments.first()
-            paystack = Paystack()
-            response = paystack.initialize_payment(
-                email=user.email,
-                amount=first_installment.amount,
-                reference=first_installment.reference,
-                callback_url=settings.PAYSTACK_CALLBACK_URL
+                # 7. Notify vendors
+                vendors = {item.product.store for item in cart_items if item.product.store}
+                for vendor in vendors:
+                    Notification.objects.create(
+                        recipient=vendor,
+                        title="New Order Received (Installment)",
+                        message=f"You received a new order {order.order_id} with installment plan ({duration})."
+                    )
+
+                # 8. Clear cart
+                cart_items.delete()
+                logger.info(f"Cart cleared for user {user.id}")
+
+            return Response(
+                standardized_response(
+                    data={
+                        "order_id": str(order.order_id),
+                        "installment_plan_id": installment_plan.id,
+                        "duration": duration,
+                        "total_amount": float(order.total_price),
+                        "number_of_installments": num_installments,
+                        "installment_amount": float(base_amount),
+                        "first_installment_reference": first_installment.reference,
+                        "authorization_url": response["data"]["authorization_url"],
+                    },
+                    message="Installment checkout initialized successfully"
+                ),
+                status=status.HTTP_201_CREATED
             )
-
-            # 7. Notify vendors
-            vendors = {item.product.store for item in cart_items if item.product.store}
-            for vendor in vendors:
-                Notification.objects.create(
-                    recipient=vendor,
-                    title="New Order Received (Installment)",
-                    message=f"You received a new order {order.order_id} with installment plan ({duration})."
-                )
-
-            # 8. Clear cart
-            cart_items.delete()
-
-        return Response(
-            standardized_response(
-                data={
-                    "order_id": order.order_id,
-                    "installment_plan_id": installment_plan.id,
-                    "duration": duration,
-                    "total_amount": float(order.total_price),
-                    "number_of_installments": num_installments,
-                    "installment_amount": float(base_amount),
-                    "first_installment_reference": first_installment.reference,
-                    "authorization_url": response["data"]["authorization_url"],
-                },
-                message="Installment checkout initialized successfully"
-            ),
-            status=status.HTTP_201_CREATED
-        )
+        except Exception as e:
+            logger.error(f"Installment checkout error for user {user.id}: {str(e)}", exc_info=True)
+            return Response(
+                standardized_response(success=False, error=f"Installment checkout failed: {str(e)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 # ----------------------
