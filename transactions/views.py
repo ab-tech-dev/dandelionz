@@ -425,11 +425,11 @@ class CheckoutView(APIView):
     )
     def post(self, request):
         user = request.user
-        logger.info(f"Checkout initiated for user: {user.id}")
+        logger.info(f"Checkout initiated for user: {user.uuid}")
         
         cart = Cart.objects.filter(customer=user).first()
         if not cart:
-            logger.warning(f"Checkout failed: No cart found for user {user.id}")
+            logger.warning(f"Checkout failed: No cart found for user {user.uuid}")
             return Response(
                 standardized_response(success=False, error="Cart is empty"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -437,7 +437,7 @@ class CheckoutView(APIView):
 
         cart_items = CartItem.objects.select_related("product").filter(cart=cart)
         if not cart_items.exists():
-            logger.warning(f"Checkout failed: Cart {cart.id} has no items for user {user.id}")
+            logger.warning(f"Checkout failed: Cart {cart.id} has no items for user {user.uuid}")
             return Response(
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -447,7 +447,7 @@ class CheckoutView(APIView):
             with transaction.atomic():
                 # 1. Create Order
                 order = Order.objects.create(customer=user)
-                logger.info(f"Order created: {order.order_id} for user {user.id}")
+                logger.info(f"Order created: {order.order_id} for user {user.uuid}")
 
                 # 2. Convert CartItems → OrderItems (using discounted price)
                 for item in cart_items:
@@ -498,7 +498,7 @@ class CheckoutView(APIView):
 
                 # 7. Clear cart
                 cart_items.delete()
-                logger.info(f"Cart cleared for user {user.id}")
+                logger.info(f"Cart cleared for user {user.uuid}")
 
             return Response(
                 standardized_response(
@@ -513,7 +513,7 @@ class CheckoutView(APIView):
                 status=status.HTTP_201_CREATED
             )
         except Exception as e:
-            logger.error(f"Checkout error for user {user.id}: {str(e)}", exc_info=True)
+            logger.error(f"Checkout error for user {user.uuid}: {str(e)}", exc_info=True)
             return Response(
                 standardized_response(success=False, error=f"Checkout failed: {str(e)}"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -558,12 +558,12 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
     )
     def post(self, request):
         user = request.user
-        logger.info(f"Installment checkout initiated for user: {user.id}")
+        logger.info(f"Installment checkout initiated for user: {user.uuid}")
         
         cart = Cart.objects.filter(customer=user).first()
         
         if not cart:
-            logger.warning(f"Installment checkout failed: No cart found for user {user.id}")
+            logger.warning(f"Installment checkout failed: No cart found for user {user.uuid}")
             return Response(
                 standardized_response(success=False, error="Cart is empty"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -571,7 +571,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
 
         cart_items = CartItem.objects.select_related("product").filter(cart=cart)
         if not cart_items.exists():
-            logger.warning(f"Installment checkout failed: Cart {cart.id} has no items for user {user.id}")
+            logger.warning(f"Installment checkout failed: Cart {cart.id} has no items for user {user.uuid}")
             return Response(
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
@@ -580,7 +580,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
         # Validate installment duration
         serializer = InstallmentCheckoutSerializer(data=request.data)
         if not serializer.is_valid():
-            logger.warning(f"Installment checkout validation failed for user {user.id}: {serializer.errors}")
+            logger.warning(f"Installment checkout validation failed for user {user.uuid}: {serializer.errors}")
             return Response(
                 standardized_response(success=False, error=serializer.errors),
                 status=status.HTTP_400_BAD_REQUEST
@@ -592,7 +592,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
             with transaction.atomic():
                 # 1. Create Order
                 order = Order.objects.create(customer=user)
-                logger.info(f"Order created: {order.order_id} for user {user.id}")
+                logger.info(f"Order created: {order.order_id} for user {user.uuid}")
 
                 # 2. Convert CartItems → OrderItems (using discounted price)
                 for item in cart_items:
@@ -664,7 +664,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
 
                 # 8. Clear cart
                 cart_items.delete()
-                logger.info(f"Cart cleared for user {user.id}")
+                logger.info(f"Cart cleared for user {user.uuid}")
 
             return Response(
                 standardized_response(
@@ -683,7 +683,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 status=status.HTTP_201_CREATED
             )
         except Exception as e:
-            logger.error(f"Installment checkout error for user {user.id}: {str(e)}", exc_info=True)
+            logger.error(f"Installment checkout error for user {user.uuid}: {str(e)}", exc_info=True)
             return Response(
                 standardized_response(success=False, error=f"Installment checkout failed: {str(e)}"),
                 status=status.HTTP_400_BAD_REQUEST
