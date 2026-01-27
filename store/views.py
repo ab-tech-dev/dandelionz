@@ -1,3 +1,4 @@
+import logging
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
@@ -12,6 +13,8 @@ from django_filters import FilterSet, NumberFilter, CharFilter
 from rest_framework.filters import OrderingFilter, SearchFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -416,27 +419,35 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
     serializer_class = CartItemSerializer
 
     def post(self, request):
-        slug = request.data.get('slug')
-        if not slug:
-            return Response(standardized_response(success=False, error="Product slug is required"), status=400)
-        
-        quantity = int(request.data.get('quantity', 1))
-        if quantity < 1:
-            return Response(standardized_response(success=False, error="Quantity must be at least 1"), status=400)
-        
-        product = get_object_or_404(Product, slug=slug)
+        try:
+            slug = request.data.get('slug')
+            if not slug:
+                return Response(standardized_response(success=False, error="Product slug is required"), status=400)
+            
+            try:
+                quantity = int(request.data.get('quantity', 1))
+            except (ValueError, TypeError):
+                return Response(standardized_response(success=False, error="Quantity must be a valid integer"), status=400)
+            
+            if quantity < 1:
+                return Response(standardized_response(success=False, error="Quantity must be at least 1"), status=400)
+            
+            product = get_object_or_404(Product, slug=slug)
 
-        cart, _ = Cart.objects.get_or_create(customer=request.user)
-        cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product)
+            cart, _ = Cart.objects.get_or_create(customer=request.user)
+            cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product)
 
-        if not created:
-            cart_item.quantity += quantity
-        else:
-            cart_item.quantity = quantity
+            if not created:
+                cart_item.quantity += quantity
+            else:
+                cart_item.quantity = quantity
 
-        cart_item.save()
-        serializer = self.get_serializer(cart_item)
-        return Response(standardized_response(data=serializer.data, message="Item added to cart"), status=201)
+            cart_item.save()
+            serializer = self.get_serializer(cart_item)
+            return Response(standardized_response(data=serializer.data, message="Item added to cart"), status=201)
+        except Exception as e:
+            logger.error(f"Error adding item to cart for user {request.user.email}: {str(e)}")
+            return Response(standardized_response(success=False, error="Failed to add item to cart"), status=400)
 
 
 @extend_schema(
