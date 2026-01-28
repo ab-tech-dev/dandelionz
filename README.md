@@ -2207,7 +2207,7 @@ https://api.dandelionz.com.ng (Production)
 |--------|----------|-------------|---|
 | `GET` | `/store/cart/` | Get user's cart with items | ✅ |
 | `POST` | `/store/cart/add/` | Add item to cart | ✅ |
-| `PATCH` | `/store/cart/add/` | Set item quantity (accepts `slug` & `quantity`; `quantity=0` removes item) | ✅ |
+| `PATCH` | `/store/cart/update/` | Set item quantity (accepts `slug` & `quantity`; `quantity=0` removes item) | ✅ |
 | `DELETE` | `/store/cart/remove/<slug>/` | Remove item from cart | ✅ |
 | `GET` | `/store/favourites/` | List user's favorite products | ✅ |
 | `POST` | `/store/favourites/add/` | Add product to favorites | ✅ |

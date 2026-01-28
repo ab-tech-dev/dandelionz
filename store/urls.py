@@ -38,6 +38,7 @@ urlpatterns = [
     # ==================
     path('cart/', CartView.as_view(), name='cart-view'),
     path('cart/add/', AddToCartView.as_view(), name='add-to-cart'),
+    path('cart/update/', AddToCartView.as_view(), name='update-cart'),
     path('cart/remove/<slug:slug>/', RemoveFromCartView.as_view(), name='remove-from-cart'),
 
     # ==================
