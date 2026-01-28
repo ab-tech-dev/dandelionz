@@ -449,6 +449,64 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
             logger.error(f"Error adding item to cart for user {request.user.email}: {str(e)}")
             return Response(standardized_response(success=False, error="Failed to add item to cart"), status=400)
 
+    @extend_schema(
+        tags=["Cart"],
+        description="Update the quantity of a product in the authenticated user's cart. Accepts 'slug' and 'quantity'. Setting quantity to 0 removes the item from the cart.",
+        request=CartItemSerializer,
+        examples=[
+            OpenApiExample(
+                "Patch item example",
+                summary="Set item quantity using slug",
+                value={"slug": "awesome-product", "quantity": 3}
+            )
+        ],
+        responses={
+            200: CartItemSerializer,
+            201: CartItemSerializer,
+            404: {"description": "Product or item not found"},
+            400: {"description": "Invalid input"}
+        },
+    )
+    def patch(self, request):
+        try:
+            slug = request.data.get('slug')
+            if not slug:
+                return Response(standardized_response(success=False, error="Product slug is required"), status=400)
+
+            try:
+                quantity = int(request.data.get('quantity'))
+            except (ValueError, TypeError):
+                return Response(standardized_response(success=False, error="Quantity must be a valid integer"), status=400)
+
+            if quantity < 0:
+                return Response(standardized_response(success=False, error="Quantity must be 0 or a positive integer"), status=400)
+
+            product = get_object_or_404(Product, slug=slug)
+            cart, _ = Cart.objects.get_or_create(customer=request.user)
+            cart_item = CartItem.objects.filter(cart=cart, product=product).first()
+
+            # Remove item when quantity is zero
+            if quantity == 0:
+                if cart_item:
+                    cart_item.delete()
+                    return Response(standardized_response(message="Item removed from cart"), status=200)
+                return Response(standardized_response(success=False, error="Item not in cart"), status=404)
+
+            # Create or update item when quantity > 0
+            if not cart_item:
+                cart_item = CartItem.objects.create(cart=cart, product=product, quantity=quantity)
+                serializer = self.get_serializer(cart_item)
+                return Response(standardized_response(data=serializer.data, message="Item added to cart"), status=201)
+
+            cart_item.quantity = quantity
+            cart_item.save()
+            serializer = self.get_serializer(cart_item)
+            return Response(standardized_response(data=serializer.data, message="Item quantity updated"), status=200)
+
+        except Exception as e:
+            logger.error(f"Error patching item in cart for user {request.user.email}: {str(e)}")
+            return Response(standardized_response(success=False, error="Failed to update cart item"), status=400)
+
 
 @extend_schema(
     tags=["Cart"],
