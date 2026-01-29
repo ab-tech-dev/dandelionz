@@ -78,17 +78,31 @@ class AuthenticationService:
                 except Exception as e:
                     logger.error(f"Failed to queue verification email task for user {user.pk}: {str(e)}")
 
-            context = {}
-            if request:
-                context['request'] = request
-            serializer = UserBaseSerializer(user, context=context)
+            # Serialize user data
+            try:
+                context = {}
+                if request:
+                    context['request'] = request
+                serializer = UserBaseSerializer(user, context=context)
+                user_data = serializer.data
+            except Exception as e:
+                logger.error(f"Failed to serialize user {user.email} on registration: {str(e)}", exc_info=True)
+                # Return minimal user data if serialization fails
+                user_data = {
+                    'uuid': str(user.uuid),
+                    'email': user.email,
+                    'full_name': user.full_name,
+                    'role': user.role,
+                    'is_verified': user.is_verified,
+                }
+            
             logger.info(f"Registration successful for user: {user.email}")
 
             return True, {
                 "success": True,
                 "message": "Registration successful. Please verify your email to login.",
                 "data": {
-                    'user': serializer.data,
+                    'user': user_data,
                     'is_new_user': True,
                     'email_verified': user.is_verified,
                 }
