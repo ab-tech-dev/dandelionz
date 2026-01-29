@@ -42,9 +42,8 @@ class UserRegistrationView(BaseAPIView):
         
 Supported roles: CUSTOMER, VENDOR
 
-Returns JWT tokens (access and refresh) for immediate authentication.
-Optionally accepts referral_code for affiliate tracking.
-Email verification may be required before full account access.""",
+Email verification is required before login. A verification link will be sent to the user's email.
+Optionally accepts referral_code for affiliate tracking.""",
         tags=["Authentication"],
         request_body=UserRegistrationSerializer,
         responses={
@@ -80,28 +79,6 @@ Email verification may be required before full account access.""",
             )
 
             response = Response(standardized_response(**response_data), status=status_code)
-
-            if success and status_code in (200, 201) and settings.JWT_COOKIE_SECURE:
-                tokens = response_data.get('data', {}).get('tokens', {})
-                refresh_token = tokens.get('refresh_token')
-                refresh_expires_in = tokens.get('refresh_expires_in')
-
-                if refresh_token and refresh_expires_in:
-                    try:
-                        refresh_expires_in = float(refresh_expires_in)
-                        expires = timezone.now() + timedelta(seconds=refresh_expires_in)
-                        response.set_cookie(
-                            key=settings.JWT_COOKIE_NAME,
-                            value=refresh_token,
-                            expires=expires,
-                            secure=True,
-                            httponly=True,
-                            samesite='Strict',
-                            path='/',
-                            domain=settings.SESSION_COOKIE_DOMAIN
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to set JWT cookie: {e}")
 
             if success:
                 get_token(request)
