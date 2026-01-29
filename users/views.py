@@ -5,6 +5,7 @@ from rest_framework.decorators import action
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from django.utils import timezone
+from django.db import transaction
 
 from store.serializers import ProductSerializer, CreateProductSerializer
 
@@ -62,7 +63,7 @@ from users.serializers import (
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
-from transactions.models import PayoutRecord, Order, Payment
+from transactions.models import PayoutRecord, Order, Payment, OrderStatusHistory
 from users.models import Notification
 import logging
 
@@ -1148,6 +1149,7 @@ from django.db import models
 from users.serializers import VendorApprovalSerializer
 from django.contrib.auth import get_user_model
 User = get_user_model()
+from authentication.models import CustomUser
 from users.serializers import TriggerPayoutSerializer, OrderActionSerializer, AdminProductUpdateSerializer, VendorKYCSerializer, SuspendUserSerializer, BusinessAdminProfileSerializer
 from users.services.payout_service import PayoutService
 
@@ -2057,6 +2059,304 @@ class AdminOrdersViewSet(AdminBaseViewSet):
             "message": "Delivery agent assigned successfully",
             "order_id": str(order.order_id),
             "delivery_agent": delivery_agent.user.full_name
+        }, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="admin_mark_order_shipped",
+        operation_summary="Mark Order as SHIPPED",
+        operation_description="""Mark an order as SHIPPED (Step 9 in order flow).
+        
+Flow Step: 8 → 9
+- Vendors AND Admins notified of new order
+- Admin or Vendor marks as SHIPPED
+- Customer notified of shipment
+        
+This action:
+- Updates order status to SHIPPED
+- Records timestamp when order was shipped
+- Sends notification to customer
+- Creates audit trail with OrderStatusHistory
+
+Access: Admin (staff) or Vendor (who owns items in order)""",
+        tags=["Orders & Logistics"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'order_id': openapi.Schema(type=openapi.TYPE_STRING, description='Order UUID'),
+                'tracking_number': openapi.Schema(type=openapi.TYPE_STRING, description='Optional shipment tracking number'),
+            },
+            required=['order_id']
+        ),
+        responses={
+            200: openapi.Response("Order marked as shipped successfully"),
+            400: openapi.Response("Invalid request or order not in PAID status"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin/Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def mark_shipped(self, request):
+        # Check permissions - admin/staff or vendor
+        is_admin = request.user.is_staff if request.user else False
+        is_vendor = hasattr(request.user, 'store') if request.user else False
+        
+        if not is_admin and not is_vendor:
+            return Response({"message": "Access denied - Admin or Vendor only"}, status=403)
+
+        try:
+            order = Order.objects.get(order_id=request.data.get('order_id'))
+        except Order.DoesNotExist:
+            return Response({"success": False, "message": "Order not found"}, status=404)
+
+        # Verify order is in PAID status
+        if order.status != Order.Status.PAID:
+            return Response({
+                "success": False, 
+                "message": f"Order must be in PAID status to mark as SHIPPED. Current status: {order.status}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # If vendor, verify they own products in this order
+        if is_vendor:
+            vendor = request.user.store
+            vendor_items = order.order_items.filter(product__store=vendor).count()
+            if vendor_items == 0:
+                return Response({"message": "Forbidden - Order contains no items from your store"}, status=403)
+
+        try:
+            with transaction.atomic():
+                # Update order status
+                order.status = Order.Status.SHIPPED
+                order.shipped_at = timezone.now()
+                tracking_number = request.data.get('tracking_number')
+                if tracking_number:
+                    order.tracking_number = tracking_number
+                order.save(update_fields=['status', 'shipped_at', 'tracking_number'] if tracking_number else ['status', 'shipped_at'])
+                
+                # Create order status history
+                OrderStatusHistory.objects.create(
+                    order=order,
+                    status=Order.Status.SHIPPED,
+                    changed_by='ADMIN' if is_admin else 'VENDOR',
+                    admin=request.user if is_admin else None,
+                    reason=f"Order marked as shipped by {'admin' if is_admin else 'vendor'}"
+                )
+                
+                # Create transaction log
+                from transactions.models import TransactionLog
+                TransactionLog.objects.create(
+                    order=order,
+                    action=TransactionLog.Action.ORDER_SHIPPED,
+                    level=TransactionLog.Level.SUCCESS,
+                    message=f"Order {order.order_id} marked as SHIPPED. Tracking: {tracking_number or 'Not provided'}",
+                    related_user=request.user,
+                    metadata={
+                        "order_id": str(order.order_id),
+                        "tracking_number": tracking_number,
+                        "marked_by": "admin" if is_admin else "vendor",
+                        "marked_by_email": request.user.email
+                    }
+                )
+                
+                # Notify customer
+                Notification.objects.create(
+                    recipient=order.customer,
+                    title="Your Order is On the Way",
+                    message=f"Order {order.order_id} has been shipped! "
+                            f"{f'Tracking number: {tracking_number}' if tracking_number else 'Your delivery agent will contact you soon.'}",
+                    is_read=False
+                )
+                
+                logger.info(
+                    f"Order {order.order_id} marked as SHIPPED by {request.user.email} | "
+                    f"User type: {'admin' if is_admin else 'vendor'} | "
+                    f"Tracking: {tracking_number or 'Not provided'}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error marking order {order.order_id} as shipped: {str(e)}", exc_info=True)
+            return Response({
+                "success": False,
+                "message": f"Error marking order as shipped: {str(e)}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "success": True,
+            "message": "Order marked as SHIPPED successfully",
+            "order_id": str(order.order_id),
+            "status": order.status,
+            "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
+            "tracking_number": order.tracking_number,
+            "marked_by": "admin" if is_admin else "vendor"
+        }, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="admin_mark_order_delivered",
+        operation_summary="Mark Order as DELIVERED",
+        operation_description="""Mark an order as DELIVERED (Step 10 in order flow).
+        
+Flow Step: 9 → 10
+- Admin or Vendor marks as SHIPPED
+- Delivery agent or Admin marks as DELIVERED
+- Vendors credited for order
+- Customer & Admins notified of delivery
+- Order completion flow finished
+        
+This action:
+- Updates order status to DELIVERED
+- Records timestamp when order was delivered
+- Credits all vendors their share (with 10% platform commission deducted)
+- Sends notifications to customer, vendors, admins, and delivery agent
+- Creates audit trail with OrderStatusHistory
+- Creates transaction logs for vendor credits
+
+Access: Delivery Agent (assigned to order) or Admin (staff)""",
+        tags=["Orders & Logistics"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'order_id': openapi.Schema(type=openapi.TYPE_STRING, description='Order UUID'),
+                'delivery_notes': openapi.Schema(type=openapi.TYPE_STRING, description='Optional delivery notes'),
+            },
+            required=['order_id']
+        ),
+        responses={
+            200: openapi.Response("Order marked as delivered successfully"),
+            400: openapi.Response("Invalid request or order not in SHIPPED status"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Delivery Agent or Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def mark_delivered(self, request):
+        from users.models import DeliveryAgent
+        
+        # Check if user is a delivery agent or admin
+        delivery_agent = DeliveryAgent.objects.filter(user=request.user).first() if request.user else None
+        is_admin = request.user.is_staff if request.user else False
+        
+        if not delivery_agent and not is_admin:
+            return Response({"message": "Access denied - Delivery Agent or Admin only"}, status=403)
+
+        try:
+            order = Order.objects.get(order_id=request.data.get('order_id'))
+        except Order.DoesNotExist:
+            return Response({"success": False, "message": "Order not found"}, status=404)
+
+        # Verify order is in SHIPPED status
+        if order.status != Order.Status.SHIPPED:
+            return Response({
+                "success": False, 
+                "message": f"Order must be in SHIPPED status to mark as DELIVERED. Current status: {order.status}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify delivery agent is assigned (if not admin)
+        if delivery_agent and order.delivery_agent != delivery_agent:
+            return Response({"message": "Forbidden - You are not assigned to this order"}, status=403)
+
+        try:
+            with transaction.atomic():
+                # Update order status
+                order.status = Order.Status.DELIVERED
+                order.delivered_at = timezone.now()
+                order.save(update_fields=['status', 'delivered_at'])
+                
+                # Create order status history
+                OrderStatusHistory.objects.create(
+                    order=order,
+                    status=Order.Status.DELIVERED,
+                    changed_by='ADMIN' if is_admin else 'SYSTEM',
+                    admin=request.user if is_admin else None,
+                    reason=f"Order delivered by {'admin' if is_admin else 'delivery agent'}"
+                )
+                
+                # Credit vendors (only if not already credited)
+                if not order.vendors_credited:
+                    from transactions.views import credit_vendors_for_order
+                    from transactions.models import TransactionLog
+                    
+                    credit_vendors_for_order(order, source_prefix="Delivery")
+                    order.vendors_credited = True
+                    order.save(update_fields=['vendors_credited'])
+                    
+                    logger.info(f"Vendors credited for order {order.order_id}")
+                
+                # Create transaction log
+                from transactions.models import TransactionLog
+                TransactionLog.objects.create(
+                    order=order,
+                    action=TransactionLog.Action.ORDER_DELIVERED,
+                    level=TransactionLog.Level.SUCCESS,
+                    message=f"Order {order.order_id} marked as DELIVERED. Vendors credited.",
+                    related_user=request.user,
+                    metadata={
+                        "order_id": str(order.order_id),
+                        "delivered_by": "admin" if is_admin else "delivery_agent",
+                        "delivered_by_email": request.user.email,
+                        "delivery_notes": request.data.get('delivery_notes', '')
+                    }
+                )
+                
+                # Notify customer
+                Notification.objects.create(
+                    recipient=order.customer,
+                    title="Order Delivered Successfully",
+                    message=f"Your order {order.order_id} has been delivered! Thank you for shopping with us.",
+                    is_read=False
+                )
+                
+                # Notify all admins about order completion
+                admin_users = CustomUser.objects.filter(is_staff=True).exclude(id=request.user.id)
+                for admin in admin_users:
+                    Notification.objects.create(
+                        recipient=admin,
+                        title="Order Delivered & Fulfilled",
+                        message=f"Order {order.order_id} (₦{order.total_price}) has been delivered successfully. "
+                                f"Customer: {order.customer.email}. Vendors have been credited.",
+                        is_read=False
+                    )
+                
+                # Notify vendors
+                vendors = {item.product.store for item in order.order_items.all() if item.product.store}
+                for vendor in vendors:
+                    Notification.objects.create(
+                        recipient=vendor,
+                        title="Order Delivered - Payment Released",
+                        message=f"Order {order.order_id} has been delivered. Earnings have been credited to your wallet.",
+                        is_read=False
+                    )
+                
+                # Notify delivery agent (if applicable)
+                if order.delivery_agent:
+                    Notification.objects.create(
+                        recipient=order.delivery_agent.user,
+                        title="Delivery Completed",
+                        message=f"Order {order.order_id} has been marked as delivered.",
+                        is_read=False
+                    )
+                
+                logger.info(
+                    f"Order {order.order_id} marked as DELIVERED by {request.user.email} | "
+                    f"User type: {'admin' if is_admin else 'delivery_agent'} | "
+                    f"Vendors credited: {not order.vendors_credited}"
+                )
+        
+        except Exception as e:
+            logger.error(f"Error marking order {order.order_id} as delivered: {str(e)}", exc_info=True)
+            return Response({
+                "success": False,
+                "message": f"Error marking order as delivered: {str(e)}"
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "success": True,
+            "message": "Order marked as DELIVERED successfully",
+            "order_id": str(order.order_id),
+            "status": order.status,
+            "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+            "vendors_credited": order.vendors_credited,
+            "marked_by": "admin" if is_admin else "delivery_agent"
         }, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(

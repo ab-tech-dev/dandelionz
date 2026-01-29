@@ -626,7 +626,8 @@ This section outlines the **complete end-to-end flow** from user registration th
 │       • Create TransactionLog for audit                             │
 │    7. Create order confirmation notification                        │
 │    8. Send order confirmation email                                 │
-│    9. Emit event for delivery agent assignment (future)             │
+│    9. Async task: Notify all vendors ("Order paid, ready now")     │
+│   10. Async task: Notify all admins ("New paid order for review")  │
 │                                                                       │
 │    Vendor Crediting Calculation:                                    │
 │    ┌─────────────────────────────────────────┐                      │
@@ -661,27 +662,30 @@ This section outlines the **complete end-to-end flow** from user registration th
 │    • Total price breakdown                                          │
 │    • Tracking number (when available)                               │
 │                                                                       │
-│ B) VENDOR PROCESSES ORDER (Admin/Vendor)                            │
+│ B) ADMIN OR VENDOR MARKS ORDER AS SHIPPED                           │
 │                                                                       │
-│    PATCH /api/transactions/orders/{order_id}/                       │
+│    POST /api/user/orders/{order_id}/mark_shipped/                   │
 │    {                                                                 │
-│      "status": "SHIPPED",                                           │
 │      "tracking_number": "NG123456789"                               │
 │    }                                                                 │
 │                                                                       │
+│    Access: Admin (is_staff=True) or Vendor (has store)              │
 │    Status flow: PAID → SHIPPED → DELIVERED                          │
+│    Response: Order updated, customer notified, marked_by shown
 │                                                                       │
-│ C) DELIVERY AGENT COMPLETES ORDER                                   │
+│ C) ADMIN OR DELIVERY AGENT MARKS ORDER AS DELIVERED                 │
 │                                                                       │
-│    PATCH /api/transactions/orders/{order_id}/                       │
-│    {                                                                 │
-│      "status": "DELIVERED"                                          │
-│    }                                                                 │
+│    POST /api/user/orders/{order_id}/mark_delivered/                 │
+│    {}                                                                │
+│                                                                       │
+│    Access: Admin (is_staff=True) or Delivery Agent (assigned)       │
 │                                                                       │
 │    This triggers:                                                   │
 │    • Order marked DELIVERED                                         │
-│    • Delivery agent receives commission (if applicable)             │
+│    • Vendors credited atomically (10% commission deducted)          │
 │    • Customer receives delivery confirmation                        │
+│    • All other admins notified of fulfillment completion            │
+│    • Delivery agent notified (if marked by admin)                   │
 │    • Can now leave product review                                   │
 │                                                                       │
 │ D) ORDER RECEIPT                                                    │
@@ -1595,10 +1599,16 @@ class Order:
 
 **Order Lifecycle:**
 1. **PENDING** → Initial state after order creation
-2. **PAID** → Payment verified (status remains PENDING)
-3. **SHIPPED** → Admin/Vendor marks as shipped
-4. **DELIVERED** → Delivery agent marks as delivered
+2. **PAID** → Payment verified, automatic notifications sent to vendors & admins
+3. **SHIPPED** → Admin or Vendor marks as shipped (requires PAID status)
+4. **DELIVERED** → Admin or Delivery Agent marks as delivered, vendors credited (requires SHIPPED status)
 5. **CANCELED** → Order canceled (can happen at any stage)
+
+**Admin Integration:**
+- All admins (is_staff=True) receive notifications when order payment is verified
+- Admins can mark orders as SHIPPED alongside vendors
+- Admins can mark orders as DELIVERED alongside delivery agents
+- All other admins are notified when an order is fulfilled
 
 #### OrderItem
 Individual items within an order.

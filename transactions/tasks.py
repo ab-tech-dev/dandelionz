@@ -222,3 +222,148 @@ def send_delivery_escalation_email(self, order_id):
     except Exception as e:
         logger.error(f"Error sending delivery escalation email for order {order_id}: {str(e)}", exc_info=True)
         raise
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={
+        'max_retries': 3,
+        'countdown': 60,
+    },
+    retry_backoff=True,
+    retry_backoff_max=180,
+    retry_jitter=True,
+    name="transactions.notify_stakeholders_order_paid"
+)
+def notify_stakeholders_order_paid(self, order_id):
+    """
+    Send notifications to vendors AND admins when payment is verified for an order.
+    
+    Flow Step: 7 → 8
+    - Payment verified → payment_status = 'PAID'
+    - Vendors AND Admins notified of new order (ready to prepare/ship)
+    
+    This task is triggered automatically when order status changes to PAID.
+    Each vendor gets notified about their items in the order.
+    Each admin gets notified about the new paid order for monitoring.
+    
+    Args:
+        order_id (str): UUID of the order
+    
+    Returns:
+        dict: Status and details of notifications sent
+    """
+    try:
+        order = Order.objects.select_related('customer').prefetch_related(
+            'order_items__product__store'
+        ).get(order_id=order_id)
+        
+        logger.info(f"[notify_stakeholders_order_paid] Processing order {order_id}")
+        
+        # Get all unique vendors for this order
+        vendors = {item.product.store for item in order.order_items.all() if item.product.store}
+        
+        notifications_created = 0
+        vendor_details = []
+        admin_notified = 0
+        
+        # Notify each vendor
+        if vendors:
+            for vendor in vendors:
+                try:
+                    # Get items from this vendor in the order
+                    vendor_items = order.order_items.filter(product__store=vendor)
+                    items_count = vendor_items.count()
+                    
+                    Notification.objects.create(
+                        recipient=vendor,
+                        title=f"Payment Verified - Order Ready for Preparation",
+                        message=f"Payment confirmed for order {order.order_id}. "
+                                f"You have {items_count} item(s) to prepare. "
+                                f"Customer: {order.customer.email}. "
+                                f"Please mark as SHIPPED once items are dispatched.",
+                        is_read=False
+                    )
+                    
+                    notifications_created += 1
+                    vendor_details.append({
+                        "vendor_id": vendor.id,
+                        "vendor_email": vendor.email,
+                        "items_count": items_count
+                    })
+                    
+                    logger.info(
+                        f"[notify_stakeholders_order_paid] Notified vendor {vendor.email} | "
+                        f"Order: {order_id} | Items: {items_count}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[notify_stakeholders_order_paid] Failed to notify vendor {vendor.email}: {str(e)}", 
+                        exc_info=True
+                    )
+                    # Continue with other vendors if one fails
+                    continue
+        else:
+            logger.warning(f"[notify_stakeholders_order_paid] No vendors found for order {order_id}")
+        
+        # Notify all business admins
+        try:
+            admin_users = CustomUser.objects.filter(is_staff=True)
+            
+            for admin in admin_users:
+                try:
+                    vendor_names = ', '.join([v.user.email for v in vendors]) if vendors else 'Unknown'
+                    
+                    Notification.objects.create(
+                        recipient=admin,
+                        title="New Paid Order - Requires Fulfillment",
+                        message=f"Order {order.order_id} payment verified (₦{order.total_price}). "
+                                f"Customer: {order.customer.email}. "
+                                f"Vendors involved: {vendor_names}. "
+                                f"Status: Ready for shipment. Monitor fulfillment progress.",
+                        is_read=False
+                    )
+                    
+                    admin_notified += 1
+                    
+                    logger.info(
+                        f"[notify_stakeholders_order_paid] Notified admin {admin.email} | "
+                        f"Order: {order_id} | Amount: ₦{order.total_price}"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"[notify_stakeholders_order_paid] Failed to notify admin {admin.email}: {str(e)}", 
+                        exc_info=True
+                    )
+                    # Continue with other admins if one fails
+                    continue
+        except Exception as e:
+            logger.error(
+                f"[notify_stakeholders_order_paid] Error retrieving admin users for order {order_id}: {str(e)}", 
+                exc_info=True
+            )
+        
+        return {
+            "status": "success",
+            "order_id": str(order_id),
+            "vendors_notified": len(vendors),
+            "admins_notified": admin_notified,
+            "vendor_details": vendor_details,
+            "message": f"Notified {len(vendors)} vendor(s) and {admin_notified} admin(s) about order {order_id}"
+        }
+    
+    except Order.DoesNotExist:
+        logger.error(f"[notify_stakeholders_order_paid] Order {order_id} not found")
+        return {
+            "status": "error",
+            "error": f"Order {order_id} not found"
+        }
+    except Exception as e:
+        logger.error(f"[notify_stakeholders_order_paid] Error notifying stakeholders for order {order_id}: {str(e)}", exc_info=True)
+        raise
+
+
+# Keep old task name for backward compatibility
+notify_vendors_order_paid = notify_stakeholders_order_paid
+

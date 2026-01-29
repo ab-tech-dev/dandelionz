@@ -548,16 +548,7 @@ class CheckoutView(APIView):
                 )
                 logger.info(f"Paystack payment initialized for order {order.order_id}")
 
-                # 7. Notify vendors
-                vendors = {item.vendor for item in order.order_items.all() if item.vendor}
-                for vendor in vendors:
-                    Notification.objects.create(
-                        recipient=vendor.user,
-                        title="New Order Received",
-                        message=f"You received a new order {order.order_id}."
-                    )
-
-                # 8. Clear cart
+                # Clear cart (vendors will be notified when payment is verified)
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 
@@ -771,16 +762,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
 
-                # 8. Notify vendors
-                vendors = {item.product.store for item in cart_items if item.product.store}
-                for vendor in vendors:
-                    Notification.objects.create(
-                        recipient=vendor,
-                        title="New Order Received (Installment)",
-                        message=f"You received a new order {order.order_id} with installment plan ({duration})."
-                    )
-
-                # 9. Clear cart
+                # Clear cart (vendors will be notified when payment is verified)
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 

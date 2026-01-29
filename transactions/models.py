@@ -233,7 +233,15 @@ class Payment(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def mark_as_successful(self):
-        """Mark payment as successful (idempotent - safe to call multiple times)"""
+        """
+        Mark payment as successful (idempotent - safe to call multiple times).
+        
+        Flow Step: 7 → 8
+        - Payment verified → payment_status = 'PAID'
+        - Vendors AND Admins notified of new order
+        
+        Updates order status to PAID and triggers stakeholder notification task.
+        """
         # Return early if already successful to prevent duplicate processing
         if self.verified:
             return
@@ -245,6 +253,10 @@ class Payment(models.Model):
         self.order.status = Order.Status.PAID  # Mark order as paid when payment succeeds
         self.order.save(update_fields=['payment_status', 'status'])
         self.save(update_fields=['status', 'verified', 'paid_at'])
+        
+        # Trigger stakeholder notification task (async) - notifies vendors AND admins
+        from .tasks import notify_stakeholders_order_paid
+        notify_stakeholders_order_paid.delay(str(self.order.order_id))
 
     class Meta:
         constraints = [

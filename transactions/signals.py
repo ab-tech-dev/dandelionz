@@ -2,7 +2,7 @@ from django.db.models.signals import post_save, post_delete
 from django.dispatch import receiver
 from django.db import transaction
 import logging
-from transactions.models import OrderItem, TransactionLog, Wallet
+from transactions.models import OrderItem, TransactionLog, Wallet, Order, OrderStatusHistory
 from authentication.models import CustomUser
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,39 @@ def create_wallet_on_user_creation(sender, instance, created, **kwargs):
                     logger.info(f"[signals.create_wallet_on_user_creation] Wallet created for user {instance.email}")
         except Exception as e:
             logger.error(f"[signals.create_wallet_on_user_creation] Error creating wallet for user {instance.email}: {e}", exc_info=True)
+
+
+@receiver(post_save, sender=Order)
+def track_order_status_changes(sender, instance, update_fields, **kwargs):
+    """
+    Automatically create OrderStatusHistory entries when order status changes.
+    This ensures complete audit trail of order progression.
+    Runs after order save to track status transitions.
+    """
+    if update_fields and 'status' in update_fields:
+        try:
+            with transaction.atomic():
+                # Check if this is an actual status change by comparing with previous status
+                # The instance at this point has the new status
+                current_status = instance.status
+                
+                # Determine who changed the status (default to SYSTEM)
+                changed_by = 'SYSTEM'
+                admin_user = None
+                
+                # Create status history entry
+                OrderStatusHistory.objects.create(
+                    order=instance,
+                    status=current_status,
+                    changed_by=changed_by,
+                    admin=admin_user,
+                    reason=f"Order status updated to {current_status}"
+                )
+                
+                logger.info(f"[signals.track_order_status_changes] Order {instance.order_id} status changed to {current_status}")
+        except Exception as e:
+            # Log error but don't fail the main transaction
+            logger.error(f"[signals.track_order_status_changes] Error tracking status change for order {getattr(instance, 'order_id', None)}: {e}", exc_info=True)
 
 
 @receiver([post_save, post_delete], sender=OrderItem)
