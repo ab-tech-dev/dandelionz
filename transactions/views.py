@@ -458,11 +458,14 @@ class CheckoutView(APIView):
         
         customer_profile = user.customer_profile
         if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
-            logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
-            return Response(
-                standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
+                logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
+                return Response(
+                    standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                logger.info(f"Delivery fee enforcement disabled: Allowing checkout without coordinates for user {user.uuid}")
 
         try:
             with transaction.atomic():
@@ -646,11 +649,14 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
         
         customer_profile = user.customer_profile
         if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
-            logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
-            return Response(
-                standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
+                logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
+                return Response(
+                    standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            else:
+                logger.info(f"Delivery fee enforcement disabled: Allowing installment checkout without coordinates for user {user.uuid}")
 
         # Validate installment duration
         serializer = InstallmentCheckoutSerializer(data=request.data)
