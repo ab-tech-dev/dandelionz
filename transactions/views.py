@@ -448,6 +448,22 @@ class CheckoutView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Check customer has shipping address with coordinates
+        if not hasattr(user, 'customer_profile'):
+            logger.warning(f"Checkout failed: User {user.uuid} has no customer profile")
+            return Response(
+                standardized_response(success=False, error="Customer profile not found. Please create one before checking out."),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        customer_profile = user.customer_profile
+        if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
+            logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
+            return Response(
+                standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         try:
             with transaction.atomic():
                 # 1. Create Order
@@ -463,11 +479,48 @@ class CheckoutView(APIView):
                         price_at_purchase=item.product.get_final_price
                     )
 
-                # 3. Calculate total
+                # 3. Auto-retrieve and set vendor & customer delivery coordinates
+                try:
+                    # Get vendor (store) coordinates from the first product vendor
+                    first_item = cart_items.first()
+                    if first_item and first_item.product and hasattr(first_item.product, 'store'):
+                        vendor = first_item.product.store
+                        if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                            if vendor.store_latitude and vendor.store_longitude:
+                                order.restaurant_lat = vendor.store_latitude
+                                order.restaurant_lng = vendor.store_longitude
+                                logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
+                    
+                    # Get customer coordinates from customer profile
+                    if hasattr(user, 'customer_profile'):
+                        customer_profile = user.customer_profile
+                        if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
+                            if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+                                order.customer_lat = customer_profile.shipping_latitude
+                                order.customer_lng = customer_profile.shipping_longitude
+                                logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
+                    
+                    # Calculate delivery fee if both vendor and customer coordinates are available
+                    if order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                        try:
+                            order.calculate_and_save_delivery_fee()
+                            logger.info(f"Delivery fee calculated: ${order.delivery_fee} for order {order.order_id}")
+                        except Exception as e:
+                            logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                            # Continue checkout even if delivery fee fails - can be calculated later
+                            pass
+                    else:
+                        logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                except Exception as e:
+                    logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                    # Continue checkout even if coordinate retrieval fails
+                    pass
+
+                # 4. Calculate total
                 order.update_total()
                 logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
 
-                # 4. Create or reset Payment
+                # 5. Create or reset Payment
                 reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
                 payment, _ = Payment.objects.get_or_create(
                     order=order,
@@ -482,7 +535,7 @@ class CheckoutView(APIView):
                 payment.status = 'PENDING'
                 payment.save()
 
-                # 5. Initialize Paystack
+                # 6. Initialize Paystack
                 paystack = Paystack()
                 response = paystack.initialize_payment(
                     email=user.email,
@@ -492,7 +545,7 @@ class CheckoutView(APIView):
                 )
                 logger.info(f"Paystack payment initialized for order {order.order_id}")
 
-                # 6. Notify vendors
+                # 7. Notify vendors
                 vendors = {item.vendor for item in order.order_items.all() if item.vendor}
                 for vendor in vendors:
                     Notification.objects.create(
@@ -501,7 +554,7 @@ class CheckoutView(APIView):
                         message=f"You received a new order {order.order_id}."
                     )
 
-                # 7. Clear cart
+                # 8. Clear cart
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 
@@ -511,7 +564,8 @@ class CheckoutView(APIView):
                         "order_id": str(order.order_id),
                         "authorization_url": response["data"]["authorization_url"],
                         "reference": payment.reference,
-                        "amount": float(payment.amount)
+                        "amount": float(payment.amount),
+                        "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
                     message="Checkout initialized successfully"
                 ),
@@ -582,6 +636,22 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Check customer has shipping address with coordinates
+        if not hasattr(user, 'customer_profile'):
+            logger.warning(f"Installment checkout failed: User {user.uuid} has no customer profile")
+            return Response(
+                standardized_response(success=False, error="Customer profile not found. Please create one before checking out."),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        customer_profile = user.customer_profile
+        if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
+            logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
+            return Response(
+                standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         # Validate installment duration
         serializer = InstallmentCheckoutSerializer(data=request.data)
         if not serializer.is_valid():
@@ -608,11 +678,48 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                         price_at_purchase=item.product.get_final_price,
                     )
 
-                # 3. Calculate total
+                # 3. Auto-retrieve and set vendor & customer delivery coordinates
+                try:
+                    # Get vendor (store) coordinates from the first product vendor
+                    first_item = cart_items.first()
+                    if first_item and first_item.product and hasattr(first_item.product, 'store'):
+                        vendor = first_item.product.store
+                        if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                            if vendor.store_latitude and vendor.store_longitude:
+                                order.restaurant_lat = vendor.store_latitude
+                                order.restaurant_lng = vendor.store_longitude
+                                logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
+                    
+                    # Get customer coordinates from customer profile
+                    if hasattr(user, 'customer_profile'):
+                        customer_profile = user.customer_profile
+                        if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
+                            if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+                                order.customer_lat = customer_profile.shipping_latitude
+                                order.customer_lng = customer_profile.shipping_longitude
+                                logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
+                    
+                    # Calculate delivery fee if both vendor and customer coordinates are available
+                    if order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                        try:
+                            order.calculate_and_save_delivery_fee()
+                            logger.info(f"Delivery fee calculated: ${order.delivery_fee} for order {order.order_id}")
+                        except Exception as e:
+                            logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                            # Continue checkout even if delivery fee fails - can be calculated later
+                            pass
+                    else:
+                        logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                except Exception as e:
+                    logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                    # Continue checkout even if coordinate retrieval fails
+                    pass
+
+                # 4. Calculate total
                 order.update_total()
                 logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
 
-                # 4. Create Installment Plan
+                # 5. Create Installment Plan
                 num_installments = InstallmentPlan.DURATION_INSTALLMENTS.get(duration, 1)
                 # Calculate base amount, rounded down to avoid overcharge
                 base_amount = (order.total_price / Decimal(num_installments)).quantize(
@@ -631,7 +738,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 )
                 logger.info(f"Installment plan created: {installment_plan.id} for order {order.order_id}")
 
-                # 5. Create individual installment payment records
+                # 6. Create individual installment payment records
                 current_date = timezone.now()
                 interval = timedelta(days=30)  # 30 days between each installment
 
@@ -647,7 +754,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                         reference=f"{order.order_id}-installment-{i}"
                     )
 
-                # 6. Initialize payment for first installment
+                # 7. Initialize payment for first installment
                 first_installment = installment_plan.installments.first()
                 paystack = Paystack()
                 response = paystack.initialize_payment(
@@ -658,7 +765,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
 
-                # 7. Notify vendors
+                # 8. Notify vendors
                 vendors = {item.product.store for item in cart_items if item.product.store}
                 for vendor in vendors:
                     Notification.objects.create(
@@ -667,7 +774,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                         message=f"You received a new order {order.order_id} with installment plan ({duration})."
                     )
 
-                # 8. Clear cart
+                # 9. Clear cart
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 
@@ -682,6 +789,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                         "installment_amount": float(base_amount),
                         "first_installment_reference": first_installment.reference,
                         "authorization_url": response["data"]["authorization_url"],
+                        "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
                     message="Installment checkout initialized successfully"
                 ),

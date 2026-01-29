@@ -250,9 +250,16 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_price', 'delivery_fee', 'discount', 'subtotal', 'total_with_delivery',
             'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at', 
             'updated_at', 'is_paid', 'is_delivered',
-            'order_items', 'shipping_address', 'payment', 'logs', 'timeline'
+            'order_items', 'shipping_address', 'payment', 'logs', 'timeline',
+            'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng',
+            'delivery_distance', 'delivery_duration', 'delivery_distance_miles'
         ]
-        read_only_fields = ['id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered', 'ordered_at', 'updated_at', 'order_items', 'payment', 'logs', 'shipped_at', 'delivered_at', 'returned_at', 'timeline']
+        read_only_fields = [
+            'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered', 
+            'ordered_at', 'updated_at', 'order_items', 'payment', 'logs', 'shipped_at', 
+            'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration', 
+            'delivery_distance_miles'
+        ]
 
     def get_logs(self, obj):
         request = self.context.get('request', None)

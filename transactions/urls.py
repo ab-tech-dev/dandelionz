@@ -9,6 +9,7 @@ from .views import (
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView
 )
+from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
 urlpatterns = [
     # Order endpoints
@@ -43,4 +44,8 @@ urlpatterns = [
     path('wallet/', CustomerWalletView.as_view(), name='customer-wallet'),
     path('wallet/transactions/', WalletTransactionListView.as_view(), name='wallet-transactions'),
     path('admin/wallets/', AdminWalletListView.as_view(), name='admin-wallet-list'),
+
+    # Delivery fee endpoints
+    path('delivery/calculate-fee/', CalculateDeliveryFeeView.as_view(), name='calculate-delivery-fee'),
+    path('delivery/calculate-multiple/', CalculateMultipleFeesView.as_view(), name='calculate-multiple-fees'),
 ]

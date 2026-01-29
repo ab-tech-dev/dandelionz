@@ -6,20 +6,22 @@
 1. [Overview](#overview)
 2. [Tech Stack](#tech-stack)
 3. [Project Structure](#project-structure)
-4. [System Architecture](#system-architecture)
-5. [Database Models](#database-models)
-6. [User Management](#user-management)
-7. [Store & Products](#store--products)
-8. [Orders & Cart](#orders--cart)
-9. [Payments & Transactions](#payments--transactions)
-10. [Authentication & Verification](#authentication--verification)
-11. [API Endpoints](#api-endpoints)
-12. [Setup & Deployment](#setup--deployment)
-13. [Development Guide](#development-guide)
-14. [Security Features](#security-features)
-15. [Email & Notifications](#email--notifications)
-16. [Background Tasks & Celery](#background-tasks--celery)
-17. [Troubleshooting](#troubleshooting)
+4. [Complete User Journey: Signup to Checkout](#-complete-user-journey-signup-to-checkout)
+5. [Flow Testing & Validation](#-flow-testing--validation-guide)
+6. [System Architecture](#-system-architecture)
+7. [Database Models](#-database-models)
+8. [User Management](#user-management)
+9. [Store & Products](#store--products)
+10. [Orders & Cart](#orders--cart)
+11. [Payments & Transactions](#payments--transactions)
+12. [Authentication & Verification](#authentication--verification)
+13. [API Endpoints](#api-endpoints)
+14. [Setup & Deployment](#setup--deployment)
+15. [Development Guide](#development-guide)
+16. [Security Features](#security-features)
+17. [Email & Notifications](#email--notifications)
+18. [Background Tasks & Celery](#background-tasks--celery)
+19. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -207,6 +209,1092 @@ e_commerce_api/                         # Project root
 ├── requirements.txt                   # Python dependencies (65 packages)
 └── README.md                           # This file
 ```
+
+---
+
+## 🚀 Complete User Journey: Signup to Checkout
+
+This section outlines the **complete end-to-end flow** from user registration through checkout, validating that all components work together seamlessly.
+
+### 📱 Customer Flow: Complete User Journey
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    1️⃣ USER REGISTRATION                             │
+├─────────────────────────────────────────────────────────────────────┤
+│ POST /api/auth/register/                                             │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "email": "customer@example.com",                                  │
+│   "password": "SecurePass123!",                                     │
+│   "phone_number": "+2348012345678",                                 │
+│   "full_name": "John Doe",                                          │
+│   "role": "CUSTOMER",                                               │
+│   "referral_code": "OPTIONAL_CODE"                                  │
+│ }                                                                    │
+│                                                                       │
+│ Response (Status: 201):                                             │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "data": {                                                         │
+│     "user_id": "550e8400-e29b-41d4-a716-446655440000",             │
+│     "email": "customer@example.com",                                │
+│     "role": "CUSTOMER",                                             │
+│     "is_verified": false,                                           │
+│     "tokens": {                                                     │
+│       "access_token": "eyJhbGc...",                                 │
+│       "refresh_token": "eyJhbGc...",                                │
+│       "access_expires_in": 900,     // 15 minutes                   │
+│       "refresh_expires_in": 1209600  // 14 days                     │
+│     }                                                               │
+│   },                                                                │
+│   "message": "Registration successful. Please verify your email."   │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • CustomUser created with role=CUSTOMER                           │
+│   • CustomerProfile created (linked to CustomUser)                  │
+│   • Wallet created for user                                         │
+│   • Verification email sent (via Celery task)                       │
+│   • Referral code processed (if provided)                           │
+│   • JWT tokens generated                                            │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    2️⃣ EMAIL VERIFICATION                            │
+├─────────────────────────────────────────────────────────────────────┤
+│ POST /api/auth/email-verify/                                        │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "token": "email-verification-token-from-email"                    │
+│ }                                                                    │
+│                                                                       │
+│ Response (Status: 200):                                             │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "message": "Email verified successfully"                          │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Verification token validated                                    │
+│   • CustomUser.is_verified = True                                   │
+│   • Email marked as verified in system                              │
+│   • Welcome email sent to user                                      │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    3️⃣ USER LOGIN (if needed)                        │
+├─────────────────────────────────────────────────────────────────────┤
+│ POST /api/auth/login/                                               │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "email": "customer@example.com",                                  │
+│   "password": "SecurePass123!"                                      │
+│ }                                                                    │
+│                                                                       │
+│ Response (Status: 200):                                             │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "data": {                                                         │
+│     "user_id": "550e8400-e29b-41d4-a716-446655440000",             │
+│     "email": "customer@example.com",                                │
+│     "role": "CUSTOMER",                                             │
+│     "is_verified": true,                                            │
+│     "tokens": {                                                     │
+│       "access_token": "eyJhbGc...",                                 │
+│       "refresh_token": "eyJhbGc..."                                 │
+│     }                                                               │
+│   }                                                                 │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Email & password validated                                      │
+│   • JWT tokens issued                                               │
+│   • Login activity logged                                           │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                4️⃣ UPDATE PROFILE WITH SHIPPING ADDRESS             │
+├─────────────────────────────────────────────────────────────────────┤
+│ PATCH /api/user/profile/                                            │
+│ (Requires: Authorization Bearer {access_token})                     │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "full_name": "John Doe",                                          │
+│   "phone_number": "+2348012345678",                                 │
+│   "shipping_address": "123 Main St, Lagos",                         │
+│   "shipping_city": "Lagos",                                         │
+│   "shipping_state": "Lagos",                                        │
+│   "shipping_country": "Nigeria",                                    │
+│   "shipping_postal_code": "100001",                                 │
+│   "shipping_latitude": 6.5244,    // CRITICAL for delivery fee      │
+│   "shipping_longitude": 3.3792    // CRITICAL for delivery fee      │
+│ }                                                                    │
+│                                                                       │
+│ Response (Status: 200):                                             │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "data": {                                                         │
+│     "user_uuid": "550e8400-e29b-41d4-a716-446655440000",           │
+│     "full_name": "John Doe",                                        │
+│     "email": "customer@example.com",                                │
+│     "shipping_address": "123 Main St, Lagos",                       │
+│     "shipping_latitude": 6.5244,                                    │
+│     "shipping_longitude": 3.3792                                    │
+│   }                                                                 │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • CustomerProfile updated with shipping info                      │
+│   • Coordinates stored for delivery calculations                    │
+│   • Profile saved to database                                       │
+│                                                                       │
+│ ⚠️  IMPORTANT: Shipping latitude/longitude are REQUIRED for         │
+│     checkout to succeed. Delivery fees are calculated from          │
+│     customer location to vendor location.                           │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│              5️⃣ BROWSE PRODUCTS & ADD TO FAVORITES                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ A) GET PRODUCTS                                                      │
+│                                                                       │
+│    GET /api/store/products/                                         │
+│    ?min_price=10000&max_price=500000                                │
+│    &category=electronics                                            │
+│    &search=phone                                                    │
+│    &ordering=-price                                                 │
+│                                                                       │
+│    Response includes:                                               │
+│    • Product list with approved products only                       │
+│    • Filtering & search applied                                     │
+│    • Pricing with discounts applied                                 │
+│                                                                       │
+│ B) GET PRODUCT DETAILS                                              │
+│                                                                       │
+│    GET /api/store/products/{slug}/                                  │
+│                                                                       │
+│    Response includes:                                               │
+│    • Full product info                                              │
+│    • All images (main image first)                                  │
+│    • Available variants                                             │
+│    • Customer reviews & ratings                                     │
+│    • Stock status                                                   │
+│                                                                       │
+│ C) ADD TO FAVORITES (Optional)                                      │
+│                                                                       │
+│    POST /api/store/favourites/add/                                  │
+│    {                                                                 │
+│      "slug": "iphone-15-pro"                                        │
+│    }                                                                 │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Only approved products displayed                                │
+│   • Search/filtering applied                                        │
+│   • Product images fetched from Cloudinary                          │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    6️⃣ ADD ITEMS TO CART                             │
+├─────────────────────────────────────────────────────────────────────┤
+│ POST /api/store/cart/add/                                           │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "slug": "iphone-15-pro",                                          │
+│   "quantity": 2                                                     │
+│ }                                                                    │
+│                                                                       │
+│ Response (Status: 201):                                             │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "data": {                                                         │
+│     "id": 1,                                                        │
+│     "product": "iphone-15-pro",                                     │
+│     "quantity": 2,                                                  │
+│     "price_per_item": "1200000.00",                                 │
+│     "discount_percentage": 10,                                      │
+│     "final_price": "1080000.00",   // After discount                │
+│     "subtotal": "2160000.00"       // quantity * final_price        │
+│   },                                                                │
+│   "message": "Item added to cart"                                   │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Get or create Cart for user                                     │
+│   • Get or create CartItem (product in cart)                        │
+│   • If item already in cart, increment quantity                     │
+│   • Store product slug for later reference                          │
+│                                                                       │
+│ NOTES:                                                              │
+│   • Each user has ONE active cart                                   │
+│   • Cannot have duplicate products in cart                          │
+│   • Quantity increments on duplicate add                            │
+│   • Discounts applied at purchase time (not stored in cart)         │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    7️⃣ VIEW & MANAGE CART                            │
+├─────────────────────────────────────────────────────────────────────┤
+│ A) GET CART                                                          │
+│                                                                       │
+│    GET /api/store/cart/                                             │
+│                                                                       │
+│    Response:                                                         │
+│    {                                                                 │
+│      "id": 1,                                                       │
+│      "customer_uuid": "550e8400-e29b-41d4-a716-446655440000",      │
+│      "items": [                                                     │
+│        {                                                             │
+│          "id": 1,                                                   │
+│          "product_slug": "iphone-15-pro",                           │
+│          "product_name": "iPhone 15 Pro",                           │
+│          "quantity": 2,                                             │
+│          "price": "1200000.00",                                     │
+│          "discount": 10,                                            │
+│          "subtotal": "2160000.00"                                   │
+│        },                                                            │
+│        {                                                             │
+│          "id": 2,                                                   │
+│          "product_slug": "airpods-pro",                             │
+│          "product_name": "AirPods Pro",                             │
+│          "quantity": 1,                                             │
+│          "price": "60000.00",                                       │
+│          "discount": 5,                                             │
+│          "subtotal": "57000.00"                                     │
+│        }                                                             │
+│      ],                                                              │
+│      "total": "2217000.00"                                          │
+│    }                                                                 │
+│                                                                       │
+│ B) UPDATE CART ITEM QUANTITY                                        │
+│                                                                       │
+│    PATCH /api/store/cart/update/                                   │
+│    {                                                                 │
+│      "slug": "iphone-15-pro",                                       │
+│      "quantity": 3                                                  │
+│    }                                                                 │
+│                                                                       │
+│    Setting quantity to 0 removes item.                              │
+│                                                                       │
+│ C) REMOVE FROM CART                                                 │
+│                                                                       │
+│    DELETE /api/store/cart/remove/{slug}/                            │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Cart with all items retrieved                                   │
+│   • Subtotals calculated (with discounts)                           │
+│   • Cart total calculated                                           │
+│   • OneToOne relationship ensures 1 cart per user                   │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    8️⃣ CHECKOUT & PAYMENT                            │
+├─────────────────────────────────────────────────────────────────────┤
+│ A) INITIATE CHECKOUT                                                 │
+│                                                                       │
+│    POST /api/transactions/checkout/                                 │
+│    (Requires: Authorization Bearer {access_token})                  │
+│                                                                       │
+│    Request: {} (No body needed - uses cart items)                   │
+│                                                                       │
+│    Backend Validations:                                             │
+│    1. ✓ User has a cart                                             │
+│    2. ✓ Cart has items                                              │
+│    3. ✓ Customer profile exists                                     │
+│    4. ✓ Shipping address with coordinates exists                    │
+│    5. ✓ Products have stock                                         │
+│                                                                       │
+│    Processing Steps:                                                │
+│    1. Create Order (status=PENDING, payment_status=UNPAID)          │
+│    2. Convert CartItems → OrderItems (with prices at purchase)      │
+│    3. Retrieve vendor coordinates from Store                        │
+│    4. Get customer coordinates from CustomerProfile                 │
+│    5. Calculate delivery fee (distance between vendor & customer)   │
+│    6. Calculate order total:                                        │
+│       = Cart subtotal + Delivery fee - Discounts                    │
+│    7. Create Payment record (status=PENDING)                        │
+│    8. Initialize Paystack payment                                   │
+│    9. Create notification for vendors                               │
+│    10. Save order to database (transaction atomic)                  │
+│                                                                       │
+│    Response (Status: 201):                                          │
+│    {                                                                 │
+│      "success": true,                                               │
+│      "data": {                                                       │
+│        "order_id": "550e8400-e29b-41d4-a716-446655440001",         │
+│        "authorization_url": "https://checkout.paystack.com/...",   │
+│        "reference": "order-ref-1234567890",                         │
+│        "amount": 2217000,          // Total with delivery fee        │
+│        "cart_subtotal": 2217000,                                    │
+│        "delivery_fee": 5000,                                        │
+│        "discount": 0,                                               │
+│        "order_items": [                                             │
+│          {                                                           │
+│            "product": "iphone-15-pro",                              │
+│            "quantity": 2,                                           │
+│            "price_at_purchase": "1200000.00",                       │
+│            "item_subtotal": "2160000.00"                            │
+│          }                                                           │
+│        ],                                                            │
+│        "delivery_distance": "15.3 km",                              │
+│        "delivery_duration": "45 minutes"                            │
+│      },                                                              │
+│      "message": "Order created. Redirect to payment URL."           │
+│    }                                                                 │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Atomic transaction ensures consistency                          │
+│   • Order created with unique UUID                                  │
+│   • OrderItem prices locked (historical record)                     │
+│   • Delivery fee calculated from coordinates                        │
+│   • Paystack integration initialized                                │
+│   • Vendors notified of pending orders                              │
+│   • Cart preserved until order confirmed                            │
+│                                                                       │
+│ CRITICAL COORDINATES:                                               │
+│   order.restaurant_lat, order.restaurant_lng    ← Vendor location   │
+│   order.customer_lat, order.customer_lng        ← Customer location │
+│   Used to calculate delivery_distance & delivery_fee                │
+│                                                                       │
+│ B) REDIRECT TO PAYMENT                                              │
+│                                                                       │
+│    Client redirects to: {authorization_url}                        │
+│                                                                       │
+│    User fills Paystack payment form with:                           │
+│    • Card number                                                    │
+│    • Expiry date                                                    │
+│    • CVV                                                            │
+│    • OTP (if required)                                              │
+│                                                                       │
+│ C) PAYMENT COMPLETION                                               │
+│                                                                       │
+│    After payment, Paystack redirects to callback URL                │
+│    (configured in settings.PAYSTACK_CALLBACK_URL)                   │
+│                                                                       │
+│    Client-side verifies payment with:                               │
+│    POST /api/transactions/verify-payment/                           │
+│    {                                                                 │
+│      "reference": "order-ref-1234567890"                            │
+│    }                                                                 │
+│                                                                       │
+│    Response:                                                         │
+│    {                                                                 │
+│      "success": true,                                               │
+│      "data": {                                                       │
+│        "order_id": "550e8400-e29b-41d4-a716-446655440001",         │
+│        "status": "PAID",                                            │
+│        "payment_status": "PAID",                                    │
+│        "amount": 2217000,                                           │
+│        "reference": "order-ref-1234567890",                         │
+│        "verified_at": "2024-01-08T11:00:00Z"                        │
+│      }                                                               │
+│    }                                                                 │
+│                                                                       │
+│ D) WEBHOOK VERIFICATION (Backend - Async)                           │
+│                                                                       │
+│    Paystack sends webhook when payment completes:                   │
+│    POST /api/transactions/webhook/                                  │
+│                                                                       │
+│    Webhook payload (from Paystack):                                 │
+│    {                                                                 │
+│      "event": "charge.success",                                     │
+│      "data": {                                                       │
+│        "reference": "order-ref-1234567890",                         │
+│        "amount": 2217000,                                           │
+│        "status": "success",                                         │
+│        "customer": {                                                 │
+│          "email": "customer@example.com"                            │
+│        }                                                             │
+│      }                                                               │
+│    }                                                                 │
+│                                                                       │
+│    Backend processes webhook:                                       │
+│    1. Verify HMAC-SHA512 signature (prevents spoofing)              │
+│    2. Find payment by reference                                     │
+│    3. Verify payment status is success                              │
+│    4. Update Payment.verified = True                                │
+│    5. Update Order.payment_status = 'PAID'                          │
+│    6. For each item vendor in order:                                │
+│       • Credit vendor wallet:                                       │
+│         vendor_share = item_subtotal * (1 - 10% commission)        │
+│       • Create WalletTransaction record                             │
+│       • Create TransactionLog for audit                             │
+│    7. Create order confirmation notification                        │
+│    8. Send order confirmation email                                 │
+│    9. Emit event for delivery agent assignment (future)             │
+│                                                                       │
+│    Vendor Crediting Calculation:                                    │
+│    ┌─────────────────────────────────────────┐                      │
+│    │ Item subtotal: ₦2,160,000               │                      │
+│    │ Platform commission (10%): ₦216,000     │                      │
+│    │ Vendor receives: ₦1,944,000             │ Each vendor line item │
+│    └─────────────────────────────────────────┘                      │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • HMAC signature validated                                        │
+│   • Payment marked verified                                         │
+│   • Order status updated to PAID                                    │
+│   • Vendors credited in real-time                                   │
+│   • Wallet transactions recorded                                    │
+│   • Full audit trail created                                        │
+│   • Email confirmations sent                                        │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│              9️⃣ ORDER CONFIRMATION & SHIPPING                       │
+├─────────────────────────────────────────────────────────────────────┤
+│ A) VIEW ORDER DETAILS                                                │
+│                                                                       │
+│    GET /api/transactions/orders/{order_id}/                         │
+│                                                                       │
+│    Response includes:                                               │
+│    • Order ID (UUID)                                                │
+│    • Status: PAID                                                   │
+│    • All order items with historical prices                         │
+│    • Delivery address                                               │
+│    • Delivery fee & calculations                                    │
+│    • Total price breakdown                                          │
+│    • Tracking number (when available)                               │
+│                                                                       │
+│ B) VENDOR PROCESSES ORDER (Admin/Vendor)                            │
+│                                                                       │
+│    PATCH /api/transactions/orders/{order_id}/                       │
+│    {                                                                 │
+│      "status": "SHIPPED",                                           │
+│      "tracking_number": "NG123456789"                               │
+│    }                                                                 │
+│                                                                       │
+│    Status flow: PAID → SHIPPED → DELIVERED                          │
+│                                                                       │
+│ C) DELIVERY AGENT COMPLETES ORDER                                   │
+│                                                                       │
+│    PATCH /api/transactions/orders/{order_id}/                       │
+│    {                                                                 │
+│      "status": "DELIVERED"                                          │
+│    }                                                                 │
+│                                                                       │
+│    This triggers:                                                   │
+│    • Order marked DELIVERED                                         │
+│    • Delivery agent receives commission (if applicable)             │
+│    • Customer receives delivery confirmation                        │
+│    • Can now leave product review                                   │
+│                                                                       │
+│ D) ORDER RECEIPT                                                    │
+│                                                                       │
+│    GET /api/transactions/orders/{order_id}/receipt/                 │
+│                                                                       │
+│    Returns printable/downloadable receipt with:                     │
+│    • Invoice number                                                 │
+│    • Order items with prices                                        │
+│    • Total breakdown                                                │
+│    • Payment status                                                 │
+│    • Delivery address                                               │
+│    • Customer information                                           │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Order status transitions managed                                │
+│   • Timestamps recorded for each status                             │
+│   • Vendor commissions calculated                                   │
+│   • Delivery assignments handled                                    │
+└─────────────────────────────────────────────────────────────────────┘
+                                 ↓
+┌─────────────────────────────────────────────────────────────────────┐
+│                    🔟 LEAVE REVIEW & FEEDBACK                       │
+├─────────────────────────────────────────────────────────────────────┤
+│ POST /api/store/products/{slug}/review/add/                         │
+│                                                                       │
+│ Request:                                                             │
+│ {                                                                    │
+│   "rating": 5,                                                      │
+│   "comment": "Excellent product, fast delivery!"                    │
+│ }                                                                    │
+│                                                                       │
+│ Response:                                                            │
+│ {                                                                    │
+│   "success": true,                                                  │
+│   "data": {                                                         │
+│     "id": 1,                                                        │
+│     "product": "iphone-15-pro",                                     │
+│     "customer": "customer@example.com",                             │
+│     "rating": 5,                                                    │
+│     "comment": "Excellent product, fast delivery!",                │
+│     "created_at": "2024-01-08T12:00:00Z"                            │
+│   }                                                                 │
+│ }                                                                    │
+│                                                                       │
+│ 🔗 Backend Actions:                                                 │
+│   • Review created or updated (one per customer per product)        │
+│   • Rating stored for product analytics                             │
+│   • Review appears in product details for other customers           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 📊 Flow Verification Checklist
+
+✅ **Registration & Verification**
+- [ ] User registers with email/password
+- [ ] JWT tokens received (access + refresh)
+- [ ] Email verification token sent
+- [ ] Email verified successfully
+- [ ] User can login with credentials
+
+✅ **Profile Setup**
+- [ ] User profile created with CUSTOMER role
+- [ ] Shipping address added to profile
+- [ ] Shipping latitude/longitude stored (for delivery fee calculation)
+- [ ] Profile update reflected in system
+
+✅ **Shopping**
+- [ ] Products visible in product list (approved only)
+- [ ] Product details retrievable by slug
+- [ ] Product filtering & search works
+- [ ] Can add items to cart
+- [ ] Cart persists across requests
+- [ ] Can update cart quantities
+- [ ] Can remove items from cart
+
+✅ **Checkout**
+- [ ] Cart has items
+- [ ] User has shipping address with coordinates
+- [ ] Checkout creates order with PENDING status
+- [ ] CartItems converted to OrderItems
+- [ ] Delivery fee calculated from coordinates
+- [ ] Order total correctly calculated
+- [ ] Payment record created
+
+✅ **Payment**
+- [ ] Paystack payment initialized successfully
+- [ ] authorization_url returned
+- [ ] Reference generated correctly
+- [ ] Payment verification endpoint works
+- [ ] Webhook signature validation works
+
+✅ **Post-Payment**
+- [ ] Vendors credited to wallets
+- [ ] Order status changes to PAID
+- [ ] Payment status changes to PAID
+- [ ] Wallet transactions recorded
+- [ ] Notifications sent to vendors
+- [ ] Customer receives confirmation email
+
+✅ **Order Management**
+- [ ] Order visible in customer orders list
+- [ ] Order receipt available
+- [ ] Order tracking works
+- [ ] Status transitions work
+- [ ] Delivery fee properly displayed
+
+✅ **Reviews**
+- [ ] Customer can leave review after delivery
+- [ ] Review appears in product details
+- [ ] Reviews visible to other customers
+
+---
+
+## 🧪 Flow Testing & Validation Guide
+
+### Testing the Complete Customer Journey
+
+This section provides step-by-step instructions to manually test the entire flow from signup through checkout.
+
+#### **Prerequisites**
+- API running on `http://localhost:8000`
+- Swagger docs available at `http://localhost:8000/swagger/`
+- Test email configured
+- Paystack sandbox credentials configured
+
+#### **Step 1: User Registration Test**
+
+**Endpoint:** `POST /api/auth/register/`
+
+**Test Data:**
+```json
+{
+  "email": "testcustomer@example.com",
+  "password": "TestPassword123!",
+  "phone_number": "+2348012345678",
+  "full_name": "Test Customer",
+  "role": "CUSTOMER"
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "user_id": "550e8400-e29b-41d4-a716-446655440000",
+    "tokens": {
+      "access_token": "eyJhbGc...",
+      "refresh_token": "eyJhbGc..."
+    }
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 201
+- ✅ User UUID generated
+- ✅ JWT tokens issued
+- ✅ Email verification link sent
+- ✅ CustomerProfile created
+- ✅ Wallet created
+
+---
+
+#### **Step 2: Email Verification Test**
+
+**Check email** for verification link and extract token.
+
+**Endpoint:** `POST /api/auth/email-verify/`
+
+**Test Data:**
+```json
+{
+  "token": "{email_token_from_email}"
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "message": "Email verified successfully"
+}
+```
+
+**Validation Points:**
+- ✅ Status code 200
+- ✅ CustomUser.is_verified = true
+- ✅ Verification email marked in system
+
+---
+
+#### **Step 3: Login Test**
+
+**Endpoint:** `POST /api/auth/login/`
+
+**Test Data:**
+```json
+{
+  "email": "testcustomer@example.com",
+  "password": "TestPassword123!"
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "tokens": {
+      "access_token": "eyJhbGc...",
+      "refresh_token": "eyJhbGc..."
+    }
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 200
+- ✅ Access token valid
+- ✅ Can use token in subsequent requests
+
+**Save the access token** for next steps (use as: `Authorization: Bearer {access_token}`)
+
+---
+
+#### **Step 4: Update Profile with Shipping Address**
+
+**Endpoint:** `PATCH /api/user/profile/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+Content-Type: application/json
+```
+
+**Test Data:**
+```json
+{
+  "full_name": "Test Customer",
+  "phone_number": "+2348012345678",
+  "shipping_address": "123 Main Street",
+  "shipping_city": "Lagos",
+  "shipping_state": "Lagos",
+  "shipping_country": "Nigeria",
+  "shipping_postal_code": "100001",
+  "shipping_latitude": 6.5244,
+  "shipping_longitude": 3.3792
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "shipping_address": "123 Main Street",
+    "shipping_latitude": 6.5244,
+    "shipping_longitude": 3.3792
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 200
+- ✅ Profile updated
+- ✅ Coordinates stored (critical for delivery fee calculation)
+- ✅ Subsequent requests can retrieve updated profile
+
+---
+
+#### **Step 5: Browse Products**
+
+**Endpoint:** `GET /api/store/products/?category=electronics&min_price=10000&max_price=1000000`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "slug": "iphone-15-pro",
+      "name": "iPhone 15 Pro",
+      "price": "1200000.00",
+      "discount": 10,
+      "stock": 50,
+      "approval_status": "approved",
+      "publish_status": "submitted"
+    }
+  ]
+}
+```
+
+**Validation Points:**
+- ✅ Only approved products shown
+- ✅ Filtering by category works
+- ✅ Price filtering works
+- ✅ All required fields present
+
+**Note:** Save a product slug (e.g., `iphone-15-pro`) for next steps.
+
+---
+
+#### **Step 6: Add Items to Cart**
+
+**Endpoint:** `POST /api/store/cart/add/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+Content-Type: application/json
+```
+
+**Test Data:**
+```json
+{
+  "slug": "iphone-15-pro",
+  "quantity": 2
+}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "product": "iphone-15-pro",
+    "quantity": 2,
+    "subtotal": "2160000.00"
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 201
+- ✅ CartItem created
+- ✅ Quantity stored correctly
+- ✅ Subtotal calculated with discount applied
+
+**Add another item** to cart to test multi-vendor scenario:
+```json
+{
+  "slug": "another-product",
+  "quantity": 1
+}
+```
+
+---
+
+#### **Step 7: View Cart**
+
+**Endpoint:** `GET /api/store/cart/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "items": [
+      {
+        "id": 1,
+        "product_slug": "iphone-15-pro",
+        "quantity": 2,
+        "subtotal": "2160000.00"
+      },
+      {
+        "id": 2,
+        "product_slug": "another-product",
+        "quantity": 1,
+        "subtotal": "540000.00"
+      }
+    ],
+    "total": "2700000.00"
+  }
+}
+```
+
+**Validation Points:**
+- ✅ All cart items displayed
+- ✅ Subtotals calculated correctly
+- ✅ Cart total is sum of all items
+- ✅ Multiple vendors possible
+
+---
+
+#### **Step 8: Checkout (Create Order)**
+
+**Endpoint:** `POST /api/transactions/checkout/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+Content-Type: application/json
+```
+
+**Request:** Empty body (uses cart items automatically)
+```json
+{}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "550e8400-e29b-41d4-a716-446655440001",
+    "authorization_url": "https://checkout.paystack.com/...",
+    "reference": "order-ref-1234567890",
+    "amount": 2700000,
+    "order_items": [
+      {
+        "product": "iphone-15-pro",
+        "quantity": 2,
+        "price_at_purchase": "1200000.00"
+      }
+    ],
+    "delivery_fee": 5000,
+    "delivery_distance": "15.3 km"
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 201
+- ✅ Order created with PENDING status
+- ✅ Order UUID generated
+- ✅ CartItems converted to OrderItems
+- ✅ Payment record created
+- ✅ Paystack initialized
+- ✅ authorization_url provided
+- ✅ Delivery fee calculated from coordinates
+- ✅ Order total = cart_subtotal + delivery_fee
+- ✅ Order.payment_status = 'UNPAID'
+- ✅ Order.status = 'PENDING'
+
+**Save the order_id and reference** for payment verification.
+
+---
+
+#### **Step 9: Verify Payment**
+
+**Endpoint:** `POST /api/transactions/verify-payment/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+Content-Type: application/json
+```
+
+**Test Data:**
+```json
+{
+  "reference": "order-ref-1234567890"
+}
+```
+
+**In Paystack Sandbox:**
+- Complete payment with test card: `4111 1111 1111 1111`
+- OTP: `123456`
+- Enter any future expiry date
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "PAID",
+    "payment_status": "PAID",
+    "amount": 2700000
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Status code 200
+- ✅ Payment marked verified
+- ✅ Order status = PAID
+- ✅ Order payment_status = PAID
+
+---
+
+#### **Step 10: Verify Webhook Processing**
+
+**Backend automatically processes** Paystack webhook when payment completes.
+
+**Check:**
+1. **Vendor wallets credited:**
+   ```
+   Endpoint: GET /api/transactions/wallet/
+   Expected: Vendor balance increased by (item_subtotal * 0.9)
+   ```
+
+2. **Wallet transactions created:**
+   ```
+   Endpoint: GET /api/transactions/wallet/transactions/
+   Expected: CREDIT transaction for each vendor
+   ```
+
+3. **Order status updated:**
+   ```
+   Endpoint: GET /api/transactions/orders/{order_id}/
+   Expected: payment_status = 'PAID', status = 'PAID'
+   ```
+
+**Validation Points:**
+- ✅ Order.payment_status changed to PAID
+- ✅ Vendors credited in wallets
+- ✅ WalletTransactions created
+- ✅ TransactionLogs created for audit
+- ✅ Platform commission (10%) deducted
+- ✅ Notifications sent to vendors
+
+---
+
+#### **Step 11: View Order Details**
+
+**Endpoint:** `GET /api/transactions/orders/{order_id}/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "550e8400-e29b-41d4-a716-446655440001",
+    "status": "PAID",
+    "payment_status": "PAID",
+    "total_price": "2700000.00",
+    "delivery_fee": "5000.00",
+    "order_items": [
+      {
+        "product": "iphone-15-pro",
+        "quantity": 2,
+        "price_at_purchase": "1200000.00",
+        "item_subtotal": "2400000.00"
+      }
+    ],
+    "ordered_at": "2024-01-08T10:30:00Z"
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Order fully populated
+- ✅ Historical prices preserved
+- ✅ Delivery fee included
+- ✅ Status transitions visible
+
+---
+
+#### **Step 12: Get Order Receipt**
+
+**Endpoint:** `GET /api/transactions/orders/{order_id}/receipt/`
+
+**Headers:**
+```
+Authorization: Bearer {access_token}
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "550e8400-e29b-41d4-a716-446655440001",
+    "invoice_number": "INV-20240108-001",
+    "customer": "Test Customer",
+    "items": [...],
+    "subtotal": "2695000.00",
+    "delivery_fee": "5000.00",
+    "total": "2700000.00",
+    "payment_method": "Paystack",
+    "status": "PAID"
+  }
+}
+```
+
+**Validation Points:**
+- ✅ Receipt formatted correctly
+- ✅ All order details included
+- ✅ Ready for printing/PDF export
+
+---
+
+### Common Issues & Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| **Checkout fails** with "Shipping address with coordinates required" | Make sure to update profile with shipping_latitude and shipping_longitude (Step 4) |
+| **Delivery fee = 0** | Verify vendor has store_latitude/store_longitude. Check delivery service is configured. |
+| **Payment verification fails** | Ensure reference matches exactly. Check Paystack credentials in settings. |
+| **Vendors not credited** | Check webhook was processed. Verify payment_status = 'PAID'. Check Wallet model exists. |
+| **Cart persists after checkout** | Cart is intentionally not cleared until order confirmed. This is by design. |
+| **Only one item in cart** | Each user has ONE cart with unique constraint per product. Quantity is incremented. |
+| **Product not visible** | Verify approval_status='approved' AND publish_status='submitted'. |
 
 ---
 

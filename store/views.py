@@ -185,6 +185,12 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
                 "detail": "Your vendor account is not verified. Please complete verification before adding products."
             })
 
+        # Check vendor has address with coordinates
+        if not vendor.store_latitude or not vendor.store_longitude:
+            raise serializers.ValidationError({
+                "store_address": "You must update your store address with coordinates before you can upload products. Please go to your vendor profile and set your store location."
+            })
+
         # Save the product as draft
         product = serializer.save(store=vendor, publish_status='draft')
         

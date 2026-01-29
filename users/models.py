@@ -17,6 +17,8 @@ class Vendor(models.Model):
     store_description = models.TextField(blank=True)
     business_registration_number = models.CharField(max_length=50, blank=True)
     address = models.CharField(max_length=255, blank=True)
+    store_latitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant latitude for delivery calculations")
+    store_longitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant longitude for delivery calculations")
     bank_name = models.CharField(max_length=100, blank=True)
     account_number = models.CharField(max_length=20, blank=True)
     account_name = models.CharField(max_length=200, blank=True, null=True, help_text="Name on the bank account")
@@ -102,6 +104,8 @@ class Customer(models.Model):
     city = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=100, blank=True)
     postal_code = models.CharField(max_length=20, blank=True)
+    shipping_latitude = models.FloatField(null=True, blank=True, help_text="Shipping address latitude for delivery calculations")
+    shipping_longitude = models.FloatField(null=True, blank=True, help_text="Shipping address longitude for delivery calculations")
     loyalty_points = models.PositiveIntegerField(default=0)
 
 class BusinessAdmin(models.Model):
