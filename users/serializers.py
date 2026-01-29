@@ -605,7 +605,8 @@ class AdminProductListSerializer(serializers.Serializer):
     name = serializers.CharField()
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
     store = serializers.CharField(source='store.store_name')
-    is_active = serializers.BooleanField()
+    approval_status = serializers.CharField()
+    publish_status = serializers.CharField()
 
 class AdminProductUpdateRequestSerializer(serializers.Serializer):
     product_slug = serializers.SlugField()

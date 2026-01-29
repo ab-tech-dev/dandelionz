@@ -1318,69 +1318,69 @@ No authentication required (webhook signature validation instead)""",
             logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
 
-        try:
-            payment = Payment.objects.select_for_update().get(reference=reference)
-        except Payment.DoesNotExist:
-            logger.warning(f"Payment not found for reference: {reference}")
-            return Response({"status": "ok"})
-
-        try:
-            paystack = Paystack()
-            verify = paystack.verify_payment(reference)
-            pdata = verify.get("data", {})
-        except Exception as e:
-            # Transient error - log and queue for retry
-            # Paystack will retry the webhook, so we can safely return 200
-            logger.error(f"Error verifying payment {reference}: {str(e)}", exc_info=True)
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.WEBHOOK_PROCESSED,
-                level=TransactionLog.Level.ERROR,
-                message=f"Webhook verification error for payment {reference}: {str(e)}",
-                amount=payment.amount,
-                metadata={"reference": reference, "error": str(e)}
-            )
-            return Response({"status": "ok"})
-
-        # Validate payment status
-        if pdata.get("status") != "success":
-            logger.info(f"Payment {reference} not successful: {pdata.get('status')}")
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.PAYMENT_FAILED,
-                level=TransactionLog.Level.WARNING,
-                message=f"Payment {reference} failed with status: {pdata.get('status')}",
-                amount=payment.amount,
-                metadata={"reference": reference, "paystack_status": pdata.get('status')}
-            )
-            return Response({"status": "ok"})
-
-        if pdata.get("currency") != EXPECTED_CURRENCY:
-            logger.error(f"Currency mismatch for payment {reference}: expected {EXPECTED_CURRENCY}, got {pdata.get('currency')}")
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.PAYMENT_FAILED,
-                level=TransactionLog.Level.ERROR,
-                message=f"Currency mismatch for payment {reference}",
-                amount=payment.amount,
-                metadata={"reference": reference, "expected_currency": EXPECTED_CURRENCY, "received_currency": pdata.get('currency')}
-            )
-            return Response({"status": "ok"})
-
-        paid_amount = Decimal(pdata["amount"]) / Decimal(100)
-        if paid_amount != payment.amount:
-            logger.error(f"Amount mismatch for payment {reference}: expected {payment.amount}, got {paid_amount}")
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.PAYMENT_FAILED,
-                level=TransactionLog.Level.ERROR,
-                message=f"Amount mismatch for payment {reference}",
-                amount=payment.amount,
-                metadata={"reference": reference, "expected_amount": str(payment.amount), "received_amount": str(paid_amount)}
-            )
-            return Response({"status": "ok"})
-
         with transaction.atomic():
+            try:
+                payment = Payment.objects.select_for_update().get(reference=reference)
+            except Payment.DoesNotExist:
+                logger.warning(f"Payment not found for reference: {reference}")
+                return Response({"status": "ok"})
+
+            try:
+                paystack = Paystack()
+                verify = paystack.verify_payment(reference)
+                pdata = verify.get("data", {})
+            except Exception as e:
+                # Transient error - log and queue for retry
+                # Paystack will retry the webhook, so we can safely return 200
+                logger.error(f"Error verifying payment {reference}: {str(e)}", exc_info=True)
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.WEBHOOK_PROCESSED,
+                    level=TransactionLog.Level.ERROR,
+                    message=f"Webhook verification error for payment {reference}: {str(e)}",
+                    amount=payment.amount,
+                    metadata={"reference": reference, "error": str(e)}
+                )
+                return Response({"status": "ok"})
+
+            # Validate payment status
+            if pdata.get("status") != "success":
+                logger.info(f"Payment {reference} not successful: {pdata.get('status')}")
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_FAILED,
+                    level=TransactionLog.Level.WARNING,
+                    message=f"Payment {reference} failed with status: {pdata.get('status')}",
+                    amount=payment.amount,
+                    metadata={"reference": reference, "paystack_status": pdata.get('status')}
+                )
+                return Response({"status": "ok"})
+
+            if pdata.get("currency") != EXPECTED_CURRENCY:
+                logger.error(f"Currency mismatch for payment {reference}: expected {EXPECTED_CURRENCY}, got {pdata.get('currency')}")
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_FAILED,
+                    level=TransactionLog.Level.ERROR,
+                    message=f"Currency mismatch for payment {reference}",
+                    amount=payment.amount,
+                    metadata={"reference": reference, "expected_currency": EXPECTED_CURRENCY, "received_currency": pdata.get('currency')}
+                )
+                return Response({"status": "ok"})
+
+            paid_amount = Decimal(pdata["amount"]) / Decimal(100)
+            if paid_amount != payment.amount:
+                logger.error(f"Amount mismatch for payment {reference}: expected {payment.amount}, got {paid_amount}")
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_FAILED,
+                    level=TransactionLog.Level.ERROR,
+                    message=f"Amount mismatch for payment {reference}",
+                    amount=payment.amount,
+                    metadata={"reference": reference, "expected_amount": str(payment.amount), "received_amount": str(paid_amount)}
+                )
+                return Response({"status": "ok"})
+
             if not payment.verified:
                 payment.mark_as_successful()
                 # Log successful payment
