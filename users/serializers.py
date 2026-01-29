@@ -39,9 +39,12 @@ class UserBaseSerializer(serializers.ModelSerializer):
         ref_name = "UsersProfileUserBase"
 
     def get_profile_picture(self, obj):
-        if obj.profile_picture:
-            # Prepend your Cloudinary base URL
-            return f"https://res.cloudinary.com/dhpny4uce/{obj.profile_picture}"
+        try:
+            if hasattr(obj, 'profile_picture') and obj.profile_picture:
+                # Prepend your Cloudinary base URL
+                return f"https://res.cloudinary.com/dhpny4uce/{obj.profile_picture}"
+        except Exception:
+            pass
         return None
 
 
