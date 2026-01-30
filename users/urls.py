@@ -45,6 +45,7 @@ customer_profile = CustomerProfileViewSet.as_view({
     "patch": "partial_update",
 })
 customer_change_password = CustomerProfileViewSet.as_view({"post": "change_password"})
+customer_close_account = CustomerProfileViewSet.as_view({"delete": "close_account"})
 
 # =========================
 # VENDOR
@@ -55,6 +56,7 @@ vendor_profile = VendorViewSet.as_view({
     "patch": "partial_update",
 })
 vendor_change_password = VendorViewSet.as_view({"post": "change_password"})
+vendor_close_account = VendorViewSet.as_view({"delete": "close_account"})
 
 # =========================
 # ADMIN
@@ -105,6 +107,7 @@ urlpatterns = [
     # CUSTOMER
     path("customer/profile/", customer_profile, name="customer-profile"),
     path("customer/change-password/", customer_change_password, name="customer-change-password"),
+    path("customer/account/", customer_close_account, name="customer-close-account"),
     
     # CUSTOMER WALLET & PAYMENT
     path("customer/wallet/", CustomerProfileViewSet.as_view({"get": "wallet_balance"}), name="customer-wallet-balance"),
@@ -117,6 +120,7 @@ urlpatterns = [
     # VENDOR
     path("vendor/profile/", vendor_profile, name="vendor-profile"),
     path("vendor/change-password/", vendor_change_password, name="vendor-change-password"),
+    path("vendor/account/", vendor_close_account, name="vendor-close-account"),
     path("vendor/products/add/", VendorViewSet.as_view({"post": "add_product"}), name="vendor-add-product"),
     path("vendor/products/", VendorViewSet.as_view({"get": "list_products"}), name="vendor-list-products"),
     path("vendor/products/<slug:slug>/", VendorViewSet.as_view({"put": "update_product", "patch": "update_product", "delete": "delete_product"}), name="vendor-product-detail"),

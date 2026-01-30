@@ -230,6 +230,76 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         )
 
     @swagger_auto_schema(
+        operation_id="customer_close_account",
+        operation_summary="Close Customer Account",
+        operation_description="Permanently close the authenticated customer's account for privacy and security compliance. Account cannot be recovered after closure. Requires password confirmation.",
+        tags=["Customer Profile"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'password': openapi.Schema(type=openapi.TYPE_STRING, description='User password for confirmation'),
+            },
+            required=['password']
+        ),
+        responses={
+            200: openapi.Response("Account closed successfully", 
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: openapi.Response("Invalid password",
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'error': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["delete"])
+    def close_account(self, request):
+        """Close the customer account for privacy and security compliance."""
+        customer = self.get_customer(request)
+
+        if not customer:
+            return Response(
+                {"success": False, "error": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        password = request.data.get('password')
+        if not password:
+            return Response(
+                {"success": False, "error": "The password provided is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        if not user.check_password(password):
+            return Response(
+                {"success": False, "error": "The password provided is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Soft delete: set is_active to False so user cannot login
+        with transaction.atomic():
+            user.is_active = False
+            user.save(update_fields=['is_active', 'updated_at'])
+
+        return Response(
+            {"success": True, "message": "Account closed successfully."},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
         operation_id="customer_delete_account",
         operation_summary="Delete Customer Account",
         operation_description="Permanently delete the authenticated customer's account. This action cannot be undone. Requires password confirmation.",
@@ -678,6 +748,82 @@ class VendorViewSet(viewsets.ViewSet):
             status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST,
         )
 
+    @swagger_auto_schema(
+        operation_id="vendor_close_account",
+        operation_summary="Close Vendor Account",
+        operation_description="Permanently close the authenticated vendor's account and store for privacy and security compliance. All products will be marked as inactive. Account cannot be recovered after closure. Requires password confirmation.",
+        tags=["Vendor Profile"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'password': openapi.Schema(type=openapi.TYPE_STRING, description='Vendor password for confirmation'),
+            },
+            required=['password']
+        ),
+        responses={
+            200: openapi.Response("Account closed successfully", 
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'message': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            400: openapi.Response("Invalid password",
+                openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        'success': openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        'error': openapi.Schema(type=openapi.TYPE_STRING),
+                    }
+                )
+            ),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["delete"])
+    def close_account(self, request):
+        """Close the vendor account and store for privacy and security compliance."""
+        vendor = self.get_vendor(request)
+
+        if not vendor:
+            return Response(
+                {"success": False, "error": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        password = request.data.get('password')
+        if not password:
+            return Response(
+                {"success": False, "error": "The password provided is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        if not user.check_password(password):
+            return Response(
+                {"success": False, "error": "The password provided is incorrect."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Soft delete vendor and mark all products as inactive
+        with transaction.atomic():
+            from store.models import Product
+            
+            # Mark all vendor's products as inactive
+            Product.objects.filter(store=vendor).update(publish_status='draft')
+            
+            # Set user as inactive so they cannot login
+            user.is_active = False
+            user.save(update_fields=['is_active', 'updated_at'])
+
+        return Response(
+            {"success": True, "message": "Vendor account and store have been closed successfully."},
+            status=status.HTTP_200_OK,
+        )
+
     # ============================
     # PRODUCT MANAGEMENT
     # ============================
@@ -711,7 +857,8 @@ class VendorViewSet(viewsets.ViewSet):
 
         serializer = CreateProductSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(store=vendor)
+        # Create product directly with submitted status for admin review
+        serializer.save(store=vendor, publish_status='submitted', approval_status='pending')
 
         return Response(
             {"success": True, "data": serializer.data},
@@ -743,7 +890,8 @@ class VendorViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        products = Product.objects.filter(store=vendor)
+        # Only return submitted products (not drafts)
+        products = Product.objects.filter(store=vendor, publish_status='submitted')
         serializer = ProductSerializer(products, many=True)
 
         return Response({"success": True, "data": serializer.data})
@@ -793,10 +941,11 @@ class VendorViewSet(viewsets.ViewSet):
             )
 
         try:
-            product = Product.objects.get(pk=pk, store=vendor)
+            # Only allow updates to submitted products (not drafts)
+            product = Product.objects.get(pk=pk, store=vendor, publish_status='submitted')
         except Product.DoesNotExist:
             return Response(
-                {"success": False, "message": "Product not found"},
+                {"success": False, "message": "Product not found or not a submitted product"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -834,11 +983,12 @@ class VendorViewSet(viewsets.ViewSet):
             )
 
         try:
-            product = Product.objects.get(pk=pk, store=vendor)
+            # Only allow deletion of submitted products (not drafts)
+            product = Product.objects.get(pk=pk, store=vendor, publish_status='submitted')
             product.delete()
         except Product.DoesNotExist:
             return Response(
-                {"success": False, "message": "Product not found"},
+                {"success": False, "message": "Product not found or not a submitted product"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 

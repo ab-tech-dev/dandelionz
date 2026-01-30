@@ -261,10 +261,17 @@ class Favourite(models.Model):
 class Review(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reviews')
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
-    rating = models.PositiveIntegerField(default=1)
+    rating = models.PositiveIntegerField(default=1, help_text="Rating from 1 to 5")
     comment = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # Ensure one review per customer per product
+        constraints = [
+            models.UniqueConstraint(fields=['product', 'customer'], name='one_review_per_customer_per_product')
+        ]
+        ordering = ['-created_at']
 
     def __str__(self):
         return f"Review for {self.product.name} by {self.customer.email}"

@@ -7,7 +7,8 @@ from .views import (
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
-    ProductSummaryView, ProductReviewView, VendorAdminProductDetailView
+    ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
+    VendorProductsListView, VendorProductDetailView
 )
 
 urlpatterns = [
@@ -71,4 +72,10 @@ urlpatterns = [
     path('vendor/drafts/<slug:slug>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
     path('vendor/drafts/<slug:slug>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
     path('vendor/drafts/<slug:slug>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
+
+    # ==================
+    # VENDOR - PRODUCTS (List & Manage Published)
+    # ==================
+    path('vendor/products/', VendorProductsListView.as_view(), name='vendor-products-list'),
+    path('vendor/products/<slug:slug>/', VendorProductDetailView.as_view(), name='vendor-product-detail'),
 ]

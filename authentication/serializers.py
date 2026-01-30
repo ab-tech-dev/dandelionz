@@ -64,7 +64,7 @@ class AuthDataSerializer(serializers.Serializer):
 class UserRegistrationSerializer(serializers.Serializer):
     email = serializers.EmailField(help_text="User email address")
     password = serializers.CharField(write_only=True, min_length=8, help_text="User password (minimum 8 characters)")
-    phone_number = serializers.CharField(required=False, allow_blank=True, help_text="User phone number")
+    phone_number = serializers.CharField(required=False, allow_blank=True, max_length=20, help_text="User phone number")
     full_name = serializers.CharField(required=False, allow_blank=True, help_text="User full name")
     role = serializers.ChoiceField(
         choices=CustomUser.Role.choices,

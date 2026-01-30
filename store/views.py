@@ -32,6 +32,7 @@ from rest_framework import serializers
 from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
 from authentication.core.permissions import IsAdminOrVendor, IsAdmin, IsVendor
+from authentication.core.exceptions import PurchaseRequiredException
 
 # ---------------------------
 # Products FilterSet
@@ -644,7 +645,8 @@ class ProductReviewListView(BaseAPIView, generics.ListAPIView):
     ],
     responses={
         201: ReviewSerializer,
-        400: {"description": "Invalid input"}
+        400: {"description": "Invalid input"},
+        403: {"description": "You must purchase this product to review it."}
     }
 )
 class AddReviewView(BaseAPIView, generics.CreateAPIView):
@@ -653,6 +655,18 @@ class AddReviewView(BaseAPIView, generics.CreateAPIView):
 
     def post(self, request, slug):
         product = get_object_or_404(Product, slug=slug)
+        
+        # Check if user has purchased this product
+        from transactions.models import OrderItem, Order
+        has_purchased = OrderItem.objects.filter(
+            order__customer=request.user,
+            order__status__in=[Order.Status.PAID, Order.Status.DELIVERED, Order.Status.SHIPPED],
+            product=product
+        ).exists()
+        
+        if not has_purchased:
+            raise PurchaseRequiredException()
+        
         rating = request.data.get('rating')
         comment = request.data.get('comment', '')
 
@@ -1568,6 +1582,313 @@ class VendorAdminProductDetailView(BaseAPIView):
             standardized_response(
                 success=True,
                 data=serializer.data
+            ),
+            status=status.HTTP_200_OK
+        )
+
+
+# ==========================================
+# VENDOR - LIST & MANAGE PUBLISHED PRODUCTS
+# ==========================================
+class VendorProductsListView(BaseAPIView, generics.ListAPIView):
+    """
+    List all submitted/approved products created by the authenticated vendor.
+    Only vendors can access this endpoint.
+    """
+    permission_classes = [IsAuthenticated, IsVendor]
+    serializer_class = ProductSerializer
+    filter_backends = [OrderingFilter, SearchFilter]
+    search_fields = ['name', 'description']
+    ordering_fields = ['created_at', 'name', 'price']
+    ordering = ['-created_at']
+
+    @extend_schema(
+        tags=["Vendor - Products"],
+        summary="List Vendor Products",
+        description="Retrieve all products submitted by the authenticated vendor (including draft, submitted, approved, and rejected status).",
+        parameters=[
+            OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
+            OpenApiParameter(name='ordering', description='Order by: created_at, name, or price', required=False, type=str),
+        ],
+        responses={200: ProductSerializer(many=True)},
+    )
+    def get_queryset(self):
+        """Get all products (any status) for the current vendor"""
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(self.request.user)
+        
+        if vendor is None:
+            return Product.objects.none()
+        
+        return Product.objects.filter(
+            store=vendor
+        ).select_related('store', 'category', 'approved_by').order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(
+                standardized_response(
+                    data=serializer.data,
+                    message=f"Found {queryset.count()} products"
+                )
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            standardized_response(
+                data=serializer.data,
+                message=f"Found {queryset.count()} products"
+            )
+        )
+
+
+class VendorProductDetailView(BaseAPIView):
+    """
+    Vendor endpoint to view, update (PUT/PATCH), or delete individual products by slug.
+    Vendors can only manage their own products.
+    """
+    permission_classes = [IsAuthenticated, IsVendor]
+
+    @extend_schema(
+        tags=["Vendor - Products"],
+        summary="Get Vendor Product Details",
+        description="Retrieve detailed information for a specific product by slug. Vendor can only view their own products.",
+        parameters=[
+            OpenApiParameter(
+                name='slug', 
+                description='Product slug identifier', 
+                required=True, 
+                type=str,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        responses={
+            200: ProductSerializer,
+            404: OpenApiResponse(description="Product not found"),
+            403: OpenApiResponse(description="Not authorized to view this product")
+        }
+    )
+    def get(self, request, slug):
+        """Get detailed product information for vendor."""
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Product not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if vendor owns this product
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(request.user)
+        
+        if vendor is None or product.store != vendor:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Not authorized to view this product"
+                ),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = ProductSerializer(product)
+        return Response(
+            standardized_response(
+                success=True,
+                data=serializer.data
+            ),
+            status=status.HTTP_200_OK
+        )
+
+    @extend_schema(
+        tags=["Vendor - Products"],
+        summary="Update Vendor Product (Full Update)",
+        description="Fully update a product (PUT). All fields are replaced. Vendor can only update their own products.",
+        parameters=[
+            OpenApiParameter(
+                name='slug', 
+                description='Product slug identifier', 
+                required=True, 
+                type=str,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        request=ProductSerializer,
+        responses={
+            200: ProductSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Product not found"),
+            403: OpenApiResponse(description="Not authorized to update this product")
+        }
+    )
+    def put(self, request, slug):
+        """Fully update a product (replace all fields)."""
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Product not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if vendor owns this product
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(request.user)
+        
+        if vendor is None or product.store != vendor:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Not authorized to update this product"
+                ),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = ProductSerializer(product, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                standardized_response(
+                    success=True,
+                    data=serializer.data,
+                    message="Product updated successfully"
+                ),
+                status=status.HTTP_200_OK
+            )
+        
+        return Response(
+            standardized_response(
+                success=False,
+                error=serializer.errors
+            ),
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    @extend_schema(
+        tags=["Vendor - Products"],
+        summary="Partially Update Vendor Product",
+        description="Partially update a product (PATCH). Only provided fields are updated. Vendor can only update their own products.",
+        parameters=[
+            OpenApiParameter(
+                name='slug', 
+                description='Product slug identifier', 
+                required=True, 
+                type=str,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        request=ProductSerializer,
+        responses={
+            200: ProductSerializer,
+            400: OpenApiResponse(description="Validation error"),
+            404: OpenApiResponse(description="Product not found"),
+            403: OpenApiResponse(description="Not authorized to update this product")
+        }
+    )
+    def patch(self, request, slug):
+        """Partially update a product (only update provided fields)."""
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Product not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if vendor owns this product
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(request.user)
+        
+        if vendor is None or product.store != vendor:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Not authorized to update this product"
+                ),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = ProductSerializer(product, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                standardized_response(
+                    success=True,
+                    data=serializer.data,
+                    message="Product updated successfully"
+                ),
+                status=status.HTTP_200_OK
+            )
+        
+        return Response(
+            standardized_response(
+                success=False,
+                error=serializer.errors
+            ),
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    @extend_schema(
+        tags=["Vendor - Products"],
+        summary="Delete Vendor Product",
+        description="Delete a product. Vendor can only delete their own products.",
+        parameters=[
+            OpenApiParameter(
+                name='slug', 
+                description='Product slug identifier', 
+                required=True, 
+                type=str,
+                location=OpenApiParameter.PATH
+            )
+        ],
+        responses={
+            200: OpenApiResponse(description="Product deleted successfully"),
+            404: OpenApiResponse(description="Product not found"),
+            403: OpenApiResponse(description="Not authorized to delete this product")
+        }
+    )
+    def delete(self, request, slug):
+        """Delete a product."""
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(
+                    success=False, 
+                    error="Product not found"
+                ),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if vendor owns this product
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(request.user)
+        
+        if vendor is None or product.store != vendor:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Not authorized to delete this product"
+                ),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        product.delete()
+        return Response(
+            standardized_response(
+                success=True,
+                message="Product deleted successfully"
             ),
             status=status.HTTP_200_OK
         )

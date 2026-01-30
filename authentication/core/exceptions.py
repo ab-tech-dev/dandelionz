@@ -20,3 +20,8 @@ class RateLimitedException(APIException):
     status_code = 429
     default_detail = _('Rate limit exceeded. Please try again later.')
     default_code = 'rate_limited'
+
+class PurchaseRequiredException(APIException):
+    status_code = 403
+    default_detail = _('You must purchase this product to review it.')
+    default_code = 'purchase_required'

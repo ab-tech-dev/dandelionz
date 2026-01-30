@@ -1,5 +1,10 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
+import base64
+import uuid
+import io
+import cloudinary.uploader
+import logging
 
 from .models import (
     Vendor,
@@ -10,13 +15,77 @@ from .models import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
+
+# =====================================================
+# CUSTOM FIELDS FOR BASE64 IMAGE UPLOAD
+# =====================================================
+class Base64ImageField(serializers.Field):
+    """
+    A custom serializer field for handling base64 encoded image uploads.
+    Converts base64 to Cloudinary URL.
+    """
+    def to_representation(self, value):
+        """Return the Cloudinary URL"""
+        if value:
+            return str(value)
+        return None
+
+    def to_internal_value(self, data):
+        """
+        Convert base64 encoded image to Cloudinary URL
+        Expects data in format: 'data:image/jpeg;base64,<base64_string>'
+        or just the base64 string
+        """
+        if not data:
+            return None
+
+        # Check if it's already a Cloudinary reference
+        if isinstance(data, str) and (data.startswith('http') or '/' in data):
+            return data
+
+        try:
+            # Handle data URL format
+            if isinstance(data, str) and data.startswith('data:'):
+                # Extract base64 string from data URL
+                header, base64_str = data.split(',', 1)
+                # Extract file extension from header
+                if 'image/' in header:
+                    ext = header.split('/')[-1].split(';')[0]
+                else:
+                    ext = 'jpg'
+            else:
+                # Assume it's just base64 string
+                base64_str = data
+                ext = 'jpg'
+
+            # Decode base64
+            image_data = base64.b64decode(base64_str)
+            
+            # Create a BytesIO object for Cloudinary
+            image_file = io.BytesIO(image_data)
+            
+            # Upload to Cloudinary
+            response = cloudinary.uploader.upload(
+                image_file,
+                resource_type='auto',
+                folder='dandelionz/profiles',
+                public_id=f"profile_{uuid.uuid4().hex[:12]}",
+                overwrite=False
+            )
+            
+            # Return the public ID (Cloudinary's identifier)
+            return response.get('public_id')
+        
+        except Exception as e:
+            logger.error(f"Error uploading base64 image: {str(e)}")
+            raise serializers.ValidationError(f"Invalid image data: {str(e)}")
 
 
 # =====================================================
 # BASE USER SERIALIZER (READ-ONLY USER DATA)
 # =====================================================
-from rest_framework import serializers
-
 class UserBaseSerializer(serializers.ModelSerializer):
     profile_picture = serializers.SerializerMethodField()
 
@@ -70,7 +139,7 @@ class CustomerProfileSerializer(serializers.ModelSerializer):
 class CustomerProfileUpdateSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(source='user.full_name', required=False, max_length=150)
     phone_number = serializers.CharField(source='user.phone_number', required=False, max_length=15, allow_blank=True)
-    profile_picture = serializers.CharField(source='user.profile_picture', required=False, allow_blank=True)
+    profile_picture = Base64ImageField(source='user.profile_picture', required=False, allow_null=True)
 
     class Meta:
         model = Customer
@@ -997,3 +1066,27 @@ class DisputeResolutionSerializer(serializers.Serializer):
         if value not in ['APPROVE', 'REJECT']:
             raise serializers.ValidationError("Action must be 'APPROVE' or 'REJECT'.")
         return value
+
+
+# =====================================================
+# ACCOUNT CLOSURE SERIALIZERS
+# =====================================================
+class CloseAccountSerializer(serializers.Serializer):
+    """Serializer for account closure with password verification"""
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        help_text="Current password for account closure confirmation"
+    )
+
+
+class AccountClosureResponseSerializer(serializers.Serializer):
+    """Response serializer for successful account closure"""
+    success = serializers.BooleanField()
+    message = serializers.CharField()
+
+
+class AccountClosureErrorSerializer(serializers.Serializer):
+    """Response serializer for account closure errors"""
+    success = serializers.BooleanField()
+    error = serializers.CharField()

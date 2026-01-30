@@ -148,6 +148,7 @@ class ProductVideoCreateSerializer(serializers.ModelSerializer):
 class ReviewSerializer(CloudinarySerializer):
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
+    customer = serializers.IntegerField(read_only=True)  # Set read-only, comes from request context
 
     class Meta:
         model = Review
@@ -155,6 +156,12 @@ class ReviewSerializer(CloudinarySerializer):
             'id', 'product', 'product_name', 'customer', 'customer_name',
             'rating', 'comment', 'created_at', 'updated_at'
         ]
+
+    def validate_rating(self, value):
+        """Validate rating is between 1 and 5"""
+        if not (1 <= value <= 5):
+            raise serializers.ValidationError("Rating must be between 1 and 5")
+        return value
 
 
 # ---------------------------
@@ -176,6 +183,7 @@ class ProductSerializer(CloudinarySerializer):
     videos = ProductVideoSerializer(many=True, read_only=True)
     image = serializers.SerializerMethodField()
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
+    rating = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -183,7 +191,7 @@ class ProductSerializer(CloudinarySerializer):
             'id', 'store', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
             'category_name', 'price', 'discount', 'stock', 'brand', 'tags', 
             'variants', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date', 
-            'created_at', 'updated_at', 'reviews'
+            'created_at', 'updated_at', 'reviews', 'rating'
         ]
         ref_name = "StoreProductSerializer"
 
@@ -193,6 +201,12 @@ class ProductSerializer(CloudinarySerializer):
         if main_image:
             return self.get_cloudinary_url(main_image.image)
         return None
+
+    def get_rating(self, obj):
+        """Calculate average rating from reviews"""
+        from django.db.models import Avg
+        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+        return round(avg_rating, 2) if avg_rating else None
 
 class CreateProductSerializer(CloudinarySerializer):
     """
