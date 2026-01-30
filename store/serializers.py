@@ -442,7 +442,7 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'slug', 'name', 'description', 'price', 'category',
-            'category_name', 'stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status'
+            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status'
         ]
         read_only_fields = fields
 
