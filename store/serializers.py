@@ -148,7 +148,7 @@ class ProductVideoCreateSerializer(serializers.ModelSerializer):
 class ReviewSerializer(CloudinarySerializer):
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
-    customer = serializers.IntegerField(read_only=True)  # Set read-only, comes from request context
+    customer = serializers.PrimaryKeyRelatedField(read_only=True)
 
     class Meta:
         model = Review
