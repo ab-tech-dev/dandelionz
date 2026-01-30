@@ -60,6 +60,7 @@ from users.serializers import (
     AdminPaymentSettingsSerializer,
     AdminWithdrawalSerializer,
     AdminWalletBalanceSerializer,
+    AdminPaymentPINSerializer
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
@@ -496,8 +497,16 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         
         from users.models import PaymentPIN
         
-        # Create or update PIN
-        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
+        # Create or get existing PIN object
+        try:
+            pin_obj = PaymentPIN.objects.get(user=request.user)
+            created = False
+        except PaymentPIN.DoesNotExist:
+            pin_obj = PaymentPIN()
+            pin_obj.user = request.user
+            created = True
+        
+        # Hash and set the PIN (automatically marks as non-default if not 0000)
         pin_obj.set_pin(serializer.validated_data['pin'])
         
         message = "PIN set successfully" if created else "PIN changed successfully"
@@ -540,14 +549,28 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         from users.models import PaymentPIN
         try:
             pin_obj = PaymentPIN.objects.get(user=request.user)
+            
+            # Check if PIN is still default (0000)
+            if pin_obj.is_default:
+                return Response(
+                    {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+            # Verify the PIN (uses check_password internally)
             if not pin_obj.verify_pin(serializer.validated_data['pin']):
                 return Response(
                     {"success": False, "message": "Invalid PIN"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         except PaymentPIN.DoesNotExist:
+            # Auto-create default PIN (0000) for first-time users
+            pin_obj = PaymentPIN()
+            pin_obj.user = request.user
+            pin_obj.set_pin('0000')  # This will hash and save
+            
             return Response(
-                {"success": False, "message": "Payment PIN not set. Please set your PIN first."},
+                {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
@@ -1486,14 +1509,28 @@ class VendorWalletViewSet(viewsets.ViewSet):
         from users.models import PaymentPIN
         try:
             pin_obj = PaymentPIN.objects.get(user=request.user)
+            
+            # Check if PIN is still default (0000)
+            if pin_obj.is_default:
+                return Response(
+                    {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            
+            # Verify the PIN (uses check_password internally)
             if not pin_obj.verify_pin(serializer.validated_data['pin']):
                 return Response(
                     {"success": False, "message": "Invalid PIN"},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         except PaymentPIN.DoesNotExist:
+            # Auto-create default PIN (0000) for first-time users
+            pin_obj = PaymentPIN()
+            pin_obj.user = request.user
+            pin_obj.set_pin('0000')  # This will hash and save
+            
             return Response(
-                {"success": False, "message": "Payment PIN not set. Please set your PIN first."},
+                {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
@@ -1640,8 +1677,16 @@ class VendorPaymentSettingsViewSet(viewsets.ViewSet):
         
         from users.models import PaymentPIN
         
-        # Create or update PIN
-        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
+        # Create or get existing PIN object
+        try:
+            pin_obj = PaymentPIN.objects.get(user=request.user)
+            created = False
+        except PaymentPIN.DoesNotExist:
+            pin_obj = PaymentPIN()
+            pin_obj.user = request.user
+            created = True
+        
+        # Hash and set the PIN (automatically marks as non-default if not 0000)
         pin_obj.set_pin(serializer.validated_data['pin'])
         
         message = "PIN set successfully" if created else "PIN changed successfully"
@@ -4002,7 +4047,7 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         
-        serializer = PaymentPINSerializer(data=request.data)
+        serializer = AdminPaymentPINSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
@@ -4012,6 +4057,7 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
         if serializer.validated_data.get('current_pin'):
             try:
                 pin_obj = PaymentPIN.objects.get(user=request.user)
+                # Verify current PIN (uses check_password internally)
                 if not pin_obj.verify_pin(serializer.validated_data['current_pin']):
                     return Response(
                         {"success": False, "message": "Current PIN is incorrect"},
@@ -4023,8 +4069,16 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         
-        # Create or update PIN
-        pin_obj, created = PaymentPIN.objects.get_or_create(user=request.user)
+        # Create or get existing PIN object
+        try:
+            pin_obj = PaymentPIN.objects.get(user=request.user)
+            created = False
+        except PaymentPIN.DoesNotExist:
+            pin_obj = PaymentPIN()
+            pin_obj.user = request.user
+            created = True
+        
+        # Hash and set the new PIN (automatically marks as non-default if not 0000)
         pin_obj.set_pin(serializer.validated_data['new_pin'])
         
         message = "Payment PIN set successfully" if created else "Payment PIN changed successfully"

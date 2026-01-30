@@ -201,6 +201,7 @@ class PaymentPIN(models.Model):
     """Model to store payment PIN for withdrawals (for vendors and customers)"""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='payment_pin', null=True, blank=True)
     pin_hash = models.CharField(max_length=255)  # Hashed PIN, never store plain text
+    is_default = models.BooleanField(default=True)  # Track if PIN is still the default 0000
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -208,7 +209,10 @@ class PaymentPIN(models.Model):
         """Hash and set the PIN"""
         from django.contrib.auth.hashers import make_password
         self.pin_hash = make_password(pin)
-        self.save(update_fields=['pin_hash', 'updated_at'])
+        # Mark as no longer default if a new PIN is being set
+        if pin != '0000':
+            self.is_default = False
+        self.save(update_fields=['pin_hash', 'updated_at', 'is_default'])
     
     def verify_pin(self, pin):
         """Verify the provided PIN against the hash"""
