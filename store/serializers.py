@@ -188,7 +188,7 @@ class ProductSerializer(CloudinarySerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'store', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
+            'id', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
             'category_name', 'price', 'discount', 'stock', 'brand', 'tags', 
             'variants', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date', 
             'created_at', 'updated_at', 'reviews', 'rating'

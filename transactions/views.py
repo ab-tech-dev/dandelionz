@@ -376,6 +376,8 @@ class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         user = self.request.user
+        if not user.is_authenticated:
+            return OrderItem.objects.none()
         if user.is_staff:
             return OrderItem.objects.all()
         return OrderItem.objects.filter(order__customer=user)
