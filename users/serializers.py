@@ -500,9 +500,9 @@ class OrderActionSerializer(serializers.Serializer):
 # =====================================================
 class VendorOrderCustomerSerializer(serializers.Serializer):
     """Serializer for customer information in order responses"""
-    full_name = serializers.CharField(source='user.full_name')
-    email = serializers.EmailField(source='user.email')
-    phone_number = serializers.CharField(source='user.phone_number', required=False, allow_blank=True)
+    full_name = serializers.CharField()
+    email = serializers.EmailField()
+    phone_number = serializers.CharField(required=False, allow_blank=True)
 
 
 class VendorOrderItemSerializer(serializers.Serializer):
