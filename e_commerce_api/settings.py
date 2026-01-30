@@ -333,7 +333,7 @@ PAYSTACK_PUBLIC_KEY = os.getenv("PAYSTACK_PUBLIC_KEY")
 PAYSTACK_BASE_URL = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")
 PAYSTACK_CALLBACK_URL = os.getenv(
     "PAYSTACK_CALLBACK_URL",
-    "https://api.dandelionz.com.ng/transactions/verify-payment/"
+    "https://app.dandelionz.com.ng//checkout/success"
 )
 PAYSTACK_WEBHOOK_URL = os.getenv(
     "PAYSTACK_WEBHOOK_URL",
