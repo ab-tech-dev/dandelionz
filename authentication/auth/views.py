@@ -54,12 +54,23 @@ Optionally accepts referral_code for affiliate tracking.""",
     )
     def post(self, request):
         try:
-            email = request.data.get('email')
-            password = request.data.get('password')
-            phone_number = request.data.get('phone_number')
-            full_name = request.data.get('full_name')
-            role = request.data.get('role', 'CUSTOMER').upper()
-            referral_code = request.data.get('referral_code')
+            # Validate request data using serializer
+            serializer = UserRegistrationSerializer(data=request.data)
+            if not serializer.is_valid():
+                logger.warning(f"Registration validation failed: {serializer.errors}")
+                return Response(
+                    standardized_response(success=False, error=serializer.errors),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Extract validated data
+            validated_data = serializer.validated_data
+            email = validated_data.get('email')
+            password = validated_data.get('password')
+            phone_number = validated_data.get('phone_number', '')
+            full_name = validated_data.get('full_name', '')
+            role = validated_data.get('role', 'CUSTOMER').upper()
+            referral_code = validated_data.get('referral_code', '')
 
             if role not in ['CUSTOMER', 'VENDOR']:
                 return Response(
