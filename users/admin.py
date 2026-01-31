@@ -152,7 +152,19 @@ class AdminPayoutProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'bank_name', 'account_number', 'updated_at')
     list_filter = ('updated_at',)
     search_fields = ('user__email', 'user__full_name', 'bank_name', 'account_number')
-    readonly_fields = ('updated_at')
+    readonly_fields = ('updated_at',)
+    fieldsets = (
+        ('Admin Information', {
+            'fields': ('user',)
+        }),
+        ('Banking Details', {
+            'fields': ('bank_name', 'account_number', 'account_name', 'recipient_code')
+        }),
+        ('Timestamps', {
+            'fields': ('updated_at',),
+            'classes': ('collapse',)
+        }),
+    )
     fieldsets = (
         ('Admin Information', {
             'fields': ('user',)
