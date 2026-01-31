@@ -1,7 +1,8 @@
 from django.contrib import admin
 from .models import (
     Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, Wallet, 
-    WalletTransaction, PayoutRecord, InstallmentPlan, InstallmentPayment
+    WalletTransaction, PayoutRecord, InstallmentPlan, InstallmentPayment,
+    OrderStatusHistory, Settlement, SettlementItem, Dispute
 )
 from django.db.models import Sum
 from datetime import timedelta
@@ -220,3 +221,111 @@ class InstallmentPaymentAdmin(admin.ModelAdmin):
         }),
     )
 
+
+# ========================
+# ORDER STATUS HISTORY ADMIN
+# ========================
+@admin.register(OrderStatusHistory)
+class OrderStatusHistoryAdmin(admin.ModelAdmin):
+    list_display = ('order', 'old_status', 'new_status', 'changed_by', 'changed_at')
+    list_filter = ('new_status', 'changed_at')
+    search_fields = ('order__order_id', 'changed_by__email')
+    readonly_fields = ('order', 'old_status', 'new_status', 'changed_by', 'changed_at', 'reason')
+    fieldsets = (
+        ('Order Information', {
+            'fields': ('order',)
+        }),
+        ('Status Change', {
+            'fields': ('old_status', 'new_status', 'reason')
+        }),
+        ('Metadata', {
+            'fields': ('changed_by', 'changed_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def has_add_permission(self, request):
+        """OrderStatusHistory is created automatically on order status changes."""
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        """Prevent deletion to maintain audit trail."""
+        return False
+
+
+# ========================
+# SETTLEMENT ADMIN
+# ========================
+class SettlementItemInline(admin.TabularInline):
+    model = SettlementItem
+    extra = 0
+    fields = ('vendor', 'total_sales', 'commission', 'settlement_amount', 'status')
+    readonly_fields = ('vendor', 'total_sales', 'commission', 'settlement_amount')
+    can_delete = False
+
+
+@admin.register(Settlement)
+class SettlementAdmin(admin.ModelAdmin):
+    list_display = ('reference', 'settlement_period', 'total_amount', 'status', 'created_at', 'processed_at')
+    list_filter = ('status', 'settlement_period', 'created_at')
+    search_fields = ('reference', 'notes')
+    readonly_fields = ('reference', 'created_at', 'processed_at')
+    inlines = [SettlementItemInline]
+    fieldsets = (
+        ('Settlement Information', {
+            'fields': ('reference', 'settlement_period', 'status')
+        }),
+        ('Financial Details', {
+            'fields': ('total_amount', 'notes')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'processed_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(SettlementItem)
+class SettlementItemAdmin(admin.ModelAdmin):
+    list_display = ('settlement', 'vendor', 'total_sales', 'commission', 'settlement_amount', 'status')
+    list_filter = ('status', 'settlement__created_at')
+    search_fields = ('settlement__reference', 'vendor__store_name')
+    readonly_fields = ('settlement', 'vendor', 'total_sales', 'commission', 'settlement_amount')
+    fieldsets = (
+        ('Settlement', {
+            'fields': ('settlement', 'vendor')
+        }),
+        ('Financial Details', {
+            'fields': ('total_sales', 'commission', 'settlement_amount')
+        }),
+        ('Status', {
+            'fields': ('status',)
+        }),
+    )
+
+    def has_add_permission(self, request):
+        """SettlementItems are created automatically during settlement generation."""
+        return False
+
+
+# ========================
+# DISPUTE ADMIN
+# ========================
+@admin.register(Dispute)
+class DisputeAdmin(admin.ModelAdmin):
+    list_display = ('reference', 'order', 'raised_by', 'status', 'severity', 'created_at', 'resolved_at')
+    list_filter = ('status', 'severity', 'created_at')
+    search_fields = ('reference', 'order__order_id', 'raised_by__email', 'description')
+    readonly_fields = ('reference', 'created_at', 'resolved_at')
+    fieldsets = (
+        ('Dispute Information', {
+            'fields': ('reference', 'order', 'raised_by', 'severity')
+        }),
+        ('Details', {
+            'fields': ('title', 'description', 'status', 'resolution')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'resolved_at'),
+            'classes': ('collapse',)
+        }),
+    )
