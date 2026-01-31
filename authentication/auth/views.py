@@ -54,6 +54,10 @@ Optionally accepts referral_code for affiliate tracking.""",
     )
     def post(self, request):
         try:
+            # Log request data for debugging
+            logger.debug(f"Registration request data: {request.data}")
+            logger.debug(f"Request content type: {request.content_type}")
+            
             # Validate request data using serializer
             serializer = UserRegistrationSerializer(data=request.data)
             if not serializer.is_valid():
@@ -73,6 +77,7 @@ Optionally accepts referral_code for affiliate tracking.""",
             referral_code = validated_data.get('referral_code', '')
 
             if role not in ['CUSTOMER', 'VENDOR']:
+                logger.warning(f"Invalid role provided: {role}")
                 return Response(
                     standardized_response(success=False, error="Invalid user role."),
                     status=status.HTTP_400_BAD_REQUEST
@@ -96,6 +101,12 @@ Optionally accepts referral_code for affiliate tracking.""",
 
             return response
 
+        except ValueError as ve:
+            logger.error(f"Registration value error: {str(ve)}")
+            return Response(
+                standardized_response(success=False, error=f"Invalid input: {str(ve)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"Registration error: {str(e)}")
             logger.error(traceback.format_exc())
