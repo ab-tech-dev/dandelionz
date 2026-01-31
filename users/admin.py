@@ -149,10 +149,10 @@ class PayoutRequestAdmin(admin.ModelAdmin):
 
 @admin.register(AdminPayoutProfile)
 class AdminPayoutProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'bank_name', 'account_number', 'created_at', 'updated_at')
-    list_filter = ('created_at', 'updated_at')
+    list_display = ('user', 'bank_name', 'account_number', 'updated_at')
+    list_filter = ('updated_at',)
     search_fields = ('user__email', 'user__full_name', 'bank_name', 'account_number')
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('updated_at')
     fieldsets = (
         ('Admin Information', {
             'fields': ('user',)

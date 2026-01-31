@@ -227,10 +227,10 @@ class InstallmentPaymentAdmin(admin.ModelAdmin):
 # ========================
 @admin.register(OrderStatusHistory)
 class OrderStatusHistoryAdmin(admin.ModelAdmin):
-    list_display = ('order', 'old_status', 'new_status', 'changed_by', 'changed_at')
-    list_filter = ('new_status', 'changed_at')
+    list_display = ('order', 'status', 'changed_by', 'changed_at')
+    list_filter = ('status', 'changed_at')
     search_fields = ('order__order_id', 'changed_by__email')
-    readonly_fields = ('order', 'old_status', 'new_status', 'changed_by', 'changed_at', 'reason')
+    readonly_fields = ('order', 'status', 'changed_by', 'changed_at', 'reason')
     fieldsets = (
         ('Order Information', {
             'fields': ('order',)
@@ -259,27 +259,30 @@ class OrderStatusHistoryAdmin(admin.ModelAdmin):
 class SettlementItemInline(admin.TabularInline):
     model = SettlementItem
     extra = 0
-    fields = ('vendor', 'total_sales', 'commission', 'settlement_amount', 'status')
-    readonly_fields = ('vendor', 'total_sales', 'commission', 'settlement_amount')
+    fields = ('order', 'order_item', 'vendor_share')
+    readonly_fields = ('order', 'order_item', 'vendor_share')
     can_delete = False
 
 
 @admin.register(Settlement)
 class SettlementAdmin(admin.ModelAdmin):
-    list_display = ('reference', 'settlement_period', 'total_amount', 'status', 'created_at', 'processed_at')
-    list_filter = ('status', 'settlement_period', 'created_at')
-    search_fields = ('reference', 'notes')
-    readonly_fields = ('reference', 'created_at', 'processed_at')
+    list_display = ('id', 'vendor', 'amount', 'status', 'created_at', 'processed_date')
+    list_filter = ('status', 'created_at')
+    search_fields = ('id', 'vendor__store_name')
+    readonly_fields = ('id', 'created_at', 'updated_at')
     inlines = [SettlementItemInline]
     fieldsets = (
         ('Settlement Information', {
-            'fields': ('reference', 'settlement_period', 'status')
+            'fields': ('id', 'vendor', 'status')
         }),
         ('Financial Details', {
-            'fields': ('total_amount', 'notes')
+            'fields': ('amount', 'failure_reason')
+        }),
+        ('Dates', {
+            'fields': ('payout_date', 'processed_date')
         }),
         ('Timestamps', {
-            'fields': ('created_at', 'processed_at'),
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
@@ -287,19 +290,20 @@ class SettlementAdmin(admin.ModelAdmin):
 
 @admin.register(SettlementItem)
 class SettlementItemAdmin(admin.ModelAdmin):
-    list_display = ('settlement', 'vendor', 'total_sales', 'commission', 'settlement_amount', 'status')
-    list_filter = ('status', 'settlement__created_at')
-    search_fields = ('settlement__reference', 'vendor__store_name')
-    readonly_fields = ('settlement', 'vendor', 'total_sales', 'commission', 'settlement_amount')
+    list_display = ('id', 'settlement', 'order', 'vendor_share', 'created_at')
+    list_filter = ('settlement__created_at', 'created_at')
+    search_fields = ('settlement__id', 'order__order_id')
+    readonly_fields = ('settlement', 'order', 'order_item', 'vendor_share', 'created_at')
     fieldsets = (
         ('Settlement', {
-            'fields': ('settlement', 'vendor')
+            'fields': ('settlement', 'order', 'order_item')
         }),
         ('Financial Details', {
-            'fields': ('total_sales', 'commission', 'settlement_amount')
+            'fields': ('vendor_share',)
         }),
-        ('Status', {
-            'fields': ('status',)
+        ('Timestamps', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
         }),
     )
 
@@ -313,19 +317,22 @@ class SettlementItemAdmin(admin.ModelAdmin):
 # ========================
 @admin.register(Dispute)
 class DisputeAdmin(admin.ModelAdmin):
-    list_display = ('reference', 'order', 'raised_by', 'status', 'severity', 'created_at', 'resolved_at')
-    list_filter = ('status', 'severity', 'created_at')
-    search_fields = ('reference', 'order__order_id', 'raised_by__email', 'description')
-    readonly_fields = ('reference', 'created_at', 'resolved_at')
+    list_display = ('id', 'order', 'customer', 'vendor', 'status', 'created_at', 'resolved_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('id', 'order__order_id', 'customer__email', 'vendor__store_name', 'reason')
+    readonly_fields = ('id', 'created_at', 'updated_at', 'resolved_at')
     fieldsets = (
         ('Dispute Information', {
-            'fields': ('reference', 'order', 'raised_by', 'severity')
+            'fields': ('id', 'order', 'customer', 'vendor')
         }),
         ('Details', {
-            'fields': ('title', 'description', 'status', 'resolution')
+            'fields': ('reason', 'amount', 'status', 'admin_note')
+        }),
+        ('Resolution', {
+            'fields': ('resolved_by', 'resolved_at')
         }),
         ('Timestamps', {
-            'fields': ('created_at', 'resolved_at'),
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
