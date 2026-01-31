@@ -10,9 +10,9 @@ from .models import (
     Vendor,
     Customer,
     BusinessAdmin,
-    Notification,
     DeliveryAgent
 )
+from .notification_models import Notification
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
