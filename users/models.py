@@ -220,7 +220,7 @@ class PaymentPIN(models.Model):
         return check_password(pin, self.pin_hash)
     
     def __str__(self):
-        return f"PIN for {self.vendor.store_name}"
+        return f"PIN for {self.user.email if self.user else 'Unknown'}"
 
 
 class PayoutRequest(models.Model):
