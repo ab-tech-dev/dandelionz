@@ -77,7 +77,7 @@ class EmailService:
             token = default_token_generator.make_token(user)
 
             # Create verification link
-            reset_url = f"{settings.FRONTEND_URL}/forgot-password/confirm?uid={uid}&token={token}"
+            reset_url = f"https://app.dandelionz.com.ng/forgot-password/confirm?uid={uid}&token={token}"
 
             subject = f"{settings.APP_NAME} - Reset your Password"
 

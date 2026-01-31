@@ -1,101 +1,533 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Status Update - {{ app_name }}</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
-            color: #333;
+            font-weight: 400;
+            letter-spacing: -0.011em;
+            color: #1d1d1f;
+            background: linear-gradient(135deg, #f0f2f5 0%, #ffffff 100%);
+            padding: 20px;
         }
-        .container {
-            max-width: 600px;
+        
+        .email-wrapper {
+            max-width: 620px;
             margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
         }
+        
+        .email-container {
+            background-color: #ffffff;
+            border-radius: 28px;
+            overflow: hidden;
+            box-shadow: 0 24px 72px rgba(239, 68, 68, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(239, 68, 68, 0.08);
+        }
+        
         .header {
-            background-color: #dc3545;
-            color: white;
-            padding: 20px;
-            border-radius: 5px 5px 0 0;
-        }
-        .content {
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-        .footer {
-            padding: 10px;
+            padding: 72px 48px 48px;
             text-align: center;
-            font-size: 12px;
-            color: #999;
+            background: linear-gradient(180deg, #ffffff 0%, #fef2f2 100%);
+            position: relative;
+            overflow: hidden;
         }
-        .button {
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(239, 68, 68, 0.15), transparent);
+        }
+        
+        .logo-section {
             display: inline-block;
-            padding: 10px 20px;
-            background-color: #007bff;
+            margin-bottom: 24px;
+        }
+        
+        .logo-section img {
+            max-width: 120px;
+            width: 100%;
+            height: auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+        }
+        
+        .header h1 {
+            font-size: 36px;
+            font-weight: 800;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+            letter-spacing: -0.018em;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .header p {
+            font-size: 15px;
+            color: #86868b;
+            font-weight: 400;
+            letter-spacing: -0.008em;
+        }
+        
+        .content {
+            padding: 0 48px 48px;
+        }
+        
+        .alert-section {
+            text-align: center;
+            margin-bottom: 48px;
+            margin-top: 32px;
+        }
+        
+        .alert-section h2 {
+            font-size: 36px;
+            font-weight: 800;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.015em;
+            line-height: 1.2;
+        }
+        
+        .alert-section p {
+            font-size: 16px;
+            color: #5a5a5e;
+            line-height: 1.7;
+            max-width: 480px;
+            margin: 0 auto;
+            font-weight: 400;
+        }
+        
+        .rejection-card {
+            background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%);
+            border-radius: 20px;
+            padding: 48px 40px;
+            margin: 48px 0;
+            text-align: center;
+            border: 1px solid rgba(239, 68, 68, 0.15);
+            box-shadow: 0 10px 30px rgba(239, 68, 68, 0.04);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        .rejection-card:hover {
+            box-shadow: 0 15px 40px rgba(239, 68, 68, 0.08);
+            transform: translateY(-2px);
+        }
+        
+        .icon-alert {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 24px rgba(239, 68, 68, 0.3);
+            animation: slideDown 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .icon-alert svg {
+            width: 28px;
+            height: 28px;
+            fill: white;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        }
+        
+        .rejection-card h3 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #1d1d1f;
+            margin-bottom: 12px;
+            letter-spacing: -0.013em;
+        }
+        
+        .rejection-card p {
+            font-size: 16px;
+            color: #5a5a5e;
+            line-height: 1.7;
+            margin-bottom: 36px;
+            font-weight: 400;
+        }
+        
+        .product-details-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f9f9fb 100%);
+            border: 2px solid rgba(239, 68, 68, 0.15);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin: 40px 0;
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.06);
+        }
+        
+        .product-details-card h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.011em;
+        }
+        
+        .product-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .info-item {
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+        }
+        
+        .info-item:last-child {
+            border-bottom: none;
+        }
+        
+        .info-label {
+            font-size: 13px;
+            color: #86868b;
+            font-weight: 500;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .info-value {
+            font-size: 15px;
+            color: #1d1d1f;
+            font-weight: 600;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
             color: white;
+            padding: 6px 12px;
+            border-radius: 980px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+        
+        .reason-section {
+            background: linear-gradient(135deg, #fef2f2 0%, #fff7f7 100%);
+            border: 2px solid rgba(239, 68, 68, 0.2);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin: 40px 0;
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.08);
+        }
+        
+        .reason-section h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 12px;
+            letter-spacing: -0.011em;
+        }
+        
+        .reason-section p {
+            font-size: 14px;
+            color: #5a5a5e;
+            line-height: 1.8;
+            font-weight: 400;
+        }
+        
+        .next-steps {
+            background: linear-gradient(135deg, #f9f9fb 0%, #ffffff 100%);
+            border: 1px solid rgba(239, 68, 68, 0.15);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin: 40px 0;
+            box-shadow: 0 4px 16px rgba(239, 68, 68, 0.08);
+        }
+        
+        .next-steps h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.011em;
+        }
+        
+        .next-steps ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .next-steps li {
+            font-size: 14px;
+            color: #5a5a5e;
+            line-height: 1.8;
+            padding-left: 28px;
+            position: relative;
+            margin-bottom: 12px;
+        }
+        
+        .next-steps li::before {
+            content: '→';
+            position: absolute;
+            left: 0;
+            color: #ef4444;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        
+        .resubmit-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+            color: #ffffff;
             text-decoration: none;
-            border-radius: 3px;
-            margin-top: 10px;
+            padding: 16px 40px;
+            border-radius: 980px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+            min-width: 220px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 12px 32px rgba(249, 115, 22, 0.4);
+            letter-spacing: -0.008em;
+            display: inline-block;
+            margin-top: 20px;
         }
-        .product-details {
-            background-color: white;
-            padding: 15px;
-            margin: 15px 0;
-            border-left: 4px solid #dc3545;
+        
+        .resubmit-button:hover {
+            background: linear-gradient(135deg, #ea580c 0%, #c2410c 100%);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 48px rgba(249, 115, 22, 0.5);
         }
-        .reason-box {
-            background-color: #fff3cd;
-            border: 1px solid #ffc107;
-            padding: 15px;
-            margin: 15px 0;
-            border-radius: 3px;
+        
+        .resubmit-button:active {
+            transform: translateY(-2px);
+        }
+        
+        .footer {
+            padding: 48px;
+            text-align: center;
+            background: linear-gradient(180deg, #fef2f2 0%, #f0f2f5 100%);
+            border-top: 2px solid rgba(239, 68, 68, 0.1);
+        }
+        
+        .footer p {
+            color: #86868b;
+            font-size: 13px;
+            line-height: 1.7;
+            margin-bottom: 6px;
+            font-weight: 400;
+            letter-spacing: -0.008em;
+        }
+        
+        .footer .company-name {
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .footer .divider {
+            width: 32px;
+            height: 1px;
+            background: rgba(0, 0, 0, 0.1);
+            margin: 16px auto;
+        }
+        
+        @media (max-width: 600px) {
+            .email-container {
+                border-radius: 20px;
+            }
+            
+            .header {
+                padding: 48px 24px 32px;
+            }
+            
+            .content {
+                padding: 0 24px 32px;
+            }
+            
+            .footer {
+                padding: 32px 24px;
+            }
+            
+            .header h1 {
+                font-size: 28px;
+            }
+            
+            .alert-section h2 {
+                font-size: 26px;
+            }
+            
+            .rejection-card {
+                padding: 36px 24px;
+                margin: 36px 0;
+            }
+            
+            .resubmit-button {
+                min-width: 160px;
+                padding: 12px 28px;
+            }
+            
+            .product-info {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: linear-gradient(135deg, #000000 0%, #1c1c1e 100%);
+            }
+            
+            .email-container {
+                background-color: #1c1c1e;
+                box-shadow: 0 24px 72px rgba(239, 68, 68, 0.15), 0 2px 8px rgba(0, 0, 0, 0.3);
+                border-color: rgba(239, 68, 68, 0.15);
+            }
+            
+            .header {
+                background: linear-gradient(180deg, #1c1c1e 0%, #2e1d1d 100%);
+            }
+            
+            .header h1, .alert-section h2, .rejection-card h3, .reason-section h4, .next-steps h4, .product-details-card h4, .footer .company-name {
+                color: #f2f2f7;
+            }
+            
+            .header p, .alert-section p, .rejection-card p, .reason-section p, .next-steps p, .info-value, .footer p {
+                color: #a1a1a6;
+            }
+            
+            .rejection-card {
+                background: linear-gradient(135deg, #1c1c1e 0%, #2e1d1d 100%);
+                border-color: rgba(239, 68, 68, 0.15);
+            }
+            
+            .product-details-card {
+                background: linear-gradient(135deg, #2c2c2e 0%, #1c1c1e 100%);
+                border-color: rgba(239, 68, 68, 0.15);
+            }
+            
+            .reason-section {
+                background: linear-gradient(135deg, #2e1d1d 0%, #2c2c2e 100%);
+                border-color: rgba(239, 68, 68, 0.2);
+            }
+            
+            .next-steps {
+                background: linear-gradient(135deg, #2c2c2e 0%, #1c1c1e 100%);
+                border-color: rgba(239, 68, 68, 0.2);
+            }
+            
+            .info-item {
+                border-bottom-color: rgba(255, 255, 255, 0.1);
+            }
+            
+            .footer {
+                background: linear-gradient(180deg, #2e1d1d 0%, #000000 100%);
+                border-top-color: rgba(239, 68, 68, 0.15);
+            }
+            
+            .footer .divider {
+                background: rgba(255, 255, 255, 0.1);
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>✕ Product Rejected</h1>
-        </div>
-        
-        <div class="content">
-            <p>Hello {{ vendor_name }},</p>
-            
-            <p>We regret to inform you that your product has been <strong>rejected</strong> and cannot be published at this time.</p>
-            
-            <div class="product-details">
-                <h3>{{ product_name }}</h3>
-                <p><strong>Product ID:</strong> {{ product_id }}</p>
-                <p><strong>Status:</strong> <span style="color: #dc3545; font-weight: bold;">REJECTED</span></p>
+    <div class="email-wrapper">
+        <div class="email-container">
+            <!-- Header Section -->
+            <div class="header">
+                <div class="logo-section">
+                    <img src="https://res.cloudinary.com/dhpny4uce/image/upload/v1767434246/Dandelion_hajorf.png" alt="{{ app_name }} Logo">
+                </div>
+                <h1>{{ app_name }}</h1>
+                <p>Marketplace</p>
             </div>
             
-            <h3>Reason for Rejection:</h3>
-            <div class="reason-box">
-                <p>{{ rejection_reason }}</p>
+            <!-- Main Content -->
+            <div class="content">
+                <div class="alert-section">
+                    <h2>Product Status Update</h2>
+                    <p>Your product needs additional revisions before it can be approved.</p>
+                </div>
+                
+                <div class="rejection-card">
+                    <div class="icon-alert">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+                        </svg>
+                    </div>
+                    <h3>Revision Required</h3>
+                    <p>We've reviewed your product and found some areas that need improvement. Please review the feedback below and make the necessary corrections.</p>
+                </div>
+                
+                <div class="product-details-card">
+                    <h4>Product Details</h4>
+                    <div class="product-info">
+                        <div class="info-item">
+                            <div class="info-label">Product Name</div>
+                            <div class="info-value">{{ product_name }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Product ID</div>
+                            <div class="info-value">{{ product_id }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Status</div>
+                            <div class="status-badge">NEEDS REVISION</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="reason-section">
+                    <h4>Feedback & Requirements</h4>
+                    <p>{{ rejection_reason }}</p>
+                </div>
+                
+                <div class="next-steps">
+                    <h4>How to Resubmit</h4>
+                    <ul>
+                        <li>Review all feedback carefully</li>
+                        <li>Make the requested changes to your product</li>
+                        <li>Update your product listing with improved details and images</li>
+                        <li>Resubmit for approval when ready</li>
+                    </ul>
+                    <a href="#" class="resubmit-button">Edit & Resubmit Product</a>
+                </div>
+                
+                <div style="background: linear-gradient(135deg, #fef2f2 0%, #ffffff 100%); border: 1px solid rgba(100, 116, 139, 0.15); border-radius: 16px; padding: 20px 24px; margin: 40px 0; text-align: center;">
+                    <p style="font-size: 14px; color: #5a5a5e; margin: 0;">Need help? Our support team is here to assist you with improving your product listing.</p>
+                </div>
             </div>
             
-            <p>{{ message }}</p>
-            
-            <h3>What you can do:</h3>
-            <ul>
-                <li>Review the rejection reason carefully</li>
-                <li>Make the necessary changes to your product</li>
-                <li>Resubmit your product for approval</li>
-            </ul>
-            
-            <a href="#" class="button">Edit & Resubmit Product</a>
-            
-            <p>If you believe this rejection was made in error or need further assistance, please contact our support team.</p>
-            
-            <p>Best regards,<br>
-            <strong>The E-Commerce Team</strong></p>
-        </div>
-        
-        <div class="footer">
-            <p>This is an automated email. Please do not reply to this message.</p>
+            <!-- Footer Section -->
+            <div class="footer">
+                <p>© 2025 <span class="company-name">{{ app_name }}</span></p>
+                <div class="divider"></div>
+                <p>{{ vendor_email }}</p>
+            </div>
         </div>
     </div>
 </body>

@@ -1,85 +1,495 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Product Approved - {{ app_name }}</title>
     <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
-            color: #333;
+            font-weight: 400;
+            letter-spacing: -0.011em;
+            color: #1d1d1f;
+            background: linear-gradient(135deg, #f0f2f5 0%, #ffffff 100%);
+            padding: 20px;
         }
-        .container {
-            max-width: 600px;
+        
+        .email-wrapper {
+            max-width: 620px;
             margin: 0 auto;
-            padding: 20px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
         }
+        
+        .email-container {
+            background-color: #ffffff;
+            border-radius: 28px;
+            overflow: hidden;
+            box-shadow: 0 24px 72px rgba(34, 197, 94, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+            border: 1px solid rgba(34, 197, 94, 0.08);
+        }
+        
         .header {
-            background-color: #28a745;
-            color: white;
-            padding: 20px;
-            border-radius: 5px 5px 0 0;
-        }
-        .content {
-            padding: 20px;
-            background-color: #f9f9f9;
-        }
-        .footer {
-            padding: 10px;
+            padding: 72px 48px 48px;
             text-align: center;
-            font-size: 12px;
-            color: #999;
+            background: linear-gradient(180deg, #ffffff 0%, #f0fdf4 100%);
+            position: relative;
+            overflow: hidden;
         }
-        .button {
+        
+        .header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(34, 197, 94, 0.15), transparent);
+        }
+        
+        .logo-section {
             display: inline-block;
-            padding: 10px 20px;
-            background-color: #28a745;
-            color: white;
-            text-decoration: none;
-            border-radius: 3px;
-            margin-top: 10px;
+            margin-bottom: 24px;
         }
-        .product-details {
-            background-color: white;
-            padding: 15px;
-            margin: 15px 0;
-            border-left: 4px solid #28a745;
+        
+        .logo-section img {
+            max-width: 120px;
+            width: 100%;
+            height: auto;
+            display: block;
+            filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08));
+        }
+        
+        .header h1 {
+            font-size: 36px;
+            font-weight: 800;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+            letter-spacing: -0.018em;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .header p {
+            font-size: 15px;
+            color: #86868b;
+            font-weight: 400;
+            letter-spacing: -0.008em;
+        }
+        
+        .content {
+            padding: 0 48px 48px;
+        }
+        
+        .success-section {
+            text-align: center;
+            margin-bottom: 48px;
+            margin-top: 32px;
+        }
+        
+        .success-section h2 {
+            font-size: 36px;
+            font-weight: 800;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.015em;
+            line-height: 1.2;
+        }
+        
+        .success-section p {
+            font-size: 16px;
+            color: #5a5a5e;
+            line-height: 1.7;
+            max-width: 480px;
+            margin: 0 auto;
+            font-weight: 400;
+        }
+        
+        .approval-card {
+            background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%);
+            border-radius: 20px;
+            padding: 48px 40px;
+            margin: 48px 0;
+            text-align: center;
+            border: 1px solid rgba(34, 197, 94, 0.15);
+            box-shadow: 0 10px 30px rgba(34, 197, 94, 0.04);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        .approval-card:hover {
+            box-shadow: 0 15px 40px rgba(34, 197, 94, 0.08);
+            transform: translateY(-2px);
+        }
+        
+        .icon-success {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 28px;
+            box-shadow: 0 8px 24px rgba(34, 197, 94, 0.3);
+            animation: slideDown 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .icon-success svg {
+            width: 28px;
+            height: 28px;
+            fill: white;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
+        }
+        
+        .approval-card h3 {
+            font-size: 26px;
+            font-weight: 700;
+            color: #1d1d1f;
+            margin-bottom: 12px;
+            letter-spacing: -0.013em;
+        }
+        
+        .approval-card p {
+            font-size: 16px;
+            color: #5a5a5e;
+            line-height: 1.7;
+            margin-bottom: 36px;
+            font-weight: 400;
+        }
+        
+        .cta-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: #ffffff;
+            text-decoration: none;
+            padding: 16px 40px;
+            border-radius: 980px;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+            min-width: 220px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 12px 32px rgba(34, 197, 94, 0.4);
+            letter-spacing: -0.008em;
+            display: inline-block;
+        }
+        
+        .cta-button:hover {
+            background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+            transform: translateY(-4px);
+            box-shadow: 0 20px 48px rgba(34, 197, 94, 0.5);
+        }
+        
+        .cta-button:active {
+            transform: translateY(-2px);
+        }
+        
+        .product-details-card {
+            background: linear-gradient(135deg, #ffffff 0%, #f9f9fb 100%);
+            border: 2px solid rgba(34, 197, 94, 0.15);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin: 40px 0;
+            box-shadow: 0 4px 16px rgba(34, 197, 94, 0.06);
+        }
+        
+        .product-details-card h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.011em;
+        }
+        
+        .product-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .info-item {
+            padding: 12px 0;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.04);
+        }
+        
+        .info-item:last-child {
+            border-bottom: none;
+        }
+        
+        .info-label {
+            font-size: 13px;
+            color: #86868b;
+            font-weight: 500;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .info-value {
+            font-size: 15px;
+            color: #1d1d1f;
+            font-weight: 600;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 980px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.3);
+        }
+        
+        .benefits-section {
+            background: linear-gradient(135deg, #f9f9fb 0%, #ffffff 100%);
+            border: 1px solid rgba(34, 197, 94, 0.15);
+            border-radius: 16px;
+            padding: 28px 24px;
+            margin: 40px 0;
+            box-shadow: 0 4px 16px rgba(34, 197, 94, 0.08);
+        }
+        
+        .benefits-section h4 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+            letter-spacing: -0.011em;
+        }
+        
+        .benefits-section ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .benefits-section li {
+            font-size: 14px;
+            color: #5a5a5e;
+            line-height: 1.8;
+            padding-left: 28px;
+            position: relative;
+            margin-bottom: 12px;
+        }
+        
+        .benefits-section li::before {
+            content: '✓';
+            position: absolute;
+            left: 0;
+            color: #22c55e;
+            font-weight: 700;
+            font-size: 16px;
+        }
+        
+        .footer {
+            padding: 48px;
+            text-align: center;
+            background: linear-gradient(180deg, #f0fdf4 0%, #f0f2f5 100%);
+            border-top: 2px solid rgba(34, 197, 94, 0.1);
+        }
+        
+        .footer p {
+            color: #86868b;
+            font-size: 13px;
+            line-height: 1.7;
+            margin-bottom: 6px;
+            font-weight: 400;
+            letter-spacing: -0.008em;
+        }
+        
+        .footer .company-name {
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        
+        .footer .divider {
+            width: 32px;
+            height: 1px;
+            background: rgba(0, 0, 0, 0.1);
+            margin: 16px auto;
+        }
+        
+        @media (max-width: 600px) {
+            .email-container {
+                border-radius: 20px;
+            }
+            
+            .header {
+                padding: 48px 24px 32px;
+            }
+            
+            .content {
+                padding: 0 24px 32px;
+            }
+            
+            .footer {
+                padding: 32px 24px;
+            }
+            
+            .header h1 {
+                font-size: 28px;
+            }
+            
+            .success-section h2 {
+                font-size: 26px;
+            }
+            
+            .approval-card {
+                padding: 36px 24px;
+                margin: 36px 0;
+            }
+            
+            .cta-button {
+                min-width: 160px;
+                padding: 12px 28px;
+            }
+            
+            .product-info {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: linear-gradient(135deg, #000000 0%, #1c1c1e 100%);
+            }
+            
+            .email-container {
+                background-color: #1c1c1e;
+                box-shadow: 0 24px 72px rgba(34, 197, 94, 0.15), 0 2px 8px rgba(0, 0, 0, 0.3);
+                border-color: rgba(34, 197, 94, 0.15);
+            }
+            
+            .header {
+                background: linear-gradient(180deg, #1c1c1e 0%, #0f2e11 100%);
+            }
+            
+            .header h1, .success-section h2, .approval-card h3, .benefits-section h4, .product-details-card h4, .footer .company-name {
+                color: #f2f2f7;
+            }
+            
+            .header p, .success-section p, .approval-card p, .benefits-section p, .info-value, .footer p {
+                color: #a1a1a6;
+            }
+            
+            .approval-card {
+                background: linear-gradient(135deg, #1c1c1e 0%, #0f2e11 100%);
+                border-color: rgba(34, 197, 94, 0.15);
+            }
+            
+            .product-details-card {
+                background: linear-gradient(135deg, #2c2c2e 0%, #1c1c1e 100%);
+                border-color: rgba(34, 197, 94, 0.15);
+            }
+            
+            .benefits-section {
+                background: linear-gradient(135deg, #2c2c2e 0%, #1c1c1e 100%);
+                border-color: rgba(34, 197, 94, 0.2);
+                box-shadow: 0 4px 16px rgba(34, 197, 94, 0.1);
+            }
+            
+            .info-item {
+                border-bottom-color: rgba(255, 255, 255, 0.1);
+            }
+            
+            .footer {
+                background: linear-gradient(180deg, #0f2e11 0%, #000000 100%);
+                border-top-color: rgba(34, 197, 94, 0.15);
+            }
+            
+            .footer .divider {
+                background: rgba(255, 255, 255, 0.1);
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>✓ Product Approved!</h1>
-        </div>
-        
-        <div class="content">
-            <p>Hello {{ vendor_name }},</p>
-            
-            <p>Great news! Your product has been <strong>approved</strong> and is now visible to all customers on our marketplace.</p>
-            
-            <div class="product-details">
-                <h3>{{ product_name }}</h3>
-                <p><strong>Product ID:</strong> {{ product_id }}</p>
-                <p><strong>Status:</strong> <span style="color: #28a745; font-weight: bold;">APPROVED</span></p>
+    <div class="email-wrapper">
+        <div class="email-container">
+            <!-- Header Section -->
+            <div class="header">
+                <div class="logo-section">
+                    <img src="https://res.cloudinary.com/dhpny4uce/image/upload/v1767434246/Dandelion_hajorf.png" alt="{{ app_name }} Logo">
+                </div>
+                <h1>{{ app_name }}</h1>
+                <p>Marketplace</p>
             </div>
             
-            <p>{{ message }}</p>
+            <!-- Main Content -->
+            <div class="content">
+                <div class="success-section">
+                    <h2>Product Approved!</h2>
+                    <p>Your product is now live and ready to be discovered by customers.</p>
+                </div>
+                
+                <div class="approval-card">
+                    <div class="icon-success">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                        </svg>
+                    </div>
+                    <h3>Congratulations!</h3>
+                    <p>Your product has been reviewed and approved. It's now visible to all customers on our marketplace.</p>
+                    <a href="#" class="cta-button">View Your Product</a>
+                </div>
+                
+                <div class="product-details-card">
+                    <h4>Product Details</h4>
+                    <div class="product-info">
+                        <div class="info-item">
+                            <div class="info-label">Product Name</div>
+                            <div class="info-value">{{ product_name }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Product ID</div>
+                            <div class="info-value">{{ product_id }}</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Status</div>
+                            <div class="status-badge">APPROVED</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="benefits-section">
+                    <h4>What's Next?</h4>
+                    <ul>
+                        <li>Monitor your product performance in the dashboard</li>
+                        <li>Respond to customer reviews and questions</li>
+                        <li>Update inventory and pricing as needed</li>
+                        <li>Optimize your product listing for better visibility</li>
+                    </ul>
+                </div>
+            </div>
             
-            <p>Your product is now live and customers can start purchasing it. You can monitor sales and manage your product from your vendor dashboard.</p>
-            
-            <a href="#" class="button">View Product</a>
-            
-            <p><strong>Thank you for selling on our platform!</strong></p>
-            
-            <p>Best regards,<br>
-            <strong>The E-Commerce Team</strong></p>
-        </div>
-        
-        <div class="footer">
-            <p>This is an automated email. Please do not reply to this message.</p>
-        </div>
+            <!-- Footer Section -->
+            <div class="footer">
+                <p>© 2025 <span class="company-name">{{ app_name }}</span></p>
+                <div class="divider"></div>
+                <p>{{ vendor_email }}</p>
+            </div>
     </div>
 </body>
 </html>

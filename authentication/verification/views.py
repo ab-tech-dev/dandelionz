@@ -230,7 +230,7 @@ class ConfirmPasswordResetView(BaseAPIView):
                 )
 
             success, response_data, status_code = PasswordResetService.confirm_reset(
-                uidb6=uidb64, token=token, new_password=new_password
+                uidb64=uidb64, token=token, new_password=new_password
             )
             return Response(standardized_response(**response_data), status=status_code)
         except Exception as e:
