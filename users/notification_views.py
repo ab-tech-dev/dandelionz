@@ -252,7 +252,6 @@ class NotificationPreferenceViewSet(viewsets.ViewSet):
     """
     permission_classes = [permissions.IsAuthenticated]
 
-    @action(detail=False, methods=['get'])
     def list(self, request):
         """Get current user's notification preferences"""
         try:
@@ -266,7 +265,6 @@ class NotificationPreferenceViewSet(viewsets.ViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @action(detail=False, methods=['put'])
     def update(self, request):
         """Update notification preferences"""
         try:
