@@ -1,5 +1,6 @@
 from django.contrib import admin
-from .models import Vendor, Customer, BusinessAdmin, Notification, DeliveryAgent, PaymentPIN, PayoutRequest, AdminPayoutProfile
+from .models import Vendor, Customer, BusinessAdmin, DeliveryAgent, PaymentPIN, PayoutRequest, AdminPayoutProfile
+from .notification_models import Notification
 
 
 @admin.register(Vendor)
@@ -61,18 +62,38 @@ class BusinessAdminAdmin(admin.ModelAdmin):
 
 @admin.register(Notification)
 class NotificationAdmin(admin.ModelAdmin):
-    list_display = ('recipient', 'title', 'is_read', 'created_at')
-    list_filter = ('is_read', 'created_at')
-    search_fields = ('recipient__email', 'title', 'message')
-    readonly_fields = ('created_at',)
+    list_display = ('user', 'title', 'priority', 'is_read', 'created_at')
+    list_filter = ('is_read', 'priority', 'category', 'created_at', 'was_sent_websocket', 'was_sent_email')
+    search_fields = ('user__email', 'title', 'message', 'category')
+    readonly_fields = ('created_at', 'updated_at', 'read_at', 'id')
     fieldsets = (
         ('Notification Details', {
-            'fields': ('recipient', 'title', 'message')
+            'fields': ('id', 'user', 'notification_type', 'title', 'message', 'description')
+        }),
+        ('Metadata', {
+            'fields': ('category', 'priority', 'metadata')
+        }),
+        ('Action', {
+            'fields': ('action_url', 'action_text')
+        }),
+        ('Related Object', {
+            'fields': ('related_object_type', 'related_object_id')
         }),
         ('Status', {
-            'fields': ('is_read', 'created_at')
+            'fields': ('is_read', 'is_archived', 'is_deleted')
+        }),
+        ('Delivery Tracking', {
+            'fields': ('was_sent_websocket', 'was_sent_email', 'was_sent_push', 'send_attempts')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'read_at', 'expires_at', 'updated_at'),
+            'classes': ('collapse',)
         }),
     )
+
+    def has_add_permission(self, request):
+        """Notifications are created programmatically"""
+        return False
 
 
 @admin.register(DeliveryAgent)
