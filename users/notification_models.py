@@ -48,7 +48,9 @@ class Notification(models.Model):
         User, 
         on_delete=models.CASCADE, 
         related_name='notifications',
-        db_index=True
+        db_index=True,
+        null=True,  # Allow null for migrations
+        blank=True
     )
     notification_type = models.ForeignKey(
         NotificationType,
