@@ -24,6 +24,8 @@ ENFORCE_DELIVERY_FEE_ON_CHECKOUT = os.getenv('ENFORCE_DELIVERY_FEE_ON_CHECKOUT',
 
 # Application definition
 INSTALLED_APPS = [
+
+    "channels",
     # Local apps
     'django_admin_trap',
     'authentication',
@@ -108,7 +110,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'e_commerce_api.wsgi.application'
-
+ASGI_APPLICATION = 'e_commerce_api.asgi.application'
 SITE_ID = 1
 
 
@@ -208,6 +210,29 @@ CELERY_TASK_SEND_SENT_EVENT = True
 CELERY_WORKER_SEND_TASK_EVENTS = True
 CELERYD_LOG_FORMAT = '[%(asctime)s: %(levelname)s/%(processName)s] %(message)s'
 CELERYD_TASK_LOG_FORMAT = '[%(asctime)s: %(levelname)s/%(processName)s] [%(task_name)s(%(task_id)s)] %(message)s'
+
+# Celery Beat Schedule - Scheduled Tasks
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'send-scheduled-notifications': {
+        'task': 'users.send_scheduled_notification',
+        'schedule': crontab(minute='*/5'),  # Every 5 minutes
+        'options': {'queue': 'notifications'}
+    },
+    'cleanup-old-notifications': {
+        'task': 'users.cleanup_old_notifications',
+        'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
+        'options': {'queue': 'maintenance'}
+    },
+}
+
+# Celery Queues
+CELERY_TASK_QUEUES = {
+    'default': {'exchange': 'default', 'routing_key': 'default'},
+    'notifications': {'exchange': 'notifications', 'routing_key': 'notifications'},
+    'emails': {'exchange': 'emails', 'routing_key': 'emails'},
+    'maintenance': {'exchange': 'maintenance', 'routing_key': 'maintenance'},
+}
 
 # Django Caching (Redis on VPS)
 CACHES = {
@@ -369,4 +394,71 @@ SWAGGER_SETTINGS = {
         }
     },
     'USE_SESSION_AUTH': False,
+}
+
+
+# Channels
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [os.getenv('CHANNELS_REDIS_URL', 'redis://localhost:6379/2')],
+        },
+    },
+}
+
+
+# ============================================================
+# NOTIFICATION SYSTEM CONFIGURATION
+# ============================================================
+
+# WebSocket settings
+NOTIFICATION_WEBSOCKET_ENABLED = os.getenv('NOTIFICATION_WEBSOCKET_ENABLED', 'True').lower() in ('true', '1', 'yes')
+NOTIFICATION_HEARTBEAT_INTERVAL = int(os.getenv('NOTIFICATION_HEARTBEAT_INTERVAL', '30'))  # seconds
+NOTIFICATION_MAX_MESSAGE_SIZE = int(os.getenv('NOTIFICATION_MAX_MESSAGE_SIZE', '10240'))  # bytes
+NOTIFICATION_CONSUMER_TIMEOUT = int(os.getenv('NOTIFICATION_CONSUMER_TIMEOUT', '3600'))  # 1 hour
+NOTIFICATION_GROUP_DISCARD_TIMEOUT = int(os.getenv('NOTIFICATION_GROUP_DISCARD_TIMEOUT', '300'))  # 5 minutes
+
+# Notification retention policy
+NOTIFICATION_RETENTION_DAYS = int(os.getenv('NOTIFICATION_RETENTION_DAYS', '30'))
+NOTIFICATION_CLEANUP_INTERVAL = int(os.getenv('NOTIFICATION_CLEANUP_INTERVAL', '86400'))  # 24 hours
+
+# Email notification settings
+NOTIFICATION_EMAIL_ENABLED = os.getenv('NOTIFICATION_EMAIL_ENABLED', 'True').lower() in ('true', '1', 'yes')
+NOTIFICATION_EMAIL_FROM = os.getenv('NOTIFICATION_EMAIL_FROM', DEFAULT_FROM_EMAIL)
+
+# Push notification settings (future: FCM/APNs)
+NOTIFICATION_PUSH_ENABLED = os.getenv('NOTIFICATION_PUSH_ENABLED', 'False').lower() in ('true', '1', 'yes')
+NOTIFICATION_FCM_API_KEY = os.getenv('NOTIFICATION_FCM_API_KEY', '')
+NOTIFICATION_FCM_PROJECT_ID = os.getenv('NOTIFICATION_FCM_PROJECT_ID', '')
+
+# Notification categories
+NOTIFICATION_CATEGORIES = [
+    'order',
+    'payment',
+    'vendor_approval',
+    'delivery',
+    'product_update',
+    'system',
+    'promotion',
+    'support',
+]
+
+# Notification priorities
+NOTIFICATION_PRIORITIES = ['low', 'normal', 'high', 'urgent']
+
+# Default notification preferences
+NOTIFICATION_DEFAULT_PREFERENCES = {
+    'websocket_enabled': True,
+    'email_enabled': True,
+    'push_enabled': False,
+    'email_frequency': 'daily',
+    'push_frequency': 'instant',
+}
+
+# Logging for notifications
+LOGGING['loggers']['notifications'] = {
+    'handlers': ['console'],
+    'level': 'INFO',
+    'propagate': False,
 }

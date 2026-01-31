@@ -1,4 +1,4 @@
-from django.urls import path, re_path
+from django.urls import path, re_path, include
 from .views import (
     CustomerProfileViewSet,
     VendorViewSet,
@@ -17,10 +17,6 @@ from .views import (
     AdminWalletViewSet,
     AdminPaymentSettingsViewSet,
     AdminSettlementsViewSet,
-    NotificationsListView,
-    NotificationDetailView,
-    UnreadNotificationsCountView,
-    MarkAllNotificationsReadView,
 )
 from authentication.views_admin import (
     AdminUserListView,
@@ -186,11 +182,11 @@ urlpatterns = [
     path("admin/delivery-agents/update-status/", admin_update_agent, name="admin-update-agent-status"),
     path("admin/delivery-agents/details/<int:agent_id>/", admin_agent_details, name="admin-agent-details"),
 
-    # NOTIFICATIONS
-    path("notifications/", NotificationsListView.as_view(), name="notifications-list"),
-    path("notifications/<int:notification_id>/", NotificationDetailView.as_view(), name="notification-detail"),
-    path("notifications/unread/count/", UnreadNotificationsCountView.as_view(), name="unread-count"),
-    path("notifications/mark-all-read/", MarkAllNotificationsReadView.as_view(), name="mark-all-read"),
+    # NOTIFICATIONS (Deprecated - Use new REST API endpoints instead)
+    # path("notifications/", NotificationsListView.as_view(), name="notifications-list"),  # Use GET /api/notifications/
+    # path("notifications/<int:notification_id>/", NotificationDetailView.as_view(), name="notification-detail"),  # Use GET /api/notifications/{id}/
+    # path("notifications/unread/count/", UnreadNotificationsCountView.as_view(), name="unread-count"),  # Use GET /api/notifications/unread_count/
+    # path("notifications/mark-all-read/", MarkAllNotificationsReadView.as_view(), name="mark-all-read"),  # Use POST /api/notifications/mark_all_as_read/
 
     # ADMIN NOTIFICATIONS
     path("admin/notifications/", AdminNotificationViewSet.as_view({"post": "create", "get": "list_notifications"}), name="admin-notifications"),
@@ -229,4 +225,9 @@ urlpatterns = [
     
     # Audit Logs
     path("admin/audit-logs/", AdminAuditLogView.as_view(), name="admin-audit-logs"),
+
+    # ========================================
+    # NOTIFICATION SYSTEM
+    # ========================================
+    path("notifications/", include("users.notification_urls")),
 ]

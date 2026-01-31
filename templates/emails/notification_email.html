@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #f5f5f5;
+            line-height: 1.6;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: #ffffff;
+            padding: 0;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+            border-radius: 8px 8px 0 0;
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .priority-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .priority-urgent {
+            background-color: rgba(255, 107, 107, 0.3);
+            color: #ff6b6b;
+        }
+        
+        .priority-high {
+            background-color: rgba(255, 159, 64, 0.3);
+            color: #ff9f40;
+        }
+        
+        .priority-normal {
+            background-color: rgba(102, 126, 234, 0.3);
+            color: #667eea;
+        }
+        
+        .priority-low {
+            background-color: rgba(52, 211, 153, 0.3);
+            color: #34d399;
+        }
+        
+        .body {
+            padding: 30px 20px;
+        }
+        
+        .greeting {
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        
+        .greeting strong {
+            color: #667eea;
+        }
+        
+        .message-content {
+            background-color: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .message-content h2 {
+            font-size: 18px;
+            color: #333;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+        
+        .message-content p {
+            color: #666;
+            margin-bottom: 10px;
+        }
+        
+        .description {
+            background-color: #f0f4ff;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 15px 0;
+            font-size: 14px;
+            color: #555;
+            border-left: 3px solid #667eea;
+        }
+        
+        .action-button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 12px 30px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);
+        }
+        
+        .action-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .metadata {
+            background-color: #f5f5f5;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+            font-size: 13px;
+            color: #888;
+        }
+        
+        .metadata-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 5px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .metadata-item:last-child {
+            border-bottom: none;
+        }
+        
+        .metadata-label {
+            font-weight: 600;
+            color: #666;
+        }
+        
+        .divider {
+            border: none;
+            border-top: 1px solid #e0e0e0;
+            margin: 30px 0;
+        }
+        
+        .footer {
+            background-color: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+            border-radius: 0 0 8px 8px;
+        }
+        
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+        
+        .preference-note {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 12px;
+            color: #856404;
+        }
+        
+        .preference-note a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                border-radius: 0;
+            }
+            
+            .header {
+                border-radius: 0;
+                padding: 20px;
+            }
+            
+            .header h1 {
+                font-size: 20px;
+            }
+            
+            .body {
+                padding: 20px;
+            }
+            
+            .message-content {
+                padding: 15px;
+            }
+            
+            .action-button {
+                width: 100%;
+                text-align: center;
+                display: block;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>{{ title }}</h1>
+            <div class="priority-badge priority-{{ priority|lower }}">
+                {{ priority }} Priority
+            </div>
+        </div>
+        
+        <!-- Body -->
+        <div class="body">
+            <!-- Greeting -->
+            <div class="greeting">
+                Hello <strong>{{ user_name }}</strong>,
+            </div>
+            
+            <!-- Main Message -->
+            <div class="message-content">
+                <h2>{{ title }}</h2>
+                <p>{{ message }}</p>
+                {% if description %}
+                    <div class="description">
+                        {{ description }}
+                    </div>
+                {% endif %}
+            </div>
+            
+            <!-- Action Button -->
+            {% if action_url and action_text %}
+                <div style="text-align: center;">
+                    <a href="{{ action_url }}" class="action-button">
+                        {{ action_text }}
+                    </a>
+                </div>
+            {% endif %}
+            
+            <!-- Metadata (if provided) -->
+            {% if metadata %}
+                <div class="metadata">
+                    {% for key, value in metadata.items %}
+                        <div class="metadata-item">
+                            <span class="metadata-label">{{ key|title }}:</span>
+                            <span>{{ value }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+            
+            <!-- Divider -->
+            <hr class="divider">
+            
+            <!-- Notification Info -->
+            <div style="background-color: #f9f9f9; padding: 15px; border-radius: 4px; font-size: 12px; color: #888;">
+                <p style="margin-bottom: 8px;">
+                    <strong>Sent:</strong> {{ created_at|date:"M d, Y H:i" }}
+                </p>
+                <p>
+                    This is an automated notification. Please do not reply to this email.
+                </p>
+            </div>
+            
+            <!-- Preferences Note -->
+            <div class="preference-note">
+                📧 You can customize your notification preferences <a href="#preferences">here</a> to control how often you receive emails from us.
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <div class="footer">
+            <p>
+                &copy; 2024 {{ app_name }}. All rights reserved.<br>
+                <a href="#">Privacy Policy</a> | 
+                <a href="#">Terms of Service</a> | 
+                <a href="#">Notification Settings</a>
+            </p>
+            <p style="margin-top: 10px; color: #bbb;">
+                This email was sent to an email address associated with your {{ app_name }} account.
+            </p>
+        </div>
+    </div>
+</body>
+</html>

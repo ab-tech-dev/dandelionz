@@ -5,7 +5,7 @@ from django.db import transaction
 import logging
 
 from .models import Product
-from users.models import Notification
+from users.notification_helpers import send_product_notification, notify_admin
 from authentication.models import CustomUser
 
 logger = logging.getLogger(__name__)
@@ -32,8 +32,7 @@ def log_approval_change(sender, instance, **kwargs):
 
 def _send_notification_safely(recipient, title, message):
     """
-    Helper function to safely create a notification without aborting the transaction.
-    Uses savepoint to catch errors at notification level without affecting main transaction.
+    Helper function to safely create a notification using the new NotificationService.
     Includes validation to prevent common failures.
     """
     # Validation checks
@@ -58,21 +57,16 @@ def _send_notification_safely(recipient, title, message):
     message = str(message)
     
     try:
-        # Use savepoint to isolate this operation from parent transaction
-        sid = transaction.savepoint()
-        try:
-            Notification.objects.create(
-                recipient=recipient,
-                title=title,
-                message=message
-            )
-            transaction.savepoint_commit(sid)
-            logger.debug(f"Notification created for {recipient.email}")
-        except Exception as e:
-            transaction.savepoint_rollback(sid)
-            logger.error(f"Failed to create notification for {recipient.email}: {str(e)}", exc_info=True)
+        send_product_notification(
+            recipient=recipient,
+            title=title,
+            message=message,
+            send_email=True,
+            send_websocket=True
+        )
+        logger.debug(f"Notification created for {recipient.email}")
     except Exception as e:
-        logger.error(f"Unexpected error in _send_notification_safely for {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to create notification for {recipient.email}: {str(e)}", exc_info=True)
 
 
 @receiver(post_save, sender=Product)

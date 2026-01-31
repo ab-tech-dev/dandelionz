@@ -11,7 +11,7 @@ from django.db import transaction
 
 from authentication.models import CustomUser, Referral
 from transactions.models import Wallet
-from users.models import Notification
+from users.notification_helpers import send_payment_notification
 
 logger = logging.getLogger(__name__)
 
@@ -81,11 +81,13 @@ class ReferralService:
                         logger.info(f"Credited {referral.bonus_amount} to {referrer.email}'s wallet")
                         
                         # Create notification for referrer
-                        Notification.objects.create(
-                            recipient=referrer,
-                            title="Referral Bonus Credited",
-                            message=f"You have received a referral bonus of {referral.bonus_amount} "
-                                    f"for referring {user.email}.",
+                        send_payment_notification(
+                            referrer,
+                            "Referral Bonus Credited",
+                            f"You have received a referral bonus of {referral.bonus_amount} "
+                            f"for referring {user.email}.",
+                            transaction_id=str(referral.id),
+                            amount=referral.bonus_amount
                         )
                         logger.info(f"Referral bonus awarded and notification sent to {referrer.email}")
                         

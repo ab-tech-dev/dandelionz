@@ -65,7 +65,13 @@ from users.serializers import (
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
 from transactions.models import PayoutRecord, Order, Payment, OrderStatusHistory
-from users.models import Notification
+from users.notification_models import Notification
+from users.notification_helpers import (
+    send_order_notification,
+    send_delivery_notification,
+    send_user_notification,
+    notify_admin,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1316,7 +1322,7 @@ from users.services.services import ProfileService, AdminService
 from users.models import Vendor, Customer
 from transactions.models import Order, Refund, Wallet
 from transactions.models import Payment, TransactionLog
-from users.models import Notification
+from users.notification_models import Notification
 from store.models import Product
 from django.db import models
 from users.serializers import VendorApprovalSerializer
@@ -2236,17 +2242,19 @@ class AdminOrdersViewSet(AdminBaseViewSet):
         order.save(update_fields=['delivery_agent', 'assigned_at'])
 
         # Notify delivery agent
-        Notification.objects.create(
-            recipient=delivery_agent.user,
-            title="New Order Assignment",
-            message=f"You have been assigned order {order.order_id} for delivery."
+        send_delivery_notification(
+            delivery_agent.user,
+            "New Order Assignment",
+            f"You have been assigned order {order.order_id} for delivery.",
+            order_id=order.order_id
         )
 
         # Notify customer
-        Notification.objects.create(
-            recipient=order.customer,
-            title="Delivery Agent Assigned",
-            message=f"A delivery agent has been assigned to your order {order.order_id}."
+        send_order_notification(
+            order.customer,
+            "Delivery Agent Assigned",
+            f"A delivery agent has been assigned to your order {order.order_id}.",
+            order_id=order.order_id
         )
 
         return Response({
@@ -2353,13 +2361,13 @@ Access: Admin (staff) or Vendor (who owns items in order)""",
                     }
                 )
                 
-                # Notify customer
-                Notification.objects.create(
-                    recipient=order.customer,
-                    title="Your Order is On the Way",
-                    message=f"Order {order.order_id} has been shipped! "
-                            f"{f'Tracking number: {tracking_number}' if tracking_number else 'Your delivery agent will contact you soon.'}",
-                    is_read=False
+                # Notify customer using WebSocket
+                send_order_notification(
+                    order.customer,
+                    "Your Order is On the Way",
+                    f"Order {order.order_id} has been shipped! "
+                    f"{f'Tracking number: {tracking_number}' if tracking_number else 'Your delivery agent will contact you soon.'}",
+                    order_id=order.order_id
                 )
                 
                 logger.info(
@@ -2494,41 +2502,41 @@ Access: Delivery Agent (assigned to order) or Admin (staff)""",
                 )
                 
                 # Notify customer
-                Notification.objects.create(
-                    recipient=order.customer,
-                    title="Order Delivered Successfully",
-                    message=f"Your order {order.order_id} has been delivered! Thank you for shopping with us.",
-                    is_read=False
+                send_order_notification(
+                    order.customer,
+                    "Order Delivered Successfully",
+                    f"Your order {order.order_id} has been delivered! Thank you for shopping with us.",
+                    order_id=order.order_id
                 )
                 
                 # Notify all admins about order completion
                 admin_users = CustomUser.objects.filter(is_staff=True).exclude(id=request.user.id)
                 for admin in admin_users:
-                    Notification.objects.create(
-                        recipient=admin,
-                        title="Order Delivered & Fulfilled",
-                        message=f"Order {order.order_id} (₦{order.total_price}) has been delivered successfully. "
-                                f"Customer: {order.customer.email}. Vendors have been credited.",
-                        is_read=False
+                    notify_admin(
+                        "Order Delivered & Fulfilled",
+                        f"Order {order.order_id} (₦{order.total_price}) has been delivered successfully. "
+                        f"Customer: {order.customer.email}. Vendors have been credited.",
+                        order_id=order.order_id,
+                        customer_email=order.customer.email
                     )
                 
                 # Notify vendors
                 vendors = {item.product.store for item in order.order_items.all() if item.product.store}
                 for vendor in vendors:
-                    Notification.objects.create(
-                        recipient=vendor,
-                        title="Order Delivered - Payment Released",
-                        message=f"Order {order.order_id} has been delivered. Earnings have been credited to your wallet.",
-                        is_read=False
+                    send_order_notification(
+                        vendor,
+                        "Order Delivered - Payment Released",
+                        f"Order {order.order_id} has been delivered. Earnings have been credited to your wallet.",
+                        order_id=order.order_id
                     )
                 
-                # Notify delivery agent (if applicable)
+                # Notify delivery agent (if applicable) using WebSocket
                 if order.delivery_agent:
-                    Notification.objects.create(
-                        recipient=order.delivery_agent.user,
-                        title="Delivery Completed",
-                        message=f"Order {order.order_id} has been marked as delivered.",
-                        is_read=False
+                    send_delivery_notification(
+                        order.delivery_agent.user,
+                        "Delivery Completed",
+                        f"Order {order.order_id} has been marked as delivered.",
+                        order_id=order.order_id
                     )
                 
                 logger.info(
@@ -3037,10 +3045,11 @@ class DeliveryAgentViewSet(viewsets.ViewSet):
                 logger.error(f"Failed to credit vendors for delivered order {order.order_id}: {e}")
         
         # Create notification for customer
-        Notification.objects.create(
-            recipient=order.customer,
-            title="Order Delivered",
-            message=f"Your order {order.order_id} has been delivered."
+        send_order_notification(
+            order.customer,
+            "Order Delivered",
+            f"Your order {order.order_id} has been delivered.",
+            order_id=order.order_id
         )
         
         from transactions.serializers import OrderSerializer

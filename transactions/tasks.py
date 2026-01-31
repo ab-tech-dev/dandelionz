@@ -9,7 +9,7 @@ from django.utils.html import strip_tags
 from django.conf import settings
 
 from .models import Order, TransactionLog
-from users.models import Notification
+from users.notification_helpers import send_order_notification, notify_admin
 from authentication.models import CustomUser
 
 logger = logging.getLogger(__name__)
@@ -80,14 +80,14 @@ def check_overdue_deliveries():
             
             # Notify admin users about overdue delivery
             for admin in admin_users:
-                Notification.objects.create(
-                    recipient=admin,
-                    title=f"Overdue Delivery Alert: Order {order.order_id}",
-                    message=f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
-                            f"Customer: {order.customer.email}. "
-                            f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
-                            f"Please investigate and take appropriate action.",
-                    is_read=False
+                notify_admin(
+                    f"Overdue Delivery Alert: Order {order.order_id}",
+                    f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
+                    f"Customer: {order.customer.email}. "
+                    f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
+                    f"Please investigate and take appropriate action.",
+                    order_id=order.order_id,
+                    customer_email=order.customer.email
                 )
             
             # Optional: Send email notification to admin
@@ -276,13 +276,15 @@ def notify_stakeholders_order_paid(self, order_id):
                     vendor_items = order.order_items.filter(product__store=vendor)
                     items_count = vendor_items.count()
                     
-                    Notification.objects.create(
-                        recipient=vendor,
-                        title=f"Payment Verified - Order Ready for Preparation",
-                        message=f"Payment confirmed for order {order.order_id}. "
-                                f"You have {items_count} item(s) to prepare. "
-                                f"Customer: {order.customer.email}. "
-                                f"Please mark as SHIPPED once items are dispatched.",
+                    send_order_notification(
+                        vendor,
+                        f"Payment Verified - Order Ready for Preparation",
+                        f"Payment confirmed for order {order.order_id}. "
+                        f"You have {items_count} item(s) to prepare. "
+                        f"Customer: {order.customer.email}. "
+                        f"Please mark as SHIPPED once items are dispatched.",
+                        order_id=order.order_id,
+                        items_count=items_count,
                         is_read=False
                     )
                     
@@ -315,13 +317,15 @@ def notify_stakeholders_order_paid(self, order_id):
                 try:
                     vendor_names = ', '.join([v.user.email for v in vendors]) if vendors else 'Unknown'
                     
-                    Notification.objects.create(
-                        recipient=admin,
-                        title="New Paid Order - Requires Fulfillment",
-                        message=f"Order {order.order_id} payment verified (₦{order.total_price}). "
-                                f"Customer: {order.customer.email}. "
-                                f"Vendors involved: {vendor_names}. "
-                                f"Status: Ready for shipment. Monitor fulfillment progress.",
+                    notify_admin(
+                        "New Paid Order - Requires Fulfillment",
+                        f"Order {order.order_id} payment verified (₦{order.total_price}). "
+                        f"Customer: {order.customer.email}. "
+                        f"Vendors involved: {vendor_names}. "
+                        f"Status: Ready for shipment. Monitor fulfillment progress.",
+                        order_id=order.order_id,
+                        total_price=order.total_price,
+                        customer_email=order.customer.email,
                         is_read=False
                     )
                     

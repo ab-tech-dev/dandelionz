@@ -20,7 +20,7 @@ from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
-from users.models import Notification
+from users.notification_helpers import send_order_notification
 
 logger = logging.getLogger(__name__)
 
@@ -193,10 +193,11 @@ class OrderListCreateView(generics.ListCreateAPIView):
         order.update_total()
         vendors = {item.vendor for item in order.order_items.all() if item.vendor}
         for vendor in vendors:
-            Notification.objects.create(
-                recipient=vendor,
-                title="New Order Received",
-                message=f"You received a new order {order.order_id}."
+            send_order_notification(
+                vendor,
+                "New Order Received",
+                f"You received a new order {order.order_id}.",
+                order_id=order.order_id
             )
 
 class OrderDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -316,11 +317,14 @@ class OrderItemListCreateView(generics.ListCreateAPIView):
         order.update_total()
         vendor = order_item.vendor
         if vendor:
-            Notification.objects.create(
-                recipient=vendor,
-                title="New Order Item Received",
-                message=f"You have a new order item: {order_item.product.name} x {order_item.quantity} "
-                        f"in order {order.order_id} from {order.customer.email}."
+            send_order_notification(
+                vendor,
+                "New Order Item Received",
+                f"You have a new order item: {order_item.product.name} x {order_item.quantity} "
+                f"in order {order.order_id} from {order.customer.email}.",
+                order_id=order.order_id,
+                product_name=order_item.product.name
+            )
             )
 
 class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
