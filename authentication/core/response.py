@@ -9,6 +9,6 @@ def standardized_response(success = True, data = None, error = None, message = N
         response['message'] = message
 
     for key, value in kwargs.items():
-        response['key'] = value
+        response[key] = value
 
     return response

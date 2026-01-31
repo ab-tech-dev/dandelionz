@@ -67,6 +67,8 @@ Optionally accepts referral_code for affiliate tracking.""",
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            logger.debug("Serializer validation passed")
+
             # Extract validated data
             validated_data = serializer.validated_data
             email = validated_data.get('email')
@@ -76,6 +78,8 @@ Optionally accepts referral_code for affiliate tracking.""",
             role = validated_data.get('role', 'CUSTOMER').upper()
             referral_code = validated_data.get('referral_code', '')
 
+            logger.debug(f"Extracted data - email: {email}, role: {role}")
+
             if role not in ['CUSTOMER', 'VENDOR']:
                 logger.warning(f"Invalid role provided: {role}")
                 return Response(
@@ -83,6 +87,7 @@ Optionally accepts referral_code for affiliate tracking.""",
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
+            logger.debug("Calling AuthenticationService.register()")
             success, response_data, status_code = AuthenticationService.register(
                 email=email,
                 password=password,
@@ -94,7 +99,12 @@ Optionally accepts referral_code for affiliate tracking.""",
                 request=request
             )
 
+            logger.debug(f"Service returned - success: {success}, status_code: {status_code}")
+            logger.debug(f"Response data: {response_data}")
+
             response = Response(standardized_response(**response_data), status=status_code)
+
+            logger.debug(f"Response created successfully with status {status_code}")
 
             if success:
                 get_token(request)
