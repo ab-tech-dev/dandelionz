@@ -1,8 +1,8 @@
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
 from .notification_models import Notification, NotificationType, NotificationPreference, NotificationLog
-from django.conf import settings
 
-User = settings.AUTH_USER_MODEL
+User = get_user_model()
 
 
 class NotificationTypeSerializer(serializers.ModelSerializer):
