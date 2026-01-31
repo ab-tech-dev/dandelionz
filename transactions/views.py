@@ -325,7 +325,7 @@ class OrderItemListCreateView(generics.ListCreateAPIView):
                 order_id=order.order_id,
                 product_name=order_item.product.name
             )
-            )
+
 
 class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = OrderItemSerializer
