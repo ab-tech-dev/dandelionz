@@ -378,21 +378,11 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
             'id',
             'title',
             'message',
-            'recipient_type',
             'status',
             'scheduled_at',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
-
-    def validate_recipient_type(self, value):
-        """Validate that recipient_type is one of the allowed choices"""
-        valid_types = ['USERS', 'VENDORS', 'ALL']
-        if value not in valid_types:
-            raise serializers.ValidationError(
-                f"recipient_type must be one of {valid_types}"
-            )
-        return value
 
     def validate_status(self, value):
         """Validate that status is one of the allowed choices"""
@@ -458,7 +448,6 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
             'id',
             'title',
             'message',
-            'recipient_type',
             'status',
             'scheduled_at',
             'created_by',
