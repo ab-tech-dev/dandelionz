@@ -366,7 +366,7 @@ PAYSTACK_WEBHOOK_URL = os.getenv(
 )
 
 # Radar API Configuration for Delivery Fees
-RADAR_API_KEY = os.getenv('RADAR_API_KEY', 'prj_live_sk_c29bbc995bc0e2179395445247505d7378e4d048')
+RADAR_API_KEY = os.getenv('RADAR_API_KEY')
 RADAR_API_BASE_URL = 'https://api.radar.io/v1'
 
 # Delivery Fee Configuration
