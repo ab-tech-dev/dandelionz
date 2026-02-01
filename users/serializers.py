@@ -431,13 +431,18 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
     """
     Serializer for listing admin broadcast notifications with full details.
     """
-    created_by_email = serializers.EmailField(
-        source='created_by.email',
+    notification_type_display = serializers.CharField(
+        source='notification_type.display_name',
         read_only=True,
         allow_null=True
     )
-    created_by_name = serializers.CharField(
-        source='created_by.full_name',
+    user_email = serializers.CharField(
+        source='user.email',
+        read_only=True,
+        allow_null=True
+    )
+    user_name = serializers.CharField(
+        source='user.full_name',
         read_only=True,
         allow_null=True
     )
@@ -448,19 +453,23 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
             'id',
             'title',
             'message',
-            'status',
-            'scheduled_at',
-            'created_by',
-            'created_by_email',
-            'created_by_name',
+            'priority',
+            'category',
+            'notification_type_display',
+            'user',
+            'user_email',
+            'user_name',
+            'is_read',
+            'is_archived',
             'created_at',
             'updated_at',
         ]
         read_only_fields = [
             'id',
-            'created_by',
-            'created_by_email',
-            'created_by_name',
+            'user',
+            'user_email',
+            'user_name',
+            'notification_type_display',
             'created_at',
             'updated_at',
         ]
