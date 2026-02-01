@@ -22,113 +22,37 @@ logger = logging.getLogger("users.tasks")
 )
 def send_scheduled_notification(self, notification_id: int):
     """
-    Celery task to send a scheduled notification to the specified recipient group.
-    This task is triggered by Celery Beat at the scheduled_at datetime.
+    Celery task to send a notification.
     
     Args:
-        notification_id: The ID of the scheduled Notification object
+        notification_id: The ID of the Notification object
     """
     try:
         notification = Notification.objects.get(id=notification_id)
 
         logger.info(
-            f"[ScheduledNotificationTask] Processing scheduled notification {notification_id}: "
-            f"{notification.title} for {notification.recipient_type}"
+            f"[NotificationTask] Processing notification {notification_id}: {notification.title}"
         )
 
-        # Only process if status is still 'Scheduled'
-        if notification.status != 'Scheduled':
-            logger.warning(
-                f"[ScheduledNotificationTask] Notification {notification_id} "
-                f"status is '{notification.status}', skipping."
-            )
-            return {"status": "skipped", "reason": "notification_not_scheduled"}
-
-        # Determine recipients based on recipient_type
-        recipients = _get_recipients_by_type(notification.recipient_type)
-
-        # Create individual notifications for each recipient
-        notifications_to_create = [
-            Notification(
-                recipient=recipient,
-                title=notification.title,
-                message=notification.message,
-                status='Sent',
-                created_by=notification.created_by,
-                created_at=timezone.now()
-            )
-            for recipient in recipients
-        ]
-
-        if notifications_to_create:
-            Notification.objects.bulk_create(notifications_to_create, batch_size=1000)
-            logger.info(
-                f"[ScheduledNotificationTask] Successfully sent {len(notifications_to_create)} "
-                f"notifications to {notification.recipient_type}"
-            )
-        else:
-            logger.warning(
-                f"[ScheduledNotificationTask] No recipients found for {notification.recipient_type}"
-            )
-
-        # Update the broadcast notification status to 'Sent'
-        notification.status = 'Sent'
+        # Mark notification as read after some processing
+        notification.was_sent_websocket = True
         notification.save()
 
         return {
             "status": "success",
             "notification_id": notification_id,
-            "recipients_count": len(notifications_to_create)
         }
 
     except Notification.DoesNotExist:
-        logger.warning(f"[ScheduledNotificationTask] Notification with id {notification_id} not found.")
+        logger.warning(f"[NotificationTask] Notification with id {notification_id} not found.")
         return {"status": "failed", "reason": "notification_not_found"}
 
     except Exception as e:
         logger.error(
-            f"[ScheduledNotificationTask] Failed for notification {notification_id} "
+            f"[NotificationTask] Failed for notification {notification_id} "
             f"(attempt {self.request.retries}): {str(e)}"
         )
         raise self.retry(exc=e)
-
-
-def _get_recipients_by_type(recipient_type: str):
-    """
-    Helper function to get recipients based on the recipient_type.
-
-    Args:
-        recipient_type: One of 'ALL', 'USERS', or 'VENDORS'
-
-    Returns:
-        QuerySet of CustomUser objects
-    """
-    if recipient_type == 'ALL':
-        # Send to all active users
-        return CustomUser.objects.filter(is_active=True, status='ACTIVE')
-
-    elif recipient_type == 'USERS':
-        # Send to all customers (non-vendor, non-admin users)
-        return CustomUser.objects.filter(
-            is_active=True,
-            status='ACTIVE',
-            role=CustomUser.Role.CUSTOMER
-        )
-
-    elif recipient_type == 'VENDORS':
-        # Send to all approved vendors
-        vendor_user_ids = Vendor.objects.filter(
-            vendor_status='approved'
-        ).values_list('user_id', flat=True)
-        return CustomUser.objects.filter(
-            uuid__in=vendor_user_ids,
-            is_active=True,
-            status='ACTIVE'
-        )
-
-    else:
-        logger.warning(f"Unknown recipient_type: {recipient_type}")
-        return CustomUser.objects.none()
 
 
 @shared_task(

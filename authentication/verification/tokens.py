@@ -19,12 +19,19 @@ class TokenVerifier:
 
             # Check if token is valid
             if default_token_generator.check_token(user, token):
+                logger.info(f"Token verification successful for user: {user.email}")
                 return True, user, None
             
             else:
-                logger.warning(f"Invalid token for user: {user.email}")
-                return False, None, "Invalid verification token"
+                logger.warning(f"Invalid token for user: {user.email} - Token may be expired or tampered with")
+                return False, None, "Invalid or expired verification token"
             
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist) as e:
+        except User.DoesNotExist as e:
+            logger.error(f"Token verification error: User not found for uid {uidb64}")
+            return False, None, "Invalid verification link - user not found"
+        except (TypeError, ValueError, OverflowError) as e:
+            logger.error(f"Token verification error - Invalid uid format: {str(e)}")
+            return False, None, "Invalid verification link format"
+        except Exception as e:
             logger.error(f"Token verification error: {str(e)}")
             return False, None, "Invalid verification link"

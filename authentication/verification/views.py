@@ -185,10 +185,12 @@ class PasswordRestView(BaseAPIView):
         try:
             email = request.data.get('email')
             if not email:
+                logger.warning("Password reset requested without email")
                 return Response(
                     standardized_response(success=False, error="Email is required"),
                     status=status.HTTP_400_BAD_REQUEST
                 )
+            logger.info(f"Password reset requested for email: {email}")
             success, response_data, status_code = PasswordResetService.request_reset(email=email)
             return Response(standardized_response(**response_data), status=status_code)
         except Exception as e:
@@ -224,19 +226,21 @@ class ConfirmPasswordResetView(BaseAPIView):
             new_password = request.data.get('new_password')
 
             if not uidb64 or not token or not new_password:
+                logger.warning(f"Missing required fields for password reset - uid: {bool(uidb64)}, token: {bool(token)}, password: {bool(new_password)}")
                 return Response(
-                    standardized_response(success=False, error="Missing required fields"),
+                    standardized_response(success=False, error="Missing required fields (uid, token, new_password)"),
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
             success, response_data, status_code = PasswordResetService.confirm_reset(
                 uidb64=uidb64, token=token, new_password=new_password
             )
+            logger.info(f"Password reset attempt: success={success}, error={response_data.get('error')}")
             return Response(standardized_response(**response_data), status=status_code)
         except Exception as e:
             logger.error(f"Password reset confirmation error: {str(e)}")
             logger.error(traceback.format_exc())
             return Response(
-                standardized_response(success=False, error="Password reset failed. Please try again."),
+                standardized_response(success=False, error=f"Password reset failed: {str(e)}"),
                 status=status.HTTP_400_BAD_REQUEST
             )

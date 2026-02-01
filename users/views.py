@@ -1295,7 +1295,7 @@ class VendorViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"])
     def notifications(self, request):
         notifications = Notification.objects.filter(
-            recipient=request.user
+            user=request.user
         ).order_by("-created_at")
 
         serializer = NotificationSerializer(notifications, many=True)
@@ -3118,7 +3118,7 @@ class DeliveryAgentViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         
-        notifications = Notification.objects.filter(recipient=agent.user).order_by('-created_at')[:50]
+        notifications = Notification.objects.filter(user=agent.user).order_by('-created_at')[:50]
         serializer = NotificationSerializer(notifications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -3345,7 +3345,7 @@ class NotificationsListView(BaseAPIView, generics.ListAPIView):
     def get_queryset(self):
         """Get notifications for current user, ordered by most recent"""
         return Notification.objects.filter(
-            recipient=self.request.user
+            user=self.request.user
         ).order_by('-created_at')
 
     @extend_schema(
@@ -3390,7 +3390,7 @@ class NotificationDetailView(BaseAPIView):
         try:
             notification = Notification.objects.get(
                 id=notification_id,
-                recipient=self.request.user
+                user=self.request.user
             )
             return notification
         except Notification.DoesNotExist:
@@ -3495,7 +3495,7 @@ class UnreadNotificationsCountView(BaseAPIView):
     def get(self, request):
         """Get count of unread notifications"""
         unread_count = Notification.objects.filter(
-            recipient=request.user,
+            user=request.user,
             is_read=False
         ).count()
         
@@ -3534,7 +3534,7 @@ class MarkAllNotificationsReadView(BaseAPIView):
     def post(self, request):
         """Mark all notifications as read"""
         unread_notifications = Notification.objects.filter(
-            recipient=request.user,
+            user=request.user,
             is_read=False
         )
         
@@ -3562,19 +3562,12 @@ class AdminNotificationViewSet(AdminBaseViewSet):
     @swagger_auto_schema(
         operation_id="admin_create_notification",
         operation_summary="Create Admin Notification",
-        operation_description="""
-        Create a notification with three possible actions:
-        1. Send Immediately: status='Sent', scheduled_at=null
-        2. Save as Draft: status='Draft'
-        3. Schedule for Later: status='Scheduled', scheduled_at='2026-01-25T10:00:00Z'
-        
-        Recipients can be USERS, VENDORS, or ALL.
-        """,
+        operation_description="Create a notification for a specific user with priority and category.",
         tags=["Admin Notifications"],
         request_body=AdminNotificationCreateSerializer,
         responses={
             201: openapi.Response(
-                "Notification created/scheduled successfully",
+                "Notification created successfully",
                 AdminNotificationCreateSerializer()
             ),
             400: openapi.Response("Invalid data or validation error"),
@@ -3583,7 +3576,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         security=[{"Bearer": []}],
     )
     def create(self, request):
-        """Create a notification (send, draft, or schedule)"""
+        """Create a notification for a user"""
         admin = self.get_admin(request)
         if not admin:
             return Response({"message": "Access denied"}, status=403)
@@ -3595,95 +3588,22 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         serializer.is_valid(raise_exception=True)
         notification = serializer.save()
 
-        # Handle different notification statuses
-        status_code = status.HTTP_201_CREATED
-        message = "Notification created successfully"
-
-        if notification.status == 'Sent':
-            # Send notification immediately to recipients
-            self._send_notification_to_recipients(notification)
-            message = "Notification sent to recipients"
-
-        elif notification.status == 'Draft':
-            message = "Notification saved as draft"
-
-        elif notification.status == 'Scheduled':
-            # Schedule the notification to be sent later using Celery
-            from users.tasks import send_scheduled_notification
-            send_scheduled_notification.apply_async(
-                args=[notification.id],
-                eta=notification.scheduled_at
-            )
-            message = f"Notification scheduled for {notification.scheduled_at}"
-
         return Response({
             "success": True,
             "data": AdminNotificationCreateSerializer(notification).data,
-            "message": message
-        }, status=status_code)
-
-    def _send_notification_to_recipients(self, notification):
-        """
-        Send notification immediately to the specified recipient group.
-        Creates individual Notification records for each recipient.
-        """
-        from users.models import Vendor
-        from authentication.models import CustomUser
-
-        recipients = []
-
-        if notification.recipient_type == 'ALL':
-            # Send to all active users
-            recipients = CustomUser.objects.filter(is_active=True, status='ACTIVE')
-
-        elif notification.recipient_type == 'USERS':
-            # Send to all customers (non-vendor, non-admin users)
-            recipients = CustomUser.objects.filter(
-                is_active=True,
-                status='ACTIVE',
-                role=CustomUser.Role.CUSTOMER
-            )
-
-        elif notification.recipient_type == 'VENDORS':
-            # Send to all vendors
-            vendor_user_ids = Vendor.objects.filter(
-                vendor_status='approved'
-            ).values_list('user_id', flat=True)
-            recipients = CustomUser.objects.filter(
-                uuid__in=vendor_user_ids,
-                is_active=True,
-                status='ACTIVE'
-            )
-
-        # Create individual notifications for each recipient
-        notifications_to_create = [
-            Notification(
-                recipient=recipient,
-                title=notification.title,
-                message=notification.message,
-                status='Sent',
-                created_at=timezone.now()
-            )
-            for recipient in recipients
-        ]
-
-        if notifications_to_create:
-            Notification.objects.bulk_create(notifications_to_create, batch_size=1000)
-            logger.info(
-                f"[AdminNotification] Sent to {len(notifications_to_create)} "
-                f"recipients (type: {notification.recipient_type})"
-            )
+            "message": "Notification created successfully"
+        }, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
         operation_id="admin_list_notifications",
         operation_summary="List Admin Notifications",
-        operation_description="Retrieve all admin broadcast notifications with their status and scheduling details.",
+        operation_description="Retrieve all admin notifications.",
         tags=["Admin Notifications"],
         manual_parameters=[
             openapi.Parameter(
                 'status',
                 openapi.IN_QUERY,
-                description="Filter by notification status: Sent, Draft, or Scheduled",
+                description="Filter by notification category",
                 type=openapi.TYPE_STRING
             ),
         ],
@@ -3698,20 +3618,18 @@ class AdminNotificationViewSet(AdminBaseViewSet):
     )
     @action(detail=False, methods=["get"])
     def list_notifications(self, request):
-        """List all admin broadcast notifications"""
+        """List all notifications"""
         admin = self.get_admin(request)
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        # Filter broadcast notifications (those with recipient_type set)
-        notifications = Notification.objects.filter(
-            recipient_type__isnull=False
-        ).select_related('created_by').order_by('-created_at')
+        # Get all notifications
+        notifications = Notification.objects.all().select_related('user').order_by('-created_at')
 
-        # Filter by status if provided
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            notifications = notifications.filter(status=status_filter)
+        # Filter by category if provided
+        category_filter = request.query_params.get('category')
+        if category_filter:
+            notifications = notifications.filter(category=category_filter)
 
         serializer = AdminNotificationListSerializer(notifications, many=True)
 

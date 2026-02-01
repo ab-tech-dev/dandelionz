@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def send_order_notification(
-    recipient: 'User',
+    user: 'User',
     title: str,
     message: str,
     order_id: Optional[str] = None,
@@ -39,7 +39,7 @@ def send_order_notification(
     Send order-related notification to a user.
     
     Args:
-        recipient: User to receive notification
+        user: User to receive notification
         title: Notification title
         message: Notification message
         order_id: Order ID for context (optional)
@@ -53,7 +53,7 @@ def send_order_notification(
     """
     try:
         notification_data = {
-            'recipient': recipient,
+            'user': user,
             'title': title,
             'message': message,
             'send_email': send_email,
@@ -70,12 +70,12 @@ def send_order_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send order notification to {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send order notification to {user.email}: {str(e)}", exc_info=True)
         return False
 
 
 def send_product_notification(
-    recipient: 'User',
+    user: 'User',
     title: str,
     message: str,
     product_name: Optional[str] = None,
@@ -88,7 +88,7 @@ def send_product_notification(
     Send product-related notification to a vendor.
     
     Args:
-        recipient: Vendor user to receive notification
+        user: Vendor user to receive notification
         title: Notification title
         message: Notification message
         product_name: Product name for context (optional)
@@ -102,7 +102,7 @@ def send_product_notification(
     """
     try:
         notification_data = {
-            'recipient': recipient,
+            'user': user,
             'title': title,
             'message': message,
             'send_email': send_email,
@@ -119,12 +119,12 @@ def send_product_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send product notification to {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send product notification to {user.email}: {str(e)}", exc_info=True)
         return False
 
 
 def send_payment_notification(
-    recipient: 'User',
+    user: 'User',
     title: str,
     message: str,
     transaction_id: Optional[str] = None,
@@ -138,7 +138,7 @@ def send_payment_notification(
     Send payment/transaction-related notification.
     
     Args:
-        recipient: User to receive notification
+        user: User to receive notification
         title: Notification title
         message: Notification message
         transaction_id: Transaction ID for context
@@ -153,7 +153,7 @@ def send_payment_notification(
     """
     try:
         notification_data = {
-            'recipient': recipient,
+            'user': user,
             'title': title,
             'message': message,
             'send_email': send_email,
@@ -174,12 +174,11 @@ def send_payment_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send payment notification to {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send payment notification to {user.email}: {str(e)}", exc_info=True)
         return False
 
-
 def send_delivery_notification(
-    recipient: 'User',
+    user: 'User',
     title: str,
     message: str,
     order_id: Optional[str] = None,
@@ -192,7 +191,7 @@ def send_delivery_notification(
     Send delivery-related notification to delivery agent.
     
     Args:
-        recipient: Delivery agent user
+        user: Delivery agent user
         title: Notification title
         message: Notification message
         order_id: Order ID for context
@@ -206,7 +205,7 @@ def send_delivery_notification(
     """
     try:
         notification_data = {
-            'recipient': recipient,
+            'user': user,
             'title': title,
             'message': message,
             'send_email': send_email,
@@ -223,12 +222,12 @@ def send_delivery_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send delivery notification to {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send delivery notification to {user.email}: {str(e)}", exc_info=True)
         return False
 
 
 def send_user_notification(
-    recipient: 'User',
+    user: 'User',
     title: str,
     message: str,
     action_url: Optional[str] = None,
@@ -240,7 +239,7 @@ def send_user_notification(
     Send generic user notification.
     
     Args:
-        recipient: User to receive notification
+        user: User to receive notification
         title: Notification title
         message: Notification message
         action_url: URL to navigate to (optional)
@@ -253,7 +252,7 @@ def send_user_notification(
     """
     try:
         notification_data = {
-            'recipient': recipient,
+            'user': user,
             'title': title,
             'message': message,
             'send_email': send_email,
@@ -267,7 +266,7 @@ def send_user_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send user notification to {recipient.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send user notification to {user.email}: {str(e)}", exc_info=True)
         return False
 
 
@@ -301,7 +300,7 @@ def send_bulk_notification(
         for user in users:
             try:
                 notification_data = {
-                    'recipient': user,
+                    'user': user,
                     'title': title,
                     'message': message,
                     'send_email': send_email,

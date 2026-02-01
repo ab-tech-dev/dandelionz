@@ -61,13 +61,9 @@ def send_password_reset_email_task(self, user_uuid: str):
     try:
         # user_uuid is a string representation of the UUID
         user = User.objects.get(uuid=user_uuid)
-        if user.is_verified:
-            logger.info(f"[PasswordResetTask] Sending password reset email to: {user.email}")
-            EmailService.send_password_reset_email(user)
-            return {"status": "success", "email": user.email, "user_uuid": str(user.uuid)}
-        else:
-            logger.warning(f"[PasswordResetTask] Skipped: unverified user {user.email}")
-            return {"status": "skipped", "reason": "user_not_verified"}
+        logger.info(f"[PasswordResetTask] Sending password reset email to: {user.email}")
+        EmailService.send_password_reset_email(user)
+        return {"status": "success", "email": user.email, "user_uuid": str(user.uuid)}
 
     except User.DoesNotExist:
         logger.warning(f"[PasswordResetTask] User with uuid {user_uuid} not found.")

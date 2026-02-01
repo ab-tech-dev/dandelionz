@@ -24,47 +24,75 @@ logger = logging.getLogger(__name__)
 class Base64ImageField(serializers.Field):
     """
     A custom serializer field for handling base64 encoded image uploads.
-    Converts base64 to Cloudinary URL.
+    Converts base64 to Cloudinary and stores the public_id.
     """
     def to_representation(self, value):
-        """Return the Cloudinary URL"""
+        """Return the Cloudinary public_id as-is (UserBaseSerializer will format it as URL)"""
         if value:
             return str(value)
         return None
 
     def to_internal_value(self, data):
         """
-        Convert base64 encoded image to Cloudinary URL
+        Convert base64 encoded image to Cloudinary and return public_id
         Expects data in format: 'data:image/jpeg;base64,<base64_string>'
         or just the base64 string
         """
         if not data:
             return None
 
-        # Check if it's already a Cloudinary reference
-        if isinstance(data, str) and (data.startswith('http') or '/' in data):
-            return data
+        # Check if it's already a Cloudinary reference or URL
+        if isinstance(data, str):
+            if data.startswith('http'):
+                # It's already a URL, can't process
+                return None
+            if data.startswith('data:') is False and len(data) > 50:
+                # Looks like it might be a public_id already, return as-is
+                return data
 
         try:
+            base64_str = None
+            ext = 'jpg'
+            
             # Handle data URL format
             if isinstance(data, str) and data.startswith('data:'):
                 # Extract base64 string from data URL
-                header, base64_str = data.split(',', 1)
-                # Extract file extension from header
+                parts = data.split(',', 1)
+                if len(parts) != 2:
+                    raise ValueError("Invalid data URL format")
+                
+                header, base64_str = parts
+                # Extract file extension from header (e.g., 'data:image/jpeg;base64,')
                 if 'image/' in header:
-                    ext = header.split('/')[-1].split(';')[0]
+                    ext_match = header.split('/')
+                    if len(ext_match) > 1:
+                        ext = ext_match[1].split(';')[0]
                 else:
                     ext = 'jpg'
-            else:
+            elif isinstance(data, str):
                 # Assume it's just base64 string
                 base64_str = data
                 ext = 'jpg'
+            else:
+                raise ValueError("Image data must be a base64 string")
+
+            if not base64_str:
+                raise ValueError("No base64 data found")
 
             # Decode base64
-            image_data = base64.b64decode(base64_str)
+            try:
+                image_data = base64.b64decode(base64_str, validate=True)
+            except Exception as e:
+                raise ValueError(f"Invalid base64 encoding: {str(e)}")
+            
+            if len(image_data) == 0:
+                raise ValueError("Image data is empty")
             
             # Create a BytesIO object for Cloudinary
             image_file = io.BytesIO(image_data)
+            image_file.name = f"profile_{uuid.uuid4().hex[:12]}.{ext}"
+            
+            logger.info(f"Uploading image to Cloudinary: {image_file.name}, size: {len(image_data)} bytes")
             
             # Upload to Cloudinary
             response = cloudinary.uploader.upload(
@@ -72,15 +100,30 @@ class Base64ImageField(serializers.Field):
                 resource_type='auto',
                 folder='dandelionz/profiles',
                 public_id=f"profile_{uuid.uuid4().hex[:12]}",
-                overwrite=False
+                overwrite=False,
+                timeout=60
             )
             
-            # Return the public ID (Cloudinary's identifier)
-            return response.get('public_id')
+            # Check for upload errors
+            if 'error' in response:
+                error_msg = response['error'].get('message', 'Unknown upload error') if isinstance(response['error'], dict) else str(response['error'])
+                logger.error(f"Cloudinary upload error: {error_msg}")
+                raise ValueError(f"Cloudinary upload failed: {error_msg}")
+            
+            # Return the public_id that CloudinaryField will store
+            public_id = response.get('public_id')
+            if not public_id:
+                raise ValueError("No public_id returned from Cloudinary")
+            
+            logger.info(f"Successfully uploaded image to Cloudinary: {public_id}")
+            return public_id
         
+        except ValueError as ve:
+            logger.error(f"Validation error uploading base64 image: {str(ve)}")
+            raise serializers.ValidationError(str(ve))
         except Exception as e:
-            logger.error(f"Error uploading base64 image: {str(e)}")
-            raise serializers.ValidationError(f"Invalid image data: {str(e)}")
+            logger.error(f"Unexpected error uploading base64 image: {str(e)}", exc_info=True)
+            raise serializers.ValidationError(f"Failed to process image: {str(e)}")
 
 
 # =====================================================
@@ -337,31 +380,36 @@ class VendorApprovalSerializer(serializers.Serializer):
 
 # users/serializers.py
 class NotificationSerializer(serializers.ModelSerializer):
-    recipient_email = serializers.EmailField(
-        source='recipient.email',
-        read_only=True
+    user_email = serializers.EmailField(
+        source='user.email',
+        read_only=True,
+        allow_null=True
     )
-    recipient_name = serializers.CharField(
-        source='recipient.full_name',
-        read_only=True
+    user_name = serializers.CharField(
+        source='user.full_name',
+        read_only=True,
+        allow_null=True
     )
 
     class Meta:
         model = Notification
         fields = [
             'id',
-            'recipient',
-            'recipient_email',
-            'recipient_name',
+            'user',
+            'user_email',
+            'user_name',
             'title',
             'message',
+            'priority',
+            'category',
             'is_read',
+            'is_archived',
             'created_at',
         ]
         read_only_fields = [
             'id',
-            'recipient_email',
-            'recipient_name',
+            'user_email',
+            'user_name',
             'created_at',
         ]
 
@@ -369,62 +417,51 @@ class NotificationSerializer(serializers.ModelSerializer):
 class AdminNotificationCreateSerializer(serializers.ModelSerializer):
     """
     Serializer for creating admin broadcast notifications.
-    Handles sending, drafting, or scheduling notifications to specific recipient groups.
+    Handles creating notifications with metadata for specific recipient groups.
     """
     
     class Meta:
         model = Notification
         fields = [
             'id',
+            'user',
+            'notification_type',
             'title',
             'message',
-            'status',
-            'scheduled_at',
+            'description',
+            'priority',
+            'category',
+            'action_url',
+            'action_text',
+            'metadata',
+            'expires_at',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
 
-    def validate_status(self, value):
-        """Validate that status is one of the allowed choices"""
-        valid_statuses = ['Sent', 'Draft', 'Scheduled']
-        if value not in valid_statuses:
+    def validate_priority(self, value):
+        """Validate that priority is one of the allowed choices"""
+        valid_priorities = ['low', 'normal', 'high', 'urgent']
+        if value not in valid_priorities:
             raise serializers.ValidationError(
-                f"status must be one of {valid_statuses}"
+                f"priority must be one of {valid_priorities}"
             )
         return value
 
     def validate(self, data):
         """
         Cross-field validation:
-        - If status is 'Scheduled', scheduled_at must be provided
-        - scheduled_at must be in the future
+        - expires_at must be in the future if provided
         """
-        status = data.get('status')
-        scheduled_at = data.get('scheduled_at')
+        from django.utils import timezone
         
-        if status == 'Scheduled':
-            if not scheduled_at:
-                raise serializers.ValidationError(
-                    "scheduled_at is required when status is 'Scheduled'"
-                )
-            
-            from django.utils import timezone
-            if scheduled_at <= timezone.now():
-                raise serializers.ValidationError(
-                    "scheduled_at must be a future date and time"
-                )
+        expires_at = data.get('expires_at')
+        if expires_at and expires_at <= timezone.now():
+            raise serializers.ValidationError(
+                "expires_at must be a future date and time"
+            )
         
         return data
-
-    def create(self, validated_data):
-        """
-        Create the notification and set created_by to the current user (admin).
-        """
-        request = self.context.get('request')
-        if request and request.user:
-            validated_data['created_by'] = request.user
-        
-        return super().create(validated_data)
 
 
 class AdminNotificationListSerializer(serializers.ModelSerializer):

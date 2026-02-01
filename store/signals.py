@@ -58,7 +58,7 @@ def _send_notification_safely(recipient, title, message):
     
     try:
         send_product_notification(
-            recipient=recipient,
+            user=recipient,
             title=title,
             message=message,
             send_email=True,
