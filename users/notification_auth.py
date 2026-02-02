@@ -5,6 +5,7 @@ Notification authentication and middleware utilities
 import logging
 from typing import Optional, Dict, Any
 from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth import get_user_model
 from django.db import close_old_connections
 from channels.db import database_sync_to_async
 from channels.middleware import BaseMiddleware
@@ -14,7 +15,7 @@ from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
-User = settings.AUTH_USER_MODEL
+User = get_user_model()
 
 
 @database_sync_to_async
@@ -30,18 +31,27 @@ def get_user(token: str) -> Optional[User]:
     """
     try:
         if not token:
+            logger.debug("No token provided")
             return None
         
         access_token = AccessToken(token)
         user_id = access_token['user_uuid']
+        logger.debug(f"Token decoded, extracting user with uuid: {user_id}")
         user = User.objects.get(uuid=user_id)
+        logger.info(f"User retrieved successfully: {user.email if hasattr(user, 'email') else user.uuid}")
         return user
     
-    except (InvalidToken, TokenError, User.DoesNotExist) as e:
-        logger.warning(f"Token validation failed: {str(e)}")
+    except InvalidToken as e:
+        logger.warning(f"Invalid token format: {str(e)}")
+        return None
+    except TokenError as e:
+        logger.warning(f"Token error: {str(e)}")
+        return None
+    except User.DoesNotExist as e:
+        logger.warning(f"User not found for token: {str(e)}")
         return None
     except Exception as e:
-        logger.error(f"Error extracting user from token: {str(e)}")
+        logger.error(f"Error extracting user from token: {str(e)}", exc_info=True)
         return None
 
 
