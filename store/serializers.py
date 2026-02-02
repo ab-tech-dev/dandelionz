@@ -723,3 +723,8 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         }
         return status_map.get(obj.approval_status, obj.approval_status.upper())
 
+
+# ---------------------------
+# Alias for ProductApprovalSerializer (used in swagger schemas)
+# ---------------------------
+ProductApprovalSerializer = PendingProductsSerializer
