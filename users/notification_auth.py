@@ -60,40 +60,56 @@ class JwtAuthMiddleware(BaseMiddleware):
             receive: ASGI receive channel
             send: ASGI send channel
         """
-        close_old_connections()
-        
-        # Try Django session auth first
-        if 'user' in scope and scope['user'].is_authenticated:
-            return await super().__call__(scope, receive, send)
-        
-        # Try JWT token from query string
-        query_string = scope.get('query_string', b'').decode()
-        token = None
-        
-        # Extract token from query params: ?token=xxx
-        if 'token=' in query_string:
-            try:
-                token = query_string.split('token=')[1].split('&')[0]
-            except IndexError:
-                pass
-        
-        # Extract token from headers if present
-        if not token:
-            headers = dict(scope.get('headers', []))
-            auth_header = headers.get(b'authorization', b'').decode()
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
-        
-        if token:
-            user = await get_user(token)
-            if user:
-                scope['user'] = user
+        try:
+            close_old_connections()
+            
+            client_addr = scope.get('client', ('unknown', 'unknown'))
+            logger.info(f"JwtAuthMiddleware processing connection from {client_addr[0]}:{client_addr[1]}")
+            
+            # Try Django session auth first
+            if 'user' in scope and scope['user'].is_authenticated:
+                logger.info(f"Using Django session auth for {client_addr[0]}")
+                return await super().__call__(scope, receive, send)
+            
+            # Try JWT token from query string
+            query_string = scope.get('query_string', b'').decode()
+            token = None
+            
+            # Extract token from query params: ?token=xxx
+            if 'token=' in query_string:
+                try:
+                    token = query_string.split('token=')[1].split('&')[0]
+                    logger.debug(f"Extracted token from query string for {client_addr[0]}")
+                except IndexError:
+                    logger.warning(f"Failed to parse token from query string for {client_addr[0]}")
+                    pass
+            
+            # Extract token from headers if present
+            if not token:
+                headers = dict(scope.get('headers', []))
+                auth_header = headers.get(b'authorization', b'').decode()
+                if auth_header.startswith('Bearer '):
+                    token = auth_header[7:]
+                    logger.debug(f"Extracted token from Authorization header for {client_addr[0]}")
+            
+            if token:
+                logger.debug(f"Attempting to validate token for {client_addr[0]}")
+                user = await get_user(token)
+                if user:
+                    scope['user'] = user
+                    logger.info(f"Successfully authenticated user {user.email if hasattr(user, 'email') else user.uuid} from {client_addr[0]}")
+                else:
+                    scope['user'] = AnonymousUser()
+                    logger.warning(f"Token validation failed for {client_addr[0]}, using AnonymousUser")
             else:
                 scope['user'] = AnonymousUser()
-        else:
-            scope['user'] = AnonymousUser()
-        
-        return await super().__call__(scope, receive, send)
+                logger.info(f"No token provided for {client_addr[0]}, using AnonymousUser")
+            
+            return await super().__call__(scope, receive, send)
+            
+        except Exception as e:
+            logger.error(f"Error in JwtAuthMiddleware: {str(e)}", exc_info=True)
+            raise
 
 
 def get_jwt_auth_middleware():
