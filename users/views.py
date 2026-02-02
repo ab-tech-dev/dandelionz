@@ -23,6 +23,7 @@ from users.serializers import (
     AdminProductActionResponseSerializer,
     AdminProductUpdateRequestSerializer,
     AdminProductListSerializer,
+    AdminProductDetailSerializer,
     AdminVendorListSerializer,
     AdminVendorDetailSerializer,
     AdminVendorApprovalSerializer,
@@ -2077,6 +2078,40 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
 
         products = Product.objects.select_related("store").all()
         serializer = AdminProductListSerializer(products, many=True)
+        return Response({"success": True, "data": serializer.data})
+
+    @swagger_auto_schema(
+        operation_id="admin_product_detail",
+        operation_summary="Get Product Details",
+        operation_description="Retrieve detailed information about a specific product including all pricing, inventory, and approval details.",
+        tags=["Marketplace Management"],
+        manual_parameters=[openapi.Parameter("slug", openapi.IN_QUERY, description="Product slug identifier", type=openapi.TYPE_STRING, required=True)],
+        responses={
+            200: openapi.Response(
+                "Product details retrieved successfully",
+                AdminProductDetailSerializer()
+            ),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def product_detail(self, request):
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        slug = request.query_params.get('slug')
+        if not slug:
+            return Response({"success": False, "message": "Product slug is required"}, status=400)
+
+        try:
+            product = Product.objects.select_related("store", "category", "approved_by").get(slug=slug)
+        except Product.DoesNotExist:
+            return Response({"success": False, "message": "Product not found"}, status=404)
+
+        serializer = AdminProductDetailSerializer(product)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(

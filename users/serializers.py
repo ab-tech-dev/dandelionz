@@ -705,12 +705,70 @@ class AdminOrderActionResponseSerializer(serializers.Serializer):
 from rest_framework import serializers
 
 class AdminProductListSerializer(serializers.Serializer):
+    """
+    Serializer for admin to view all marketplace products with complete information.
+    Includes all product details, pricing, inventory, and approval status.
+    """
+    id = serializers.IntegerField()
     slug = serializers.SlugField()
     name = serializers.CharField()
+    description = serializers.CharField()
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    discount = serializers.IntegerField()
+    stock = serializers.IntegerField()
+    brand = serializers.CharField()
+    tags = serializers.CharField()
+    variants = serializers.JSONField(allow_null=True)
     store = serializers.CharField(source='store.store_name')
+    store_id = serializers.IntegerField(source='store.id')
+    category = serializers.CharField(source='category.name', allow_null=True)
     approval_status = serializers.CharField()
     publish_status = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+
+class AdminProductDetailSerializer(serializers.Serializer):
+    """
+    Serializer for admin to view detailed product information including all attributes,
+    pricing, discounts, inventory, vendor details, and approval information.
+    """
+    id = serializers.IntegerField()
+    uuid = serializers.UUIDField()
+    slug = serializers.SlugField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    discount = serializers.IntegerField()
+    stock = serializers.IntegerField()
+    brand = serializers.CharField()
+    tags = serializers.CharField()
+    variants = serializers.JSONField(allow_null=True)
+    store = serializers.CharField(source='store.store_name')
+    store_id = serializers.IntegerField(source='store.id')
+    store_email = serializers.CharField(source='store.user.email')
+    category = serializers.CharField(source='category.name', allow_null=True)
+    approval_status = serializers.CharField()
+    publish_status = serializers.CharField()
+    approved_by = serializers.CharField(source='approved_by.email', allow_null=True)
+    approval_date = serializers.DateTimeField(allow_null=True)
+    rejection_reason = serializers.CharField(allow_null=True)
+    in_stock = serializers.SerializerMethodField()
+    final_price = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+
+    def get_in_stock(self, obj):
+        """Check if product is in stock"""
+        return obj.stock > 0 if obj.stock else False
+
+    def get_final_price(self, obj):
+        """Calculate final price after discount"""
+        if not obj.price:
+            return None
+        from decimal import Decimal
+        discount_amount = (obj.price * obj.discount) / Decimal('100')
+        return obj.price - discount_amount
+
 
 class AdminProductUpdateRequestSerializer(serializers.Serializer):
     product_slug = serializers.SlugField()

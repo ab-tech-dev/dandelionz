@@ -381,6 +381,7 @@ class PendingProductsSerializer(CloudinarySerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     videos = ProductVideoSerializer(many=True, read_only=True)
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
+    rating = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -389,7 +390,7 @@ class PendingProductsSerializer(CloudinarySerializer):
             'description', 'category', 'category_name', 'price', 'discount', 'stock', 
             'brand', 'tags', 'variants', 'image', 'images', 'videos', 'in_stock', 'uploaded_date',
             'publish_status', 'approval_status', 'approved_by', 'approved_by_email', 'approval_date', 
-            'rejection_reason', 'created_at', 'updated_at'
+            'rejection_reason', 'created_at', 'updated_at', 'rating'
         ]
         read_only_fields = [
             'id', 'publish_status', 'approval_status', 'approved_by', 'approval_date', 
@@ -402,6 +403,12 @@ class PendingProductsSerializer(CloudinarySerializer):
         if main_image:
             return self.get_cloudinary_url(main_image.image)
         return None
+
+    def get_rating(self, obj):
+        """Calculate average rating from reviews"""
+        from django.db.models import Avg
+        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+        return round(avg_rating, 2) if avg_rating else None
 
 
 class UpdateProductSerializer(CloudinarySerializer):
@@ -684,12 +691,13 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
     videos = ProductVideoSerializer(many=True, read_only=True)
     uploadDate = serializers.DateTimeField(source='created_at', read_only=True)
     status = serializers.SerializerMethodField()
+    rating = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'slug', 'name', 'description', 'price', 'category',
-            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status'
+            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status', 'rating'
         ]
         read_only_fields = fields
 
@@ -710,6 +718,12 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         if main_image:
             return f"{CLOUDINARY_BASE_URL}{main_image.image}"
         return None
+
+    def get_rating(self, obj):
+        """Calculate average rating from reviews"""
+        from django.db.models import Avg
+        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+        return round(avg_rating, 2) if avg_rating else None
 
     def get_status(self, obj):
         """

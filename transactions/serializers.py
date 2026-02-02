@@ -9,11 +9,19 @@ from django.utils import timezone
 
 
 class ProductSerializer(serializers.ModelSerializer):
+    rating = serializers.SerializerMethodField()
+
     class Meta:
         model = Product
-        fields = ['id', 'name', 'price', 'description', 'tags', 'brand', 'variants', 'discount']
+        fields = ['id', 'name', 'price', 'description', 'tags', 'brand', 'variants', 'discount', 'rating']
         read_only_fields = fields
         ref_name = "TransactionProductSerializer"
+
+    def get_rating(self, obj):
+        """Calculate average rating from reviews"""
+        from django.db.models import Avg
+        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+        return round(avg_rating, 2) if avg_rating else None
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
