@@ -19,7 +19,7 @@ User = get_user_model()
 
 
 @database_sync_to_async
-def get_user(token: str) -> Optional['User']:
+def get_user(token: str) -> Optional[User]:
     """
     Extract user from JWT token
     

@@ -96,24 +96,31 @@ class AdminDashboardOrderStatusHistorySerializer(serializers.ModelSerializer):
 
 class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
     """Lightweight order info for admin list views"""
-    customer_email = serializers.CharField(source='customer.email', read_only=True)
-    full_name = serializers.CharField(source='customer.full_name', read_only=True)
+    customer = serializers.SerializerMethodField()
     current_status = serializers.CharField(source='status', read_only=True)
     
     class Meta:
         model = Order
         fields = [
-            'order_id', 'customer_email', 'full_name', 'current_status', 'total_price',
-            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at'
+            'order_id', 'customer', 'current_status', 'total_price',
+            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at', 'created_at', 'status'
         ]
         read_only_fields = fields
+    
+    def get_customer(self, obj):
+        """Return customer object with necessary details"""
+        if obj.customer:
+            return {
+                'full_name': obj.customer.full_name,
+                'email': obj.customer.email,
+                'phone_number': getattr(obj.customer, 'phone_number', '')
+            }
+        return None
 
 
 class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     """Full order details for admin inspection"""
-    customer_email = serializers.CharField(source='customer.email', read_only=True)
-    full_name = serializers.CharField(source='customer.full_name', read_only=True)
-    customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
+    customer = serializers.SerializerMethodField()
     order_items = AdminDashboardOrderItemSerializer(many=True, read_only=True)
     status_history = AdminDashboardOrderStatusHistorySerializer(many=True, read_only=True)
     current_status = serializers.CharField(source='status', read_only=True)
@@ -121,12 +128,23 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'order_id', 'customer_email', 'full_name', 'customer_phone', 'current_status',
+            'order_id', 'customer', 'current_status',
             'total_price', 'delivery_fee', 'discount', 'payment_status',
-            'tracking_number', 'ordered_at', 'updated_at', 'order_items',
-            'status_history'
+            'tracking_number', 'ordered_at', 'updated_at', 'created_at', 'status',
+            'order_items', 'status_history'
         ]
         read_only_fields = fields
+    
+    def get_customer(self, obj):
+        """Return customer object with all necessary details"""
+        if obj.customer:
+            return {
+                'full_name': obj.customer.full_name,
+                'email': obj.customer.email,
+                'phone_number': getattr(obj.customer, 'phone_number', ''),
+                'uuid': str(obj.customer.uuid) if hasattr(obj.customer, 'uuid') else None
+            }
+        return None
 
 
 class AdminDashboardOrderCancelSerializer(serializers.Serializer):
