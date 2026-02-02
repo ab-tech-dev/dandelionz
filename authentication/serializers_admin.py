@@ -12,33 +12,6 @@ CustomUser = get_user_model()
 
 
 # =====================================================
-# CUSTOM FIELDS
-# =====================================================
-
-class MillisecondDateTimeField(serializers.DateTimeField):
-    """
-    DateTime field that truncates microseconds to milliseconds for JavaScript compatibility.
-    JavaScript's Date object only supports millisecond precision (3 digits),
-    not microsecond precision (6 digits).
-    """
-    def to_representation(self, value):
-        if value is None:
-            return None
-        # Call parent's to_representation first
-        string_value = super().to_representation(value)
-        # Remove microseconds by truncating to milliseconds
-        # Format: 2026-02-01T19:44:28.520029Z -> 2026-02-01T19:44:28.520Z
-        if string_value and '.' in string_value:
-            date_part, ms_part = string_value.rsplit('.', 1)
-            # Keep only first 3 digits of fractional seconds (milliseconds)
-            ms_only = ms_part[:3]
-            if ms_part.endswith('Z'):
-                ms_only += 'Z'
-            string_value = date_part + '.' + ms_only
-        return string_value
-
-
-# =====================================================
 # USER MANAGEMENT SERIALIZERS
 # =====================================================
 
@@ -114,7 +87,6 @@ class AdminDashboardOrderItemSerializer(serializers.ModelSerializer):
 
 class AdminDashboardOrderStatusHistorySerializer(serializers.ModelSerializer):
     admin_email = serializers.CharField(source='admin.email', read_only=True, allow_null=True)
-    changed_at = MillisecondDateTimeField()
     
     class Meta:
         model = OrderStatusHistory
@@ -126,8 +98,6 @@ class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
     """Lightweight order info for admin list views"""
     customer = serializers.SerializerMethodField()
     current_status = serializers.CharField(source='status', read_only=True)
-    ordered_at = MillisecondDateTimeField()
-    updated_at = MillisecondDateTimeField()
     
     class Meta:
         model = Order
@@ -154,8 +124,6 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     order_items = AdminDashboardOrderItemSerializer(many=True, read_only=True)
     status_history = AdminDashboardOrderStatusHistorySerializer(many=True, read_only=True)
     current_status = serializers.CharField(source='status', read_only=True)
-    ordered_at = MillisecondDateTimeField()
-    updated_at = MillisecondDateTimeField()
     
     class Meta:
         model = Order
