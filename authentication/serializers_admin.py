@@ -103,7 +103,7 @@ class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'order_id', 'customer', 'current_status', 'total_price',
-            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at', 'created_at', 'status'
+            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at', 'status'
         ]
         read_only_fields = fields
     
@@ -130,7 +130,7 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
         fields = [
             'order_id', 'customer', 'current_status',
             'total_price', 'delivery_fee', 'discount', 'payment_status',
-            'tracking_number', 'ordered_at', 'updated_at', 'created_at', 'status',
+            'tracking_number', 'ordered_at', 'updated_at', 'status',
             'order_items', 'status_history'
         ]
         read_only_fields = fields
