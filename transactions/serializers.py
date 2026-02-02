@@ -8,6 +8,33 @@ from decimal import Decimal
 from django.utils import timezone
 
 
+# =====================================================
+# CUSTOM FIELDS FOR JAVASCRIPT COMPATIBILITY
+# =====================================================
+
+class MillisecondDateTimeField(serializers.DateTimeField):
+    """
+    DateTime field that truncates microseconds to milliseconds for JavaScript compatibility.
+    JavaScript's Date object only supports millisecond precision (3 digits),
+    not microsecond precision (6 digits).
+    """
+    def to_representation(self, value):
+        if value is None:
+            return None
+        # Call parent's to_representation first
+        string_value = super().to_representation(value)
+        # Remove microseconds by truncating to milliseconds
+        # Format: 2026-02-01T19:44:28.520029Z -> 2026-02-01T19:44:28.520Z
+        if string_value and '.' in string_value:
+            date_part, ms_part = string_value.rsplit('.', 1)
+            # Keep only first 3 digits of fractional seconds (milliseconds)
+            ms_only = ms_part[:3]
+            if ms_part.endswith('Z'):
+                ms_only += 'Z'
+            string_value = date_part + '.' + ms_only
+        return string_value
+
+
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
@@ -47,6 +74,8 @@ class ShippingAddressSerializer(serializers.ModelSerializer):
 
 class PaymentSerializer(serializers.ModelSerializer):
     order_id = serializers.UUIDField(source='order.order_id', read_only=True)
+    paid_at = MillisecondDateTimeField(allow_null=True)
+    created_at = MillisecondDateTimeField()
 
     class Meta:
         model = Payment
@@ -61,7 +90,7 @@ class OrderTimelineEventSerializer(serializers.Serializer):
     """Serializer for individual timeline events in order tracking"""
     status = serializers.CharField()
     label = serializers.CharField()
-    timestamp = serializers.DateTimeField(allow_null=True)
+    timestamp = MillisecondDateTimeField(allow_null=True)
     completed = serializers.BooleanField()
 
 
@@ -188,6 +217,8 @@ class RefundSerializer(serializers.ModelSerializer):
     payment_reference = serializers.CharField(source='payment.reference', read_only=True)
     order_id = serializers.CharField(source='payment.order.order_id', read_only=True)
     customer_email = serializers.EmailField(source='payment.order.customer.email', read_only=True)
+    created_at = MillisecondDateTimeField()
+    processed_at = MillisecondDateTimeField(allow_null=True)
 
     class Meta:
         model = Refund
@@ -207,6 +238,7 @@ class RefundSerializer(serializers.ModelSerializer):
 
 class TransactionLogSerializer(serializers.ModelSerializer):
     order_id = serializers.UUIDField(source='order.order_id', read_only=True, allow_null=True)
+    created_at = MillisecondDateTimeField()
 
     class Meta:
         model = TransactionLog
@@ -215,6 +247,8 @@ class TransactionLogSerializer(serializers.ModelSerializer):
 
 
 class WalletTransactionSerializer(serializers.ModelSerializer):
+    created_at = MillisecondDateTimeField()
+
     class Meta:
         model = WalletTransaction
         fields = ['id', 'transaction_type', 'amount', 'source', 'created_at']
@@ -224,6 +258,7 @@ class WalletTransactionSerializer(serializers.ModelSerializer):
 class WalletSerializer(serializers.ModelSerializer):
     user_email = serializers.EmailField(source='user.email', read_only=True)
     transactions = WalletTransactionSerializer(many=True, read_only=True)
+    updated_at = MillisecondDateTimeField()
 
     class Meta:
         model = Wallet
@@ -242,6 +277,11 @@ class OrderSerializer(serializers.ModelSerializer):
     is_delivered = serializers.BooleanField(read_only=True)
     logs = serializers.SerializerMethodField()
     timeline = serializers.SerializerMethodField()
+    ordered_at = MillisecondDateTimeField()
+    shipped_at = MillisecondDateTimeField(allow_null=True)
+    delivered_at = MillisecondDateTimeField(allow_null=True)
+    returned_at = MillisecondDateTimeField(allow_null=True)
+    updated_at = MillisecondDateTimeField()
 
     class Meta:
         model = Order
@@ -289,6 +329,9 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
     total_with_delivery = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     payment_method = serializers.SerializerMethodField()
     transaction_reference = serializers.SerializerMethodField()
+    ordered_at = MillisecondDateTimeField()
+    shipped_at = MillisecondDateTimeField(allow_null=True)
+    delivered_at = MillisecondDateTimeField(allow_null=True)
 
     class Meta:
         model = Order
@@ -327,6 +370,10 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
 # ========================
 class InstallmentPaymentSerializer(serializers.ModelSerializer):
     is_overdue = serializers.SerializerMethodField()
+    due_date = MillisecondDateTimeField()
+    payment_date = MillisecondDateTimeField(allow_null=True)
+    paid_at = MillisecondDateTimeField(allow_null=True)
+    created_at = MillisecondDateTimeField()
 
     class Meta:
         model = InstallmentPayment
@@ -346,6 +393,9 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
     paid_installments_count = serializers.SerializerMethodField()
     pending_installments_count = serializers.SerializerMethodField()
     is_fully_paid = serializers.SerializerMethodField()
+    start_date = MillisecondDateTimeField()
+    created_at = MillisecondDateTimeField()
+    updated_at = MillisecondDateTimeField()
 
     class Meta:
         model = InstallmentPlan

@@ -31,10 +31,29 @@ import redis
 import os
 
 
+def api_root(request):
+    """Root API endpoint - provides API information and health check"""
+    return JsonResponse({
+        'success': True,
+        'message': 'Welcome to Dandelionz Ecommerce API',
+        'version': '1.0.0',
+        'status': 'operational',
+        'endpoints': {
+            'auth': '/auth/',
+            'store': '/store/',
+            'user': '/user/',
+            'transactions': '/transactions/',
+            'api_docs': '/swagger/',
+            'redoc': '/redoc/',
+        }
+    })
 
 
 
 urlpatterns = [
+    # Root API endpoint
+    path('', api_root, name='api-root'),
+    
     # Fake admin traps
     path('admin/', include('django_admin_trap.urls')),
     path('wp-admin/', include('django_admin_trap.urls')),
