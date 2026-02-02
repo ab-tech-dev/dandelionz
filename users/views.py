@@ -1090,13 +1090,6 @@ class VendorViewSet(viewsets.ViewSet):
                 type=openapi.TYPE_STRING,
                 required=False,
             ),
-            openapi.Parameter(
-                'ordering',
-                openapi.IN_QUERY,
-                description='Sort results. Default: -created_at (newest first). Use -created_at or created_at',
-                type=openapi.TYPE_STRING,
-                required=False,
-            ),
         ],
         responses={
             200: openapi.Response(
@@ -1108,79 +1101,42 @@ class VendorViewSet(viewsets.ViewSet):
         security=[{"Bearer": []}],
     )
     def list_orders(self, request):
-        """Get paginated list of vendor's orders"""
-        vendor = self.get_vendor(request)
+        """Get paginated list of vendor's orders - same pattern as admin"""
+        from rest_framework.pagination import LimitOffsetPagination
+        from transactions.models import Order
 
+        vendor = self.get_vendor(request)
         if not vendor:
-            logger.warning(f"User {request.user.uuid} is not a vendor - ProfileResolver returned None")
             return Response(
-                {"success": False, "message": "Vendor access only"},
+                standardized_response(success=False, error="Vendor access only"),
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        from transactions.models import Order, OrderItem
-        from rest_framework.pagination import LimitOffsetPagination
-
-        logger.info(f"Vendor {vendor.uuid} (ID: {vendor.id}, Store: {vendor.store_name}) attempting to list orders")
-        
-        # Debug: Check if there are any orders at all
-        all_orders_count = Order.objects.count()
-        logger.info(f"Total orders in system: {all_orders_count}")
-        
-        # Debug: Check if this vendor has any products
-        vendor_products = vendor.products.all()
-        vendor_products_count = vendor_products.count()
-        logger.info(f"Vendor {vendor.uuid} has {vendor_products_count} products. Product IDs: {list(vendor_products.values_list('id', flat=True)[:10])}")
-        
-        # Debug: Check if any OrderItems exist for products of this vendor
-        vendor_order_items = OrderItem.objects.filter(product__store=vendor)
-        vendor_order_items_count = vendor_order_items.count()
-        logger.info(f"OrderItems for vendor {vendor.uuid} products: {vendor_order_items_count}")
-        
-        if vendor_order_items_count > 0:
-            sample_items = vendor_order_items[:5].values('id', 'product_id', 'order_id')
-            logger.info(f"Sample OrderItems: {list(sample_items)}")
-        
-        # Get distinct order IDs for this vendor's products
-        order_ids = Order.objects.filter(
+        # Get orders that contain this vendor's products
+        queryset = Order.objects.filter(
             order_items__product__store=vendor
-        ).values_list('order_id', flat=True).distinct()
-        
-        logger.info(f"Vendor {vendor.uuid} - Found {len(order_ids)} DISTINCT orders. Order IDs: {list(order_ids)[:10]}")
-
-        # Fetch full orders with optimized queries
-        orders = Order.objects.filter(
-            order_id__in=order_ids
-        ).select_related('customer').prefetch_related('order_items__product')
+        ).select_related('customer').prefetch_related('order_items__product').distinct()
 
         # Filter by status if provided
-        status_filter = request.query_params.get('status')
-        if status_filter:
-            orders = orders.filter(status=status_filter)
+        status_param = request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
 
-        # Sort orders - default by -ordered_at (newest first)
-        ordering = request.query_params.get('ordering', '-ordered_at')
-        try:
-            orders = orders.order_by(ordering)
-        except Exception as e:
-            logger.error(f"Invalid ordering parameter: {ordering}. Error: {str(e)}")
-            orders = orders.order_by('-ordered_at')
+        # Order by most recent first
+        queryset = queryset.order_by('-ordered_at')
 
-        # Paginate results
+        # Paginate
         paginator = LimitOffsetPagination()
-        paginated_orders = paginator.paginate_queryset(orders, request)
+        page = paginator.paginate_queryset(queryset, request)
 
-        # Serialize and return
-        serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
-        
-        # Always return paginated format
-        paginated_data = {
-            "count": paginator.count,
-            "next": paginator.get_next_link(),
-            "previous": paginator.get_previous_link(),
-            "results": serializer.data
-        }
-        return Response(standardized_response(data=paginated_data))
+        if page is not None:
+            serializer = VendorOrderListItemSerializer(page, many=True)
+            return paginator.get_paginated_response(
+                standardized_response(data=serializer.data)
+            )
+
+        serializer = VendorOrderListItemSerializer(queryset, many=True)
+        return Response(standardized_response(data=serializer.data))
 
     @swagger_auto_schema(
         operation_id="vendor_order_detail",
