@@ -16,8 +16,9 @@ from .notification_models import (
     Notification, NotificationType, NotificationPreference, NotificationLog
 )
 from django.conf import settings
+from django.contrib.auth import get_user_model
 
-User = settings.AUTH_USER_MODEL
+User = get_user_model()
 logger = logging.getLogger(__name__)
 channel_layer = get_channel_layer()
 
