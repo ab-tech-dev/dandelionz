@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 
 from .models import Product, Cart, CartItem, Favourite, Review, Category
@@ -756,12 +757,189 @@ class AddReviewView(BaseAPIView, generics.CreateAPIView):
         )
 
         serializer = self.get_serializer(review)
-        return Response(standardized_response(data=serializer.data, message="Review added successfully"))
+        message = "Review created successfully" if created else "Review updated successfully"
+        return Response(standardized_response(data=serializer.data, message=message))
 
 
-# ---------------------------
-# Admin Product Approval
-# ---------------------------
+@extend_schema(
+    tags=["Reviews"],
+    description="Update a review for a product (authenticated users only). Only review owner can update.",
+    parameters=[
+        OpenApiParameter(name='review_id', description='Review ID', required=True, type=int)
+    ],
+    request=ReviewSerializer,
+    responses={
+        200: ReviewSerializer,
+        400: {"description": "Invalid input"},
+        403: {"description": "You can only edit your own reviews"},
+        404: {"description": "Review not found"}
+    }
+)
+class UpdateReviewView(BaseAPIView, generics.UpdateAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ReviewSerializer
+    lookup_field = 'id'
+    lookup_url_kwarg = 'review_id'
+
+    def get_queryset(self):
+        """Only allow users to update their own reviews"""
+        return Review.objects.filter(customer=self.request.user)
+
+    def put(self, request, review_id):
+        """Full update of a review"""
+        try:
+            review = Review.objects.get(id=review_id, customer=request.user)
+        except Review.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Review not found or you don't have permission to edit it"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        rating = request.data.get('rating')
+        comment = request.data.get('comment', '')
+        
+        if not rating:
+            return Response(
+                standardized_response(success=False, error="Rating is required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        review.rating = rating
+        review.comment = comment
+        review.save()
+        
+        serializer = self.get_serializer(review)
+        return Response(standardized_response(data=serializer.data, message="Review updated successfully"))
+
+    def patch(self, request, review_id):
+        """Partial update of a review"""
+        try:
+            review = Review.objects.get(id=review_id, customer=request.user)
+        except Review.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Review not found or you don't have permission to edit it"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if 'rating' in request.data:
+            review.rating = request.data.get('rating')
+        
+        if 'comment' in request.data:
+            review.comment = request.data.get('comment')
+        
+        review.save()
+        
+        serializer = self.get_serializer(review)
+        return Response(standardized_response(data=serializer.data, message="Review updated successfully"))
+
+
+@extend_schema(
+    tags=["Reviews"],
+    description="Delete a review (authenticated users only). Only review owner can delete.",
+    parameters=[
+        OpenApiParameter(name='review_id', description='Review ID', required=True, type=int)
+    ],
+    responses={
+        204: {"description": "Review deleted successfully"},
+        403: {"description": "You can only delete your own reviews"},
+        404: {"description": "Review not found"}
+    }
+)
+class DeleteReviewView(BaseAPIView, generics.DestroyAPIView):
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'id'
+    lookup_url_kwarg = 'review_id'
+
+    def get_queryset(self):
+        """Only allow users to delete their own reviews"""
+        return Review.objects.filter(customer=self.request.user)
+
+    def delete(self, request, review_id):
+        """Delete a review"""
+        try:
+            review = Review.objects.get(id=review_id, customer=request.user)
+        except Review.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Review not found or you don't have permission to delete it"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        review.delete()
+        return Response(
+            standardized_response(success=True, message="Review deleted successfully"),
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+@extend_schema(
+    tags=["Reviews"],
+    description="Get a specific review by ID (authenticated users only). Users can only view their own reviews.",
+    parameters=[
+        OpenApiParameter(name='review_id', description='Review ID', required=True, type=int)
+    ],
+    responses={
+        200: ReviewSerializer,
+        403: {"description": "You can only view your own reviews"},
+        404: {"description": "Review not found"}
+    }
+)
+class ReviewDetailView(BaseAPIView, generics.RetrieveAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ReviewSerializer
+    lookup_field = 'id'
+    lookup_url_kwarg = 'review_id'
+
+    def get_queryset(self):
+        """Only allow users to view their own reviews"""
+        return Review.objects.filter(customer=self.request.user)
+
+    def get(self, request, review_id):
+        """Get a specific review"""
+        try:
+            review = Review.objects.get(id=review_id, customer=request.user)
+        except Review.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Review not found or you don't have permission to view it"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = self.get_serializer(review)
+        return Response(standardized_response(data=serializer.data))
+
+
+@extend_schema(
+    tags=["Reviews"],
+    description="Get all reviews created by the authenticated user. Returns user's own reviews with pagination.",
+    parameters=[
+        OpenApiParameter(name='page', description='Page number for pagination', required=False, type=int),
+        OpenApiParameter(name='page_size', description='Number of items per page', required=False, type=int),
+    ],
+    responses={
+        200: ReviewSerializer(many=True),
+        403: {"description": "Authentication required"}
+    }
+)
+class UserReviewsListView(BaseAPIView, generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ReviewSerializer
+    pagination_class = PageNumberPagination
+
+    def get_queryset(self):
+        """Get all reviews from the authenticated user"""
+        return Review.objects.filter(customer=self.request.user).select_related('product', 'customer').order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        """List all user reviews with pagination"""
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(standardized_response(data=serializer.data))
+        
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(standardized_response(data=serializer.data))
+
+
 @extend_schema(
     tags=["Admin - Product Approval"],
     description="Get list of all pending products awaiting approval (Admin only). Supports filtering and pagination.",

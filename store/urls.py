@@ -3,7 +3,7 @@ from .views import (
     ProductListView, ProductDetailView, CreateProductView,
     CartView, AddToCartView, RemoveFromCartView, ProductDeleteView,
     FavouriteListView, AddFavouriteView, RemoveFavouriteView,
-    ProductReviewListView, AddReviewView, PatchProductView,
+    ProductReviewListView, AddReviewView, UpdateReviewView, DeleteReviewView, ReviewDetailView, UserReviewsListView, PatchProductView,
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
@@ -54,6 +54,10 @@ urlpatterns = [
     # ==================
     path('products/<slug:slug>/reviews/', ProductReviewListView.as_view(), name='product-reviews'),
     path('products/<slug:slug>/review/add/', AddReviewView.as_view(), name='add-review'),
+    path('reviews/', UserReviewsListView.as_view(), name='user-reviews-list'),
+    path('reviews/<int:review_id>/', ReviewDetailView.as_view(), name='review-detail'),
+    path('reviews/<int:review_id>/update/', UpdateReviewView.as_view(), name='update-review'),
+    path('reviews/<int:review_id>/delete/', DeleteReviewView.as_view(), name='delete-review'),
 
     # ==================
     # ADMIN - PRODUCT APPROVAL & REVIEW

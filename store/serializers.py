@@ -147,21 +147,42 @@ class ProductVideoCreateSerializer(serializers.ModelSerializer):
 # ---------------------------
 class ReviewSerializer(CloudinarySerializer):
     customer_name = serializers.CharField(source='customer.full_name', read_only=True)
+    customer_email = serializers.CharField(source='customer.email', read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
     customer = serializers.PrimaryKeyRelatedField(read_only=True)
+    is_verified_purchase = serializers.SerializerMethodField()
 
     class Meta:
         model = Review
         fields = [
-            'id', 'product', 'product_name', 'customer', 'customer_name',
-            'rating', 'comment', 'created_at', 'updated_at'
+            'id', 'product', 'product_name', 'customer', 'customer_name', 'customer_email',
+            'rating', 'comment', 'is_verified_purchase', 'created_at', 'updated_at'
         ]
+        read_only_fields = ['id', 'customer', 'customer_name', 'customer_email', 'is_verified_purchase', 'created_at', 'updated_at']
 
     def validate_rating(self, value):
         """Validate rating is between 1 and 5"""
-        if not (1 <= value <= 5):
-            raise serializers.ValidationError("Rating must be between 1 and 5")
+        if not value:
+            raise serializers.ValidationError("Rating is required")
+        if not isinstance(value, int) or not (1 <= value <= 5):
+            raise serializers.ValidationError("Rating must be an integer between 1 and 5")
         return value
+
+    def validate_comment(self, value):
+        """Validate comment is not too long"""
+        if value and len(value) > 500:
+            raise serializers.ValidationError("Comment cannot exceed 500 characters")
+        return value
+
+    def get_is_verified_purchase(self, obj):
+        """Check if the review is from a verified purchase"""
+        from transactions.models import OrderItem, Order
+        has_purchased = OrderItem.objects.filter(
+            order__customer=obj.customer,
+            order__status__in=[Order.Status.PAID, Order.Status.DELIVERED, Order.Status.SHIPPED],
+            product=obj.product
+        ).exists()
+        return has_purchased
 
 
 # ---------------------------
