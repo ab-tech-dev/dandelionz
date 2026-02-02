@@ -104,7 +104,7 @@ class AuthenticationService:
                 "data": {
                     'user': user_data,
                     'is_new_user': True,
-                    'email_verified': user.is_verified,
+                    'is_verified': user.is_verified,
                 }
             }, 201
 
@@ -166,6 +166,15 @@ class AuthenticationService:
                 logger.warning(f"Login attempt for disabled account: {email}")
                 return False, {"success": False, "error": "Account is disabled. Please contact support."}, 403
 
+            # Check if email is verified
+            if not user.is_verified:
+                logger.warning(f"Login attempt with unverified email: {email}")
+                return False, {
+                    "success": False,
+                    "error": "Your email has not been verified yet. Please check your email for the verification link and verify your account before logging in.",
+                    "email_not_verified": True
+                }, 403
+
             cache.delete(f"failed_logins:{email}")
             context = {}
             if request:
@@ -198,7 +207,7 @@ class AuthenticationService:
                 "data": {
                     'user': serializer.data,
                     'tokens': tokens,
-                    'email_verified': user.is_verified,
+                    'is_verified': user.is_verified,
                     'verification_needed': not user.is_verified and settings.REQUIRE_EMAIL_VERIFICATION
                 }
             }, 200
@@ -253,7 +262,7 @@ class AuthenticationService:
 
         logger.info(f"Token validation retrieved verification status for user {user.pk}: is_verified = {is_verified}")
 
-        return True, {"success": True, "data": {'valid': True, 'user_uuid': user.pk, 'email_verified': is_verified}}, 200
+        return True, {"success": True, "data": {'valid': True, 'user_uuid': user.pk, 'is_verified': is_verified}}, 200
 
     @staticmethod
     def logout(user, refresh_token=None):

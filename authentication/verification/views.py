@@ -7,6 +7,7 @@ from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
+from authentication.core.throttles import EmailVerificationThrottle
 from .services import EmailVerificationService, PasswordResetService
 
 from drf_yasg.utils import swagger_auto_schema
@@ -106,21 +107,52 @@ class VerifyEmailView(BaseAPIView):
 # ---------------------------------------------------------------------
 class SendVerificationEmailView(BaseAPIView):
     """Endpoint for sending verification email"""
-    permission_classes = [IsAuthenticated]
-    throttle_classes = [UserRateThrottle]
+    permission_classes = [AllowAny]
+    throttle_classes = [EmailVerificationThrottle]
 
     @swagger_auto_schema(
         operation_summary="Send email verification link",
-        operation_description="Authenticated users can request a new email verification link.",
+        operation_description="Request a new email verification link. No authentication required. This endpoint has strict rate limiting to prevent abuse. Excessive requests from the same IP will result in temporary blocking.",
         responses={
             200: SendVerificationEmailResponseSerializer,
             400: "Failed to send email",
-            401: "Unauthorized"
+            429: "Rate limit exceeded - too many requests from this IP"
         }
     )
     def post(self, request):
         try:
-            success, response_data, status_code = EmailVerificationService.send_verification_email(request.user)
+            email = request.data.get('email')
+            if not email:
+                return Response(
+                    standardized_response(success=False, error="Email is required"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Fetch user by email
+            from authentication.models import CustomUser
+            try:
+                user = CustomUser.objects.get(email=email)
+            except CustomUser.DoesNotExist:
+                # Don't reveal if email exists for security
+                logger.info(f"Verification email requested for non-existent email: {email}")
+                return Response(
+                    standardized_response(success=True, message="If an account exists with this email, a verification link will be sent."),
+                    status=status.HTTP_200_OK
+                )
+            
+            # Check if email is already verified
+            if user.is_verified:
+                logger.info(f"Verification email requested for already verified email: {email}")
+                return Response(
+                    standardized_response(
+                        success=True, 
+                        message="This email is already verified. You can now log in to your account."
+                    ),
+                    status=status.HTTP_200_OK
+                )
+            
+            # Send verification email
+            success, response_data, status_code = EmailVerificationService.send_verification_email(user)
             return Response(standardized_response(**response_data), status=status_code)
         except Exception as e:
             logger.error(f"Send verification email error: {str(e)}")
