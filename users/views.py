@@ -73,6 +73,7 @@ from users.notification_helpers import (
     send_user_notification,
     notify_admin,
 )
+from authentication.core.response import standardized_response
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1111,20 +1112,41 @@ class VendorViewSet(viewsets.ViewSet):
         vendor = self.get_vendor(request)
 
         if not vendor:
+            logger.warning(f"User {request.user.uuid} is not a vendor - ProfileResolver returned None")
             return Response(
                 {"success": False, "message": "Vendor access only"},
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        from transactions.models import Order
+        from transactions.models import Order, OrderItem
         from rest_framework.pagination import LimitOffsetPagination
 
+        logger.info(f"Vendor {vendor.uuid} (ID: {vendor.id}, Store: {vendor.store_name}) attempting to list orders")
+        
+        # Debug: Check if there are any orders at all
+        all_orders_count = Order.objects.count()
+        logger.info(f"Total orders in system: {all_orders_count}")
+        
+        # Debug: Check if this vendor has any products
+        vendor_products = vendor.products.all()
+        vendor_products_count = vendor_products.count()
+        logger.info(f"Vendor {vendor.uuid} has {vendor_products_count} products. Product IDs: {list(vendor_products.values_list('id', flat=True)[:10])}")
+        
+        # Debug: Check if any OrderItems exist for products of this vendor
+        vendor_order_items = OrderItem.objects.filter(product__store=vendor)
+        vendor_order_items_count = vendor_order_items.count()
+        logger.info(f"OrderItems for vendor {vendor.uuid} products: {vendor_order_items_count}")
+        
+        if vendor_order_items_count > 0:
+            sample_items = vendor_order_items[:5].values('id', 'product_id', 'order_id')
+            logger.info(f"Sample OrderItems: {list(sample_items)}")
+        
         # Get distinct order IDs for this vendor's products
         order_ids = Order.objects.filter(
             order_items__product__store=vendor
         ).values_list('order_id', flat=True).distinct()
         
-        logger.info(f"Vendor {vendor.uuid} - Found {len(order_ids)} orders with their products")
+        logger.info(f"Vendor {vendor.uuid} - Found {len(order_ids)} DISTINCT orders. Order IDs: {list(order_ids)[:10]}")
 
         # Fetch full orders with optimized queries
         orders = Order.objects.filter(
@@ -1151,16 +1173,14 @@ class VendorViewSet(viewsets.ViewSet):
         # Serialize and return
         serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
         
-        if paginated_orders is not None:
-            paginated_data = {
-                "count": paginator.count,
-                "next": paginator.get_next_link(),
-                "previous": paginator.get_previous_link(),
-                "results": serializer.data
-            }
-            return Response(standardized_response(data=paginated_data))
-        else:
-            return Response(standardized_response(data=serializer.data))
+        # Always return paginated format
+        paginated_data = {
+            "count": paginator.count,
+            "next": paginator.get_next_link(),
+            "previous": paginator.get_previous_link(),
+            "results": serializer.data
+        }
+        return Response(standardized_response(data=paginated_data))
 
     @swagger_auto_schema(
         operation_id="vendor_order_detail",
