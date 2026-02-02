@@ -651,7 +651,10 @@ class UpdateProductSerializer(CloudinarySerializer):
         return instance
 
 
-
+# ---------------------------
+# Product Approval Serializer
+# ---------------------------
+class ProductApprovalSerializer(serializers.Serializer):
     """
     Serializer for approving or rejecting a product.
     Used for validation of approval/rejection requests.
@@ -662,9 +665,6 @@ class UpdateProductSerializer(CloudinarySerializer):
         allow_blank=False,
         help_text="Reason for rejecting the product (required for rejection)"
     )
-
-    class Meta:
-        fields = ['rejection_reason']
 
 
 # ---------------------------
