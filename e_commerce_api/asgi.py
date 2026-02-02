@@ -17,22 +17,21 @@ from users.routing import websocket_urlpatterns
 logger = logging.getLogger(__name__)
 
 
-class TokenAwareOriginValidator(AllowedHostsOriginValidator):
+class TokenAwareOriginValidator:
     """
-    Custom origin validator that bypasses origin checking if a valid JWT token is provided.
-    This allows WebSocket connections from curl, non-browser clients, and localhost.
+    Custom WebSocket validator that allows token-authenticated connections
+    to bypass strict origin validation while still enforcing it for browser connections.
     
-    How it works:
-    1. Checks if a JWT token is present in query string (?token=xxx) or Authorization header
-    2. If token is present, skips origin validation and lets JWT middleware handle auth
-    3. If no token, applies strict origin validation (for browser connections)
-    
-    This solves the 403 error issue when using curl with valid tokens.
+    This allows WebSocket connections from curl, non-browser clients, and localhost
+    when they provide a valid JWT token.
     """
+    
+    def __init__(self, inner):
+        self.inner = inner
     
     async def __call__(self, scope, receive, send):
         """
-        Override to check for valid JWT token before enforcing origin validation
+        Check for token before validating origin
         
         Args:
             scope: WebSocket connection scope
@@ -41,7 +40,7 @@ class TokenAwareOriginValidator(AllowedHostsOriginValidator):
         """
         # Only apply to WebSocket connections
         if scope['type'] != 'websocket':
-            return await super().__call__(scope, receive, send)
+            return await self.inner(scope, receive, send)
         
         # Extract token from query string or headers
         query_string = scope.get('query_string', b'').decode()
@@ -60,15 +59,22 @@ class TokenAwareOriginValidator(AllowedHostsOriginValidator):
             has_token = True
             logger.debug(f"Found token in Authorization header")
         
-        # If token is provided, skip origin validation
-        # The JWT middleware will validate the token itself
+        # If token is provided, bypass origin validation but continue through middleware
+        # The JWT middleware will validate the token
         if has_token:
-            logger.info(f"Valid token detected in WebSocket connection from {scope.get('client')}, skipping origin validation")
-            return await URLRouter(websocket_urlpatterns)(scope, receive, send)
+            logger.info(f"Token detected in WebSocket connection from {scope.get('client')}, skipping origin validation")
+            return await self.inner(scope, receive, send)
         
-        # Otherwise, enforce origin validation for browser connections
-        logger.debug(f"No token provided, enforcing origin validation for {scope.get('client')}")
-        return await super().__call__(scope, receive, send)
+        # Otherwise, check origin for browser connections
+        origin = dict(scope.get('headers', [])).get(b'origin', b'').decode()
+        if origin:
+            logger.debug(f"No token provided, validating origin: {origin}")
+            # Validate origin - let AllowedHostsOriginValidator handle this
+            validator = AllowedHostsOriginValidator(self.inner)
+            return await validator(scope, receive, send)
+        
+        # No origin header (likely non-browser), allow through with token or JWT validation
+        return await self.inner(scope, receive, send)
 
 
 application = ProtocolTypeRouter({
