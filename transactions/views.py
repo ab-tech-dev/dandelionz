@@ -480,6 +480,7 @@ class CheckoutView(APIView):
                 logger.info(f"Order created: {order.order_id} for user {user.uuid}")
 
                 # 2. Convert CartItems → OrderItems (using discounted price)
+                total_discount = Decimal('0.00')
                 for item in cart_items:
                     OrderItem.objects.create(
                         order=order,
@@ -487,6 +488,15 @@ class CheckoutView(APIView):
                         quantity=item.quantity,
                         price_at_purchase=item.product.get_final_price
                     )
+                    # Calculate discount amount for this item: (original_price - final_price) * quantity
+                    original_price = item.product.price
+                    final_price = item.product.get_final_price
+                    item_discount = (original_price - final_price) * item.quantity
+                    total_discount += item_discount
+                
+                # Set the total discount on the order
+                order.discount = total_discount
+                logger.info(f"Total discount calculated: {total_discount} for order {order.order_id}")
 
                 # 3. Auto-retrieve and set vendor & customer delivery coordinates
                 try:
@@ -673,6 +683,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 logger.info(f"Order created: {order.order_id} for user {user.uuid}")
 
                 # 2. Convert CartItems → OrderItems (using discounted price)
+                total_discount = Decimal('0.00')
                 for item in cart_items:
                     OrderItem.objects.create(
                         order=order,
@@ -680,6 +691,15 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                         quantity=item.quantity,
                         price_at_purchase=item.product.get_final_price,
                     )
+                    # Calculate discount amount for this item: (original_price - final_price) * quantity
+                    original_price = item.product.price
+                    final_price = item.product.get_final_price
+                    item_discount = (original_price - final_price) * item.quantity
+                    total_discount += item_discount
+                
+                # Set the total discount on the order
+                order.discount = total_discount
+                logger.info(f"Total discount calculated: {total_discount} for order {order.order_id}")
 
                 # 3. Auto-retrieve and set vendor & customer delivery coordinates
                 try:

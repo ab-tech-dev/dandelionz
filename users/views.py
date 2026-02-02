@@ -552,68 +552,55 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        # Verify PIN
-        from users.models import PaymentPIN
-        try:
-            pin_obj = PaymentPIN.objects.get(user=request.user)
-            
-            # Check if PIN is still default (0000)
-            if pin_obj.is_default:
-                return Response(
-                    {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            
-            # Verify the PIN (uses check_password internally)
-            if not pin_obj.verify_pin(serializer.validated_data['pin']):
-                return Response(
-                    {"success": False, "message": "Invalid PIN"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except PaymentPIN.DoesNotExist:
-            # Auto-create default PIN (0000) for first-time users
-            pin_obj = PaymentPIN()
-            pin_obj.user = request.user
-            pin_obj.set_pin('0000')  # This will hash and save
-            
-            return Response(
-                {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Check balance
-        from transactions.models import Wallet
-        wallet, _ = Wallet.objects.get_or_create(user=request.user)
         amount = serializer.validated_data['amount']
+        pin = serializer.validated_data['pin']
         
-        if wallet.balance < amount:
+        # Validate withdrawal request
+        is_valid, error_msg = PayoutService.validate_withdrawal_request(request.user, amount)
+        if not is_valid:
             return Response(
-                {"success": False, "message": "Insufficient balance"},
+                {"success": False, "message": error_msg},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Create withdrawal request
-        from users.models import PayoutRequest
-        import uuid as uuid_lib
+        # Verify PIN
+        pin_valid, pin_error = PayoutService.verify_pin(request.user, pin)
+        if not pin_valid:
+            return Response(
+                {"success": False, "message": pin_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
-        # Create withdrawal request for customer
-        payout = PayoutRequest.objects.create(
+        # Get customer's bank details from request
+        bank_name = request.data.get('bank_name', '')
+        account_number = request.data.get('account_number', '')
+        account_name = request.data.get('account_name', '')
+        
+        if not all([bank_name, account_number, account_name]):
+            return Response(
+                {"success": False, "message": "Bank details (bank_name, account_number, account_name) are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        
+        # Create withdrawal request with admin notification
+        payout, error = PayoutService.create_withdrawal_request(
             user=request.user,
-            vendor=None,
             amount=amount,
-            bank_name=request.data.get('bank_name', ''),
-            account_number=request.data.get('account_number', ''),
-            account_name=request.data.get('account_name', ''),
-            recipient_code='',
-            reference=f"WTH-{uuid_lib.uuid4().hex[:12].upper()}",
+            bank_name=bank_name,
+            account_number=account_number,
+            account_name=account_name,
+            vendor=None
         )
         
-        # Debit wallet
-        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        if error:
+            return Response(
+                {"success": False, "message": error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
-        message = f"Withdrawal request of ₦{amount:,.2f} is being processed."
+        message = f"Withdrawal request of ₦{amount:,.2f} is being processed. Reference: {payout.reference}"
         return Response(
-            {"success": True, "message": message},
+            {"success": True, "message": message, "reference": payout.reference},
             status=status.HTTP_200_OK,
         )
 
@@ -1512,66 +1499,45 @@ class VendorWalletViewSet(viewsets.ViewSet):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        # Verify PIN
-        from users.models import PaymentPIN
-        try:
-            pin_obj = PaymentPIN.objects.get(user=request.user)
-            
-            # Check if PIN is still default (0000)
-            if pin_obj.is_default:
-                return Response(
-                    {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            
-            # Verify the PIN (uses check_password internally)
-            if not pin_obj.verify_pin(serializer.validated_data['pin']):
-                return Response(
-                    {"success": False, "message": "Invalid PIN"},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-        except PaymentPIN.DoesNotExist:
-            # Auto-create default PIN (0000) for first-time users
-            pin_obj = PaymentPIN()
-            pin_obj.user = request.user
-            pin_obj.set_pin('0000')  # This will hash and save
-            
-            return Response(
-                {"success": False, "message": "Please set a secure payment PIN in Payment Settings before you can withdraw funds. Default PIN (0000) is not allowed for security reasons."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        
-        # Check balance
-        from transactions.models import Wallet
-        wallet, _ = Wallet.objects.get_or_create(user=request.user)
         amount = serializer.validated_data['amount']
+        pin = serializer.validated_data['pin']
         
-        if wallet.balance < amount:
+        # Validate withdrawal request
+        is_valid, error_msg = PayoutService.validate_withdrawal_request(request.user, amount)
+        if not is_valid:
             return Response(
-                {"success": False, "message": "Insufficient balance"},
+                {"success": False, "message": error_msg},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Create withdrawal request
-        from users.models import PayoutRequest
-        import uuid as uuid_lib
+        # Verify PIN
+        pin_valid, pin_error = PayoutService.verify_pin(request.user, pin)
+        if not pin_valid:
+            return Response(
+                {"success": False, "message": pin_error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
-        payout = PayoutRequest.objects.create(
-            vendor=vendor,
+        # Create withdrawal request with admin notification
+        payout, error = PayoutService.create_withdrawal_request(
+            user=request.user,
             amount=amount,
             bank_name=vendor.bank_name,
             account_number=vendor.account_number,
             account_name=vendor.account_name or '',
             recipient_code=vendor.recipient_code or '',
-            reference=f"WTH-{uuid_lib.uuid4().hex[:12].upper()}",
+            vendor=vendor
         )
         
-        # Debit wallet
-        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        if error:
+            return Response(
+                {"success": False, "message": error},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         
-        message = f"Withdrawal request of ₦{amount:,.2f} is being processed."
+        message = f"Withdrawal request of ₦{amount:,.2f} is being processed. Reference: {payout.reference}"
         return Response(
-            {"success": True, "message": message},
+            {"success": True, "message": message, "reference": payout.reference},
             status=status.HTTP_200_OK,
         )
 
@@ -2700,6 +2666,355 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         PayoutService.execute_payout(user, total_payable)
 
         return Response({"success": True, "amount": total_payable})
+
+    @swagger_auto_schema(
+        operation_id="admin_list_withdrawals",
+        operation_summary="List All Withdrawal Requests",
+        operation_description="Retrieve all withdrawal requests from vendors and customers with filtering options.",
+        tags=["Finance - Withdrawals"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                description='Filter by status: pending, processing, successful, failed, cancelled',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'type',
+                openapi.IN_QUERY,
+                description='Filter by type: vendor, customer, all',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+        ],
+        responses={
+            200: openapi.Response("Withdrawal requests retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def list_withdrawals(self, request):
+        """List all withdrawal requests with optional filtering"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from users.models import PayoutRequest
+        
+        # Get filters
+        status_filter = request.query_params.get('status')
+        type_filter = request.query_params.get('type', 'all').lower()
+        
+        # Build query
+        withdrawals = PayoutRequest.objects.all()
+        
+        # Filter by status if provided
+        if status_filter:
+            withdrawals = withdrawals.filter(status=status_filter.lower())
+        
+        # Filter by type (vendor or customer)
+        if type_filter == 'vendor':
+            withdrawals = withdrawals.filter(vendor__isnull=False)
+        elif type_filter == 'customer':
+            withdrawals = withdrawals.filter(user__isnull=False, vendor__isnull=True)
+        
+        # Order by created date descending
+        withdrawals = withdrawals.order_by('-created_at')
+        
+        # Serialize
+        withdrawal_data = []
+        for w in withdrawals:
+            if w.vendor:
+                requestor_name = w.vendor.store_name
+                requestor_email = w.vendor.user.email
+                requestor_type = 'Vendor'
+            else:
+                requestor_name = w.user.full_name or w.user.email
+                requestor_email = w.user.email
+                requestor_type = 'Customer'
+            
+            withdrawal_data.append({
+                'id': w.id,
+                'reference': w.reference,
+                'amount': str(w.amount),
+                'requestor_name': requestor_name,
+                'requestor_email': requestor_email,
+                'requestor_type': requestor_type,
+                'status': w.status,
+                'bank_name': w.bank_name,
+                'account_number': w.account_number,
+                'account_name': w.account_name,
+                'created_at': w.created_at.isoformat(),
+                'processed_at': w.processed_at.isoformat() if w.processed_at else None,
+                'failure_reason': w.failure_reason,
+            })
+        
+        return Response({
+            "success": True,
+            "count": len(withdrawal_data),
+            "data": withdrawal_data
+        })
+
+    @swagger_auto_schema(
+        operation_id="admin_withdrawal_detail",
+        operation_summary="Get Withdrawal Request Details",
+        operation_description="Retrieve detailed information about a specific withdrawal request.",
+        tags=["Finance - Withdrawals"],
+        responses={
+            200: openapi.Response("Withdrawal request details retrieved successfully"),
+            404: openapi.Response("Withdrawal request not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def withdrawal_detail(self, request):
+        """Get details of a specific withdrawal request"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        withdrawal_id = request.query_params.get('id')
+        if not withdrawal_id:
+            return Response({"message": "Withdrawal ID is required"}, status=400)
+        
+        from users.models import PayoutRequest
+        try:
+            w = PayoutRequest.objects.get(id=withdrawal_id)
+        except PayoutRequest.DoesNotExist:
+            return Response({"message": "Withdrawal request not found"}, status=404)
+        
+        if w.vendor:
+            requestor_name = w.vendor.store_name
+            requestor_email = w.vendor.user.email
+            requestor_type = 'Vendor'
+            requestor_id = str(w.vendor.user.uuid)
+        else:
+            requestor_name = w.user.full_name or w.user.email
+            requestor_email = w.user.email
+            requestor_type = 'Customer'
+            requestor_id = str(w.user.uuid)
+        
+        detail = {
+            'id': w.id,
+            'reference': w.reference,
+            'amount': str(w.amount),
+            'requestor_name': requestor_name,
+            'requestor_email': requestor_email,
+            'requestor_type': requestor_type,
+            'requestor_id': requestor_id,
+            'status': w.status,
+            'bank_name': w.bank_name,
+            'account_number': w.account_number,
+            'account_name': w.account_name,
+            'recipient_code': w.recipient_code,
+            'created_at': w.created_at.isoformat(),
+            'processed_at': w.processed_at.isoformat() if w.processed_at else None,
+            'failure_reason': w.failure_reason,
+        }
+        
+        return Response({"success": True, "data": detail})
+
+    @swagger_auto_schema(
+        operation_id="admin_approve_withdrawal",
+        operation_summary="Approve Withdrawal Request",
+        operation_description="Approve a pending withdrawal request and process the payout.",
+        tags=["Finance - Withdrawals"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'withdrawal_id': openapi.Schema(type=openapi.TYPE_STRING, description='Withdrawal request ID'),
+                'notes': openapi.Schema(type=openapi.TYPE_STRING, description='Optional approval notes'),
+            },
+            required=['withdrawal_id']
+        ),
+        responses={
+            200: openapi.Response("Withdrawal approved successfully"),
+            400: openapi.Response("Invalid request"),
+            404: openapi.Response("Withdrawal request not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def approve_withdrawal(self, request):
+        """Approve a withdrawal request"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        withdrawal_id = request.data.get('withdrawal_id')
+        if not withdrawal_id:
+            return Response({"message": "withdrawal_id is required"}, status=400)
+        
+        from users.models import PayoutRequest
+        from django.utils import timezone
+        
+        try:
+            w = PayoutRequest.objects.get(id=withdrawal_id)
+        except PayoutRequest.DoesNotExist:
+            return Response({"message": "Withdrawal request not found"}, status=404)
+        
+        if w.status != 'pending':
+            return Response(
+                {"message": f"Cannot approve withdrawal with status '{w.status}'"},
+                status=400
+            )
+        
+        try:
+            # Update status to processing
+            w.status = 'processing'
+            w.processed_at = timezone.now()
+            w.save()
+            
+            # TODO: Integrate with payment provider (Paystack, etc.) to process actual transfer
+            # For now, we'll mark as successful
+            # In production, this should be done via a task queue (Celery)
+            
+            # Notify the requestor
+            from users.notification_service import NotificationService
+            if w.vendor:
+                user = w.vendor.user
+                requestor_name = w.vendor.store_name
+                requestor_type = "Vendor"
+            else:
+                user = w.user
+                requestor_name = user.full_name or user.email
+                requestor_type = "Customer"
+            
+            NotificationService.create_notification(
+                user=user,
+                title="Withdrawal Approved",
+                message=f"Your withdrawal request of ₦{w.amount:,.2f} has been approved and is being processed.",
+                category='withdrawal',
+                priority='high',
+                description=f"Your withdrawal to {w.account_name} ({w.account_number}) is now being processed. Reference: {w.reference}",
+                action_url=f"/wallet/withdrawals/{w.id}",
+                action_text="View Status",
+                metadata={
+                    'withdrawal_id': str(w.id),
+                    'reference': w.reference,
+                    'amount': str(w.amount),
+                },
+                send_websocket=True,
+                send_email=True,
+            )
+            
+            return Response({
+                "success": True,
+                "message": f"Withdrawal {w.reference} approved and marked for processing"
+            })
+        except Exception as e:
+            logger.error(f"Error approving withdrawal {withdrawal_id}: {str(e)}", exc_info=True)
+            return Response(
+                {"message": f"Error approving withdrawal: {str(e)}"},
+                status=400
+            )
+
+    @swagger_auto_schema(
+        operation_id="admin_reject_withdrawal",
+        operation_summary="Reject Withdrawal Request",
+        operation_description="Reject a pending withdrawal request and refund the amount to wallet.",
+        tags=["Finance - Withdrawals"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            properties={
+                'withdrawal_id': openapi.Schema(type=openapi.TYPE_STRING, description='Withdrawal request ID'),
+                'reason': openapi.Schema(type=openapi.TYPE_STRING, description='Reason for rejection'),
+            },
+            required=['withdrawal_id', 'reason']
+        ),
+        responses={
+            200: openapi.Response("Withdrawal rejected successfully"),
+            400: openapi.Response("Invalid request"),
+            404: openapi.Response("Withdrawal request not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def reject_withdrawal(self, request):
+        """Reject a withdrawal request and refund to wallet"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        withdrawal_id = request.data.get('withdrawal_id')
+        reason = request.data.get('reason', '')
+        
+        if not withdrawal_id:
+            return Response({"message": "withdrawal_id is required"}, status=400)
+        
+        from users.models import PayoutRequest
+        from transactions.models import Wallet
+        from django.utils import timezone
+        
+        try:
+            w = PayoutRequest.objects.get(id=withdrawal_id)
+        except PayoutRequest.DoesNotExist:
+            return Response({"message": "Withdrawal request not found"}, status=404)
+        
+        if w.status != 'pending':
+            return Response(
+                {"message": f"Cannot reject withdrawal with status '{w.status}'"},
+                status=400
+            )
+        
+        try:
+            # Refund to wallet
+            if w.vendor:
+                wallet = w.vendor.user.wallet
+            else:
+                wallet = w.user.wallet
+            
+            wallet.credit(w.amount, source=f"Withdrawal Refund {w.reference}")
+            
+            # Update withdrawal status
+            w.status = 'failed'
+            w.failure_reason = reason
+            w.processed_at = timezone.now()
+            w.save()
+            
+            # Notify the requestor
+            from users.notification_service import NotificationService
+            if w.vendor:
+                user = w.vendor.user
+                requestor_name = w.vendor.store_name
+            else:
+                user = w.user
+                requestor_name = user.full_name or user.email
+            
+            NotificationService.create_notification(
+                user=user,
+                title="Withdrawal Rejected",
+                message=f"Your withdrawal request of ₦{w.amount:,.2f} has been rejected.",
+                category='withdrawal',
+                priority='high',
+                description=f"Reason: {reason}\n\nThe amount has been refunded to your wallet. Reference: {w.reference}",
+                action_url=f"/wallet",
+                action_text="View Wallet",
+                metadata={
+                    'withdrawal_id': str(w.id),
+                    'reference': w.reference,
+                    'amount': str(w.amount),
+                    'reason': reason,
+                },
+                send_websocket=True,
+                send_email=True,
+            )
+            
+            return Response({
+                "success": True,
+                "message": f"Withdrawal {w.reference} rejected. Amount of ₦{w.amount:,.2f} refunded to wallet."
+            })
+        except Exception as e:
+            logger.error(f"Error rejecting withdrawal {withdrawal_id}: {str(e)}", exc_info=True)
+            return Response(
+                {"message": f"Error rejecting withdrawal: {str(e)}"},
+                status=400
+            )
 
 
 class AdminAnalyticsViewSet(AdminBaseViewSet):

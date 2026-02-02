@@ -1003,10 +1003,18 @@ class WithdrawalRequestSerializer(serializers.Serializer):
     """Serializer for withdrawal requests"""
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     pin = serializers.CharField(write_only=True, min_length=4, max_length=4)
+    bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
     
     def validate_pin(self, value):
         if not value.isdigit():
             raise serializers.ValidationError("PIN must contain only digits.")
+        return value
+    
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than zero.")
         return value
 
 
@@ -1014,6 +1022,7 @@ class WithdrawalResponseSerializer(serializers.Serializer):
     """Response serializer for withdrawal requests"""
     success = serializers.BooleanField()
     message = serializers.CharField()
+    reference = serializers.CharField(required=False)
 
 
 class PaymentSettingsSerializer(serializers.Serializer):
