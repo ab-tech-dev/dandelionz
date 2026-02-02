@@ -1123,6 +1123,8 @@ class VendorViewSet(viewsets.ViewSet):
         order_ids = Order.objects.filter(
             order_items__product__store=vendor
         ).values_list('order_id', flat=True).distinct()
+        
+        logger.info(f"Vendor {vendor.uuid} - Found {len(order_ids)} orders with their products")
 
         # Fetch full orders with optimized queries
         orders = Order.objects.filter(
@@ -1150,9 +1152,15 @@ class VendorViewSet(viewsets.ViewSet):
         serializer = VendorOrderListItemSerializer(paginated_orders, many=True)
         
         if paginated_orders is not None:
-            return paginator.get_paginated_response(serializer.data)
+            paginated_data = {
+                "count": paginator.count,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+                "results": serializer.data
+            }
+            return Response(standardized_response(data=paginated_data))
         else:
-            return Response(serializer.data)
+            return Response(standardized_response(data=serializer.data))
 
     @swagger_auto_schema(
         operation_id="vendor_order_detail",
