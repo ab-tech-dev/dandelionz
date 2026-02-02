@@ -166,16 +166,6 @@ class AuthenticationService:
                 logger.warning(f"Login attempt for disabled account: {email}")
                 return False, {"success": False, "error": "Account is disabled. Please contact support."}, 403
 
-            # Check if email is verified
-            if settings.REQUIRE_EMAIL_VERIFICATION and not user.is_verified:
-                logger.warning(f"Login attempt with unverified email: {email}")
-                return False, {
-                    "success": False,
-                    "error": "Please verify your email before logging in. Check your email for the verification link.",
-                    "email_verified": False,
-                    "verification_needed": True
-                }, 403
-
             cache.delete(f"failed_logins:{email}")
             context = {}
             if request:
