@@ -172,6 +172,7 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
     def perform_create(self, serializer):
         # Extract vendor from authenticated user
         from users.services.profile_resolver import ProfileResolver
+        from authentication.core.exceptions import MissingAddressException
         vendor = ProfileResolver.resolve_vendor(self.request.user)
 
         # Check if vendor exists
@@ -187,10 +188,16 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
             })
 
         # Check vendor has address with coordinates
+        # Return 400 Bad Request with error code MISSING_ADDRESS
         if not vendor.store_latitude or not vendor.store_longitude:
-            raise serializers.ValidationError({
-                "store_address": "You must update your store address with coordinates before you can upload products. Please go to your vendor profile and set your store location."
-            })
+            logger.warning(
+                f"Product creation blocked: Vendor {vendor.user.email} missing store coordinates. "
+                f"Latitude: {vendor.store_latitude}, Longitude: {vendor.store_longitude}"
+            )
+            raise MissingAddressException(
+                detail="You must update your store address with coordinates before you can upload products. "
+                       "Please go to your vendor profile and set your store location."
+            )
 
         # Save the product as draft
         product = serializer.save(store=vendor, publish_status='draft')
@@ -254,6 +261,14 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
         )
 
     def create(self, request, *args, **kwargs):
+        """
+        Create a new product with validation for vendor setup.
+        
+        Returns 400 Bad Request with error_code MISSING_ADDRESS if vendor lacks store coordinates.
+        Returns 400 Bad Request if vendor is not verified.
+        Returns 400 Bad Request if user is not registered as vendor.
+        Returns 201 Created on success.
+        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
@@ -273,26 +288,81 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
 
 @extend_schema(
     tags=["Products"],
-    description="Update specific fields of a product (authenticated vendor or admin only). Patchable fields: price, stock, description, category, image.",
+    description="Update product with advanced image handling. Supports mixed image operations: keep existing (by ID), upload new, delete, and reorder. Also supports JSON variants, percentage discount, and video updates.",
     parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
-    request=ProductSerializer,
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "price": {"type": "number"},
+                "discount": {"type": "integer", "minimum": 0, "maximum": 100},
+                "stock": {"type": "integer"},
+                "description": {"type": "string"},
+                "category": {"type": "string"},
+                "brand": {"type": "string"},
+                "tags": {"type": "string"},
+                "variants": {"type": "object"},
+                "images_data": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "image": {"type": "string", "format": "binary"},
+                            "is_main": {"type": "boolean"},
+                            "alt_text": {"type": "string"},
+                            "variant_association": {"type": "object"}
+                        }
+                    }
+                },
+                "delete_images": {
+                    "type": "array",
+                    "items": {"type": "integer"}
+                }
+            }
+        }
+    },
     examples=[
         OpenApiExample(
-            "Patch product example",
-            summary="Update product stock",
-            value={"stock": 10}
+            "Update price and discount",
+            summary="Change price and discount",
+            value={"price": 99.99, "discount": 10}
+        ),
+        OpenApiExample(
+            "Advanced image handling",
+            summary="Keep, add, and delete images",
+            value={
+                "images_data": [
+                    {"id": 1},
+                    {"image": "<file>", "is_main": True},
+                    {"id": 3, "alt_text": "Updated"}
+                ],
+                "delete_images": [2]
+            }
         )
     ],
     responses={
-        200: ProductSerializer,
+        200: {"description": "Product updated successfully"},
         404: {"description": "Product not found"},
-        403: {"description": "Permission denied"}
+        403: {"description": "Permission denied"},
+        400: {"description": "Validation error"}
     }
 )
 class PatchProductView(BaseAPIView, generics.UpdateAPIView):
+    """
+    Update product with support for:
+    - Basic fields (price, stock, description, etc.)
+    - Advanced image handling (mixed keep/upload/delete)
+    - JSON variants
+    - Percentage-based discount
+    - Video updates
+    """
     permission_classes = [IsAuthenticated]
-    serializer_class = ProductSerializer
     lookup_field = 'slug'
+
+    def get_serializer_class(self):
+        from .serializers import UpdateProductSerializer
+        return UpdateProductSerializer
 
     def get_object(self):
         slug = self.kwargs.get('slug')
@@ -300,27 +370,36 @@ class PatchProductView(BaseAPIView, generics.UpdateAPIView):
 
         # Permission check
         user = self.request.user
-        if user.is_admin:
+        from users.services.profile_resolver import ProfileResolver
+        
+        if user.is_staff or user.is_superuser:
             return product
         elif user.is_vendor:
-            if hasattr(user, 'vendor_profile') and product.store == user.vendor_profile:
+            vendor = ProfileResolver.resolve_vendor(user)
+            if vendor and product.store == vendor:
                 return product
             else:
-                raise PermissionError("You cannot update a product you do not own.")
+                raise PermissionDenied("You cannot update a product you do not own.")
         else:
-            raise PermissionError("You do not have permission to update this product.")
+            raise PermissionDenied("You do not have permission to update this product.")
 
     def patch(self, request, *args, **kwargs):
+        """
+        Partially update product with advanced image handling.
+        """
         product = self.get_object()
-
-        # Only allow patching specific fields
-        allowed_fields = ['price', 'discount', 'stock', 'description', 'category', 'brand', 'tags', 'variants', 'image']
-        data = {k: v for k, v in request.data.items() if k in allowed_fields}
-
-        serializer = self.get_serializer(product, data=data, partial=True)
+        serializer = self.get_serializer(product, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        return Response(standardized_response(data=serializer.data, message="Product updated successfully"))
+        
+        # Return updated product
+        response_serializer = self.get_serializer(product)
+        return Response(
+            standardized_response(
+                data=response_serializer.data,
+                message="Product updated successfully"
+            )
+        )
 
 
 
@@ -1038,14 +1117,28 @@ class SubmitDraftProductView(BaseAPIView):
 )
 class UpdateDraftProductView(BaseAPIView):
     """
-    Update a draft product's details.
+    Update a draft product's details with advanced image handling.
     Only available for products in draft status.
     Only the vendor who created the product can update it.
+    
+    Features:
+    - Mixed image operations (keep, upload, delete, reorder)
+    - JSON variant management
+    - Percentage discount (0-100)
+    - Video upload
+    - Same schema as live product updates for consistency
     """
     permission_classes = [IsAuthenticated, IsVendor]
-    serializer_class = ProductSerializer
+
+    def get_serializer_class(self):
+        from .serializers import UpdateProductSerializer
+        return UpdateProductSerializer
 
     def patch(self, request, slug):
+        """
+        Update draft product with consistent serializer and validation.
+        Returns 400 if product is not in draft status.
+        """
         try:
             product = Product.objects.get(slug=slug)
         except Product.DoesNotExist:
@@ -1074,8 +1167,9 @@ class UpdateDraftProductView(BaseAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Update the product with provided fields
-        serializer = self.serializer_class(product, data=request.data, partial=True)
+        # Use UpdateProductSerializer for consistency with live products
+        serializer_class = self.get_serializer_class()
+        serializer = serializer_class(product, data=request.data, partial=True, context={'request': request})
         
         if serializer.is_valid():
             serializer.save()

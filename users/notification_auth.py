@@ -19,7 +19,7 @@ User = get_user_model()
 
 
 @database_sync_to_async
-def get_user(token: str) -> Optional[User]:
+def get_user(token: str) -> Optional['User']:
     """
     Extract user from JWT token
     
@@ -169,22 +169,22 @@ class NotificationAuthPermission:
     """
 
     @staticmethod
-    async def can_receive_notifications(user: User) -> bool:
+    async def can_receive_notifications(user: User):
         """Check if user can receive notifications"""
         return user.is_authenticated
 
     @staticmethod
-    async def can_modify_notification(user: User, notification) -> bool:
+    async def can_modify_notification(user: User, notification):
         """Check if user can modify notification"""
         return notification.user == user
 
     @staticmethod
-    async def can_broadcast_notifications(user: User) -> bool:
+    async def can_broadcast_notifications(user: User):
         """Check if user can send broadcast notifications (admin only)"""
         return await user_is_admin(user)
 
     @staticmethod
-    async def can_view_other_notifications(user: User) -> bool:
+    async def can_view_other_notifications(user: User):
         """Check if user can view other users' notifications (admin only)"""
         return await user_is_admin(user)
 

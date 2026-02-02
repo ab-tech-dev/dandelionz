@@ -97,12 +97,13 @@ class AdminDashboardOrderStatusHistorySerializer(serializers.ModelSerializer):
 class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
     """Lightweight order info for admin list views"""
     customer_email = serializers.CharField(source='customer.email', read_only=True)
+    full_name = serializers.CharField(source='customer.full_name', read_only=True)
     current_status = serializers.CharField(source='status', read_only=True)
     
     class Meta:
         model = Order
         fields = [
-            'order_id', 'customer_email', 'current_status', 'total_price',
+            'order_id', 'customer_email', 'full_name', 'current_status', 'total_price',
             'delivery_fee', 'payment_status', 'ordered_at', 'updated_at'
         ]
         read_only_fields = fields
@@ -111,6 +112,7 @@ class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
 class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     """Full order details for admin inspection"""
     customer_email = serializers.CharField(source='customer.email', read_only=True)
+    full_name = serializers.CharField(source='customer.full_name', read_only=True)
     customer_phone = serializers.CharField(source='customer.phone_number', read_only=True)
     order_items = AdminDashboardOrderItemSerializer(many=True, read_only=True)
     status_history = AdminDashboardOrderStatusHistorySerializer(many=True, read_only=True)
@@ -119,7 +121,7 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'order_id', 'customer_email', 'customer_phone', 'current_status',
+            'order_id', 'customer_email', 'full_name', 'customer_phone', 'current_status',
             'total_price', 'delivery_fee', 'discount', 'payment_status',
             'tracking_number', 'ordered_at', 'updated_at', 'order_items',
             'status_history'

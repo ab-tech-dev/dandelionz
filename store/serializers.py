@@ -404,7 +404,254 @@ class PendingProductsSerializer(CloudinarySerializer):
         return None
 
 
-class ProductApprovalSerializer(serializers.Serializer):
+class UpdateProductSerializer(CloudinarySerializer):
+    """
+    Serializer for updating products with advanced image and variant handling.
+    
+    Features:
+    - Mixed image handling: Keep existing by ID or upload new files
+    - Explicit image deletion via delete_images array
+    - Variant management as JSON
+    - Discount calculation (0-100%)
+    - Consistent structure for both draft and live products
+    
+    Image Format:
+    {
+        "images_data": [
+            {"id": 1},  // Keep existing image with ID 1
+            {"image": <file>, "is_main": true, "alt_text": "Main pic"},  // New upload
+            {"id": 3, "is_main": false, "alt_text": "Updated alt"}  // Update metadata
+        ],
+        "delete_images": [2, 4]  // Delete images with IDs 2 and 4
+    }
+    """
+    vendorName = serializers.CharField(source='store.store_name', read_only=True)
+    image = serializers.SerializerMethodField()
+    in_stock = serializers.BooleanField(read_only=True)
+    images = ProductImageSerializer(many=True, read_only=True)
+    videos = ProductVideoSerializer(many=True, read_only=True)
+    
+    # Mixed image handling
+    images_data = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        required=False,
+        help_text="Array of images to keep, update, or create. Supports mixed formats with ID or file upload."
+    )
+    delete_images = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False,
+        help_text="Array of image IDs to delete"
+    )
+    
+    # Video handling
+    video_data = ProductVideoCreateSerializer(write_only=True, required=False, allow_null=True)
+    
+    category = serializers.SlugRelatedField(
+        slug_field='slug',
+        queryset=Category.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
+    class Meta:
+        model = Product
+        fields = [
+            'id', 'name', 'slug', 'description', 'category', 'brand',
+            'price', 'discount', 'stock', 'tags', 'variants', 'image', 
+            'images', 'videos', 'images_data', 'delete_images', 'video_data',
+            'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'slug', 'vendorName', 'in_stock', 'created_at', 'updated_at', 'images', 'videos']
+
+    def get_image(self, obj):
+        """Return main image if available"""
+        main_image = obj.main_image
+        if main_image:
+            return self.get_cloudinary_url(main_image.image)
+        return None
+
+    def validate_discount(self, value):
+        """Ensure discount is between 0 and 100"""
+        if value is not None and (value < 0 or value > 100):
+            raise serializers.ValidationError("Discount must be between 0 and 100")
+        return value
+
+    def validate_variants(self, value):
+        """Validate variants JSON structure if provided"""
+        if value is None:
+            return value
+        
+        # If variants is a string, try to parse it
+        if isinstance(value, str):
+            try:
+                import json
+                value = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                raise serializers.ValidationError("Variants must be valid JSON")
+        
+        # Expected keys in variants
+        valid_keys = {'colors', 'sizes', 'materials'}
+        
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("Variants must be a JSON object")
+        
+        # Validate structure
+        for key in value.keys():
+            if not isinstance(value[key], list):
+                raise serializers.ValidationError(f"Variant '{key}' must be a list of strings")
+        
+        return value
+
+    def validate(self, data):
+        """Cross-field validation"""
+        # Validate image handling
+        images_data = data.get('images_data', [])
+        delete_images = data.get('delete_images', [])
+        
+        if images_data:
+            # Check that at least one image will remain after deletions
+            product = self.instance
+            if product:
+                current_image_count = product.images.count()
+                deleting_count = len(delete_images)
+                creating_count = len([img for img in images_data if 'image' in img])
+                keeping_count = len([img for img in images_data if 'id' in img])
+                
+                total_remaining = current_image_count - deleting_count + creating_count + (keeping_count - len([img for img in images_data if 'id' in img and img['id'] in delete_images]))
+                
+                if total_remaining == 0:
+                    raise serializers.ValidationError({"images_data": "Product must have at least one image"})
+            
+            # Check if at least one image is marked as main
+            has_main = any(img.get('is_main', False) for img in images_data)
+            if has_main:
+                # Count how many images are being marked as main (should be exactly 1 across all operations)
+                main_count = len([img for img in images_data if img.get('is_main', False)])
+                if main_count > 1:
+                    raise serializers.ValidationError({"images_data": "Only one image can be marked as main"})
+        
+        return data
+
+    def update(self, instance, validated_data):
+        """
+        Update product with advanced image and variant handling.
+        
+        Handles:
+        1. Delete images specified in delete_images
+        2. Keep existing images listed in images_data with ID
+        3. Create new images from file uploads
+        4. Update image metadata (is_main, alt_text)
+        5. Ensure exactly one main image
+        """
+        from .models import ProductImage, validate_video_size
+        
+        images_data = validated_data.pop('images_data', None)
+        delete_images = validated_data.pop('delete_images', None)
+        video_data = validated_data.pop('video_data', None)
+        
+        # 1. Delete specified images
+        if delete_images:
+            ProductImage.objects.filter(
+                product=instance,
+                id__in=delete_images
+            ).delete()
+        
+        # 2. Handle images_data
+        if images_data is not None:
+            # Track which images are being kept/created
+            images_to_process = []
+            new_images = []
+            
+            for idx, img_data in enumerate(images_data):
+                img_data_copy = dict(img_data)  # Create a copy to avoid modifying original
+                
+                if 'id' in img_data_copy:
+                    # Existing image - update metadata if provided
+                    image_id = img_data_copy.pop('id')
+                    
+                    try:
+                        img_obj = ProductImage.objects.get(id=image_id, product=instance)
+                        
+                        # Update metadata
+                        for field in ['is_main', 'alt_text', 'variant_association']:
+                            if field in img_data_copy:
+                                setattr(img_obj, field, img_data_copy[field])
+                        
+                        img_obj.display_order = idx
+                        img_obj.save()
+                        images_to_process.append(img_obj)
+                        
+                    except ProductImage.DoesNotExist:
+                        raise serializers.ValidationError(
+                            {"images_data": f"Image with ID {image_id} not found"}
+                        )
+                
+                elif 'image' in img_data_copy:
+                    # New image upload
+                    image_file = img_data_copy.pop('image')
+                    is_main = img_data_copy.pop('is_main', False)
+                    
+                    new_img = ProductImage(
+                        product=instance,
+                        image=image_file,
+                        is_main=is_main,
+                        alt_text=img_data_copy.get('alt_text'),
+                        variant_association=img_data_copy.get('variant_association'),
+                        display_order=idx
+                    )
+                    new_images.append(new_img)
+                    images_to_process.append(new_img)
+            
+            # Bulk create new images
+            if new_images:
+                ProductImage.objects.bulk_create(new_images)
+            
+            # Ensure exactly one main image
+            main_images = [img for img in images_to_process if img.is_main]
+            if main_images:
+                # Set first main image as main, unset others
+                instance.images.exclude(id=main_images[0].id).update(is_main=False)
+                main_images[0].is_main = True
+                main_images[0].save()
+            else:
+                # No main image specified - set first image as main
+                if images_to_process:
+                    images_to_process[0].is_main = True
+                    images_to_process[0].save()
+                    instance.images.exclude(id=images_to_process[0].id).update(is_main=False)
+        
+        # 3. Handle video
+        if video_data:
+            from .models import validate_video_size
+            
+            # Delete existing video if new one is being uploaded
+            instance.videos.all().delete()
+            
+            video_file = video_data.get('video')
+            if video_file:
+                if hasattr(video_file, 'size'):
+                    is_valid, error_msg = validate_video_size(video_file.size)
+                    if not is_valid:
+                        raise serializers.ValidationError({"video_data": error_msg})
+                
+                ProductVideo.objects.create(
+                    product=instance,
+                    video=video_file,
+                    title=video_data.get('title'),
+                    description=video_data.get('description')
+                )
+        
+        # 4. Update basic fields
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        
+        instance.save()
+        return instance
+
+
+
     """
     Serializer for approving or rejecting a product.
     Used for validation of approval/rejection requests.

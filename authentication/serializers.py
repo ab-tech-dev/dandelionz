@@ -48,7 +48,11 @@ class UserBaseSerializer(serializers.ModelSerializer):
 class TokenSerializer(serializers.Serializer):
     access_token = serializers.CharField(help_text="JWT access token for API requests")
     refresh_token = serializers.CharField(help_text="JWT refresh token for obtaining new access tokens")
-    refresh_expires_in = serializers.FloatField(help_text="Refresh token expiration time in seconds")
+    token_type = serializers.CharField(help_text="Token type (Bearer)")
+    expires_in = serializers.IntegerField(help_text="Access token expiration time in seconds")
+    refresh_expires_in = serializers.IntegerField(help_text="Refresh token expiration time in seconds")
+    user_uuid = serializers.CharField(help_text="User UUID")
+    issued_at = serializers.IntegerField(help_text="Token issuance timestamp")
 
 
 class AuthDataSerializer(serializers.Serializer):
@@ -56,6 +60,7 @@ class AuthDataSerializer(serializers.Serializer):
     tokens = TokenSerializer(help_text="JWT tokens for authentication")
     is_new_user = serializers.BooleanField(required=False, help_text="Indicates if this is a newly created account")
     email_verified = serializers.BooleanField(required=False, help_text="Email verification status")
+    verification_needed = serializers.BooleanField(required=False, help_text="Whether email verification is required")
 
 
 # ------------------------------------------------------

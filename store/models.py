@@ -74,11 +74,18 @@ class Product(models.Model):
     slug = models.SlugField(unique=True, blank=True)
     description = models.TextField(blank=True)
     price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    discount = models.PositiveIntegerField(default=0, help_text="Discount percentage applied to the original price (0-100)")
+    discount = models.PositiveIntegerField(
+        default=0,
+        help_text="Discount percentage (0-100). Final price = price * (1 - discount/100)"
+    )
     stock = models.PositiveIntegerField(null=True, blank=True)
     brand = models.CharField(max_length=255, null=True, blank=True)
     tags = models.TextField(null=True, blank=True, help_text="Comma-separated tags or JSON array")
-    variants = models.JSONField(null=True, blank=True, help_text="Product variants with color and/or size")
+    variants = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Product variants in JSON format: {\"colors\": [\"Red\", \"Blue\"], \"sizes\": [\"S\", \"M\"], \"materials\": [\"Cotton\"]}"
+    )
     
     # Draft & Publish Status
     publish_status = models.CharField(max_length=20, choices=PUBLISH_STATUS, default='draft')
