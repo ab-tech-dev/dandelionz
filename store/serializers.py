@@ -53,13 +53,28 @@ class CategorySerializer(CloudinarySerializer):
         ]
 
     def get_product_count(self, obj):
-        return obj.product_count
+        try:
+            if not obj:
+                return 0
+            return obj.product_count
+        except Exception:
+            return 0
 
     def get_total_sales(self, obj):
-        return obj.total_sales
+        try:
+            if not obj:
+                return 0
+            return obj.total_sales
+        except Exception:
+            return 0
 
     def get_image(self, obj):
-        return self.get_cloudinary_url(obj.image)
+        try:
+            if not obj:
+                return None
+            return self.get_cloudinary_url(obj.image)
+        except Exception:
+            return None
 
 
 class CategoryListSerializer(serializers.ModelSerializer):
@@ -74,10 +89,20 @@ class CategoryListSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'slug', 'product_count', 'total_sales']
 
     def get_product_count(self, obj):
-        return obj.product_count
+        try:
+            if not obj:
+                return 0
+            return obj.product_count
+        except Exception:
+            return 0
 
     def get_total_sales(self, obj):
-        return obj.total_sales
+        try:
+            if not obj:
+                return 0
+            return obj.total_sales
+        except Exception:
+            return 0
 
 
 # ---------------------------
@@ -98,7 +123,12 @@ class ProductImageSerializer(CloudinarySerializer):
         read_only_fields = ['id', 'uploaded_at', 'updated_at']
 
     def get_image_url(self, obj):
-        return self.get_cloudinary_url(obj.image)
+        try:
+            if not obj:
+                return None
+            return self.get_cloudinary_url(obj.image)
+        except Exception:
+            return None
 
 
 class ProductImageCreateSerializer(serializers.ModelSerializer):
@@ -129,7 +159,12 @@ class ProductVideoSerializer(CloudinarySerializer):
         read_only_fields = ['id', 'duration', 'file_size', 'uploaded_at', 'updated_at']
 
     def get_video_url(self, obj):
-        return self.get_cloudinary_url(obj.video)
+        try:
+            if not obj:
+                return None
+            return self.get_cloudinary_url(obj.video)
+        except Exception:
+            return None
 
 
 class ProductVideoCreateSerializer(serializers.ModelSerializer):
@@ -176,13 +211,18 @@ class ReviewSerializer(CloudinarySerializer):
 
     def get_is_verified_purchase(self, obj):
         """Check if the review is from a verified purchase"""
-        from transactions.models import OrderItem, Order
-        has_purchased = OrderItem.objects.filter(
-            order__customer=obj.customer,
-            order__status__in=[Order.Status.PAID, Order.Status.DELIVERED, Order.Status.SHIPPED],
-            product=obj.product
-        ).exists()
-        return has_purchased
+        try:
+            if not obj or not hasattr(obj, 'customer') or not hasattr(obj, 'product'):
+                return False
+            from transactions.models import OrderItem, Order
+            has_purchased = OrderItem.objects.filter(
+                order__customer=obj.customer,
+                order__status__in=[Order.Status.PAID, Order.Status.DELIVERED, Order.Status.SHIPPED],
+                product=obj.product
+            ).exists()
+            return has_purchased
+        except Exception:
+            return False
 
 
 # ---------------------------
@@ -225,9 +265,14 @@ class ProductSerializer(CloudinarySerializer):
 
     def get_rating(self, obj):
         """Calculate average rating from reviews"""
-        from django.db.models import Avg
-        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
-        return round(avg_rating, 2) if avg_rating else None
+        try:
+            if not obj or not hasattr(obj, 'reviews'):
+                return None
+            from django.db.models import Avg
+            avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+            return round(avg_rating, 2) if avg_rating else None
+        except Exception:
+            return None
 
 class CreateProductSerializer(CloudinarySerializer):
     """
@@ -427,9 +472,14 @@ class PendingProductsSerializer(CloudinarySerializer):
 
     def get_rating(self, obj):
         """Calculate average rating from reviews"""
-        from django.db.models import Avg
-        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
-        return round(avg_rating, 2) if avg_rating else None
+        try:
+            if not obj or not hasattr(obj, 'reviews'):
+                return None
+            from django.db.models import Avg
+            avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+            return round(avg_rating, 2) if avg_rating else None
+        except Exception:
+            return None
 
 
 class UpdateProductSerializer(CloudinarySerializer):
@@ -742,21 +792,31 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
 
     def get_rating(self, obj):
         """Calculate average rating from reviews"""
-        from django.db.models import Avg
-        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
-        return round(avg_rating, 2) if avg_rating else None
+        try:
+            if not obj or not hasattr(obj, 'reviews'):
+                return None
+            from django.db.models import Avg
+            avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+            return round(avg_rating, 2) if avg_rating else None
+        except Exception:
+            return None
 
     def get_status(self, obj):
         """
         Convert approval_status to uppercase format.
         Choices: 'pending', 'approved', 'rejected' -> 'PENDING', 'APPROVED', 'REJECTED'
         """
-        status_map = {
-            'pending': 'PENDING',
-            'approved': 'APPROVED',
-            'rejected': 'REJECTED'
-        }
-        return status_map.get(obj.approval_status, obj.approval_status.upper())
+        try:
+            if not obj or not hasattr(obj, 'approval_status'):
+                return None
+            status_map = {
+                'pending': 'PENDING',
+                'approved': 'APPROVED',
+                'rejected': 'REJECTED'
+            }
+            return status_map.get(obj.approval_status, obj.approval_status.upper())
+        except Exception:
+            return None
 
 
 # ---------------------------

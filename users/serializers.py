@@ -963,10 +963,20 @@ class DeliveryAgentListSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at']
     
     def get_total_assigned(self, obj):
-        return obj.assigned_orders.count()
+        try:
+            if not obj or not hasattr(obj, 'assigned_orders'):
+                return 0
+            return obj.assigned_orders.count()
+        except Exception:
+            return 0
     
     def get_total_delivered(self, obj):
-        return obj.assigned_orders.filter(status='DELIVERED').count()
+        try:
+            if not obj or not hasattr(obj, 'assigned_orders'):
+                return 0
+            return obj.assigned_orders.filter(status='DELIVERED').count()
+        except Exception:
+            return 0
 
 # =====================================================
 # VENDOR WALLET & PAYMENT SERIALIZERS

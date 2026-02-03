@@ -43,8 +43,13 @@ class AdminDashboardUserDetailSerializer(serializers.ModelSerializer):
     
     def get_suspension_history(self, obj):
         """Return suspension history for this user"""
-        suspensions = obj.suspensions.all()[:10]  # Last 10 suspensions
-        return DashboardUserSuspensionSerializer(suspensions, many=True).data
+        try:
+            if not obj or not hasattr(obj, 'suspensions'):
+                return []
+            suspensions = obj.suspensions.all()[:10]  # Last 10 suspensions
+            return DashboardUserSuspensionSerializer(suspensions, many=True).data
+        except Exception:
+            return []
 
 
 class DashboardUserSuspensionSerializer(serializers.ModelSerializer):

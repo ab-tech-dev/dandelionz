@@ -19,9 +19,14 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_rating(self, obj):
         """Calculate average rating from reviews"""
-        from django.db.models import Avg
-        avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
-        return round(avg_rating, 2) if avg_rating else None
+        try:
+            if not obj or not hasattr(obj, 'reviews'):
+                return None
+            from django.db.models import Avg
+            avg_rating = obj.reviews.aggregate(Avg('rating'))['rating__avg']
+            return round(avg_rating, 2) if avg_rating else None
+        except Exception:
+            return None
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -37,7 +42,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'product', 'item_subtotal', 'price_at_purchase']
 
     def get_item_subtotal(self, obj):
-        return obj.item_subtotal
+        try:
+            if not obj:
+                return None
+            return obj.item_subtotal
+        except Exception:
+            return None
 
     def create(self, validated_data):
         product = validated_data.get('product')
@@ -270,16 +280,26 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
 
     def get_logs(self, obj):
-        request = self.context.get('request', None)
-        if request and request.user and request.user.is_staff:
-            qs = obj.logs.all().order_by('-created_at')
-            return TransactionLogSerializer(qs, many=True).data
-        return []
+        try:
+            request = self.context.get('request', None)
+            if request and request.user and request.user.is_staff:
+                if not obj or not hasattr(obj, 'logs'):
+                    return []
+                qs = obj.logs.all().order_by('-created_at')
+                return TransactionLogSerializer(qs, many=True).data
+            return []
+        except Exception:
+            return []
 
     def get_timeline(self, obj):
         """Generate and serialize the order timeline"""
-        timeline_data = get_order_timeline(obj)
-        return OrderTimelineEventSerializer(timeline_data, many=True).data
+        try:
+            if not obj:
+                return []
+            timeline_data = get_order_timeline(obj)
+            return OrderTimelineEventSerializer(timeline_data, many=True).data
+        except Exception:
+            return []
 
 
 # ========================
@@ -345,7 +365,12 @@ class InstallmentPaymentSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'reference', 'paid_at', 'verified', 'created_at', 'updated_at', 'is_overdue']
 
     def get_is_overdue(self, obj):
-        return obj.is_overdue()
+        try:
+            if not obj:
+                return False
+            return obj.is_overdue()
+        except Exception:
+            return False
 
 
 class InstallmentPlanSerializer(serializers.ModelSerializer):
@@ -369,13 +394,28 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
         ]
 
     def get_paid_installments_count(self, obj):
-        return obj.get_paid_installments_count()
+        try:
+            if not obj:
+                return 0
+            return obj.get_paid_installments_count()
+        except Exception:
+            return 0
 
     def get_pending_installments_count(self, obj):
-        return obj.get_pending_installments_count()
+        try:
+            if not obj:
+                return 0
+            return obj.get_pending_installments_count()
+        except Exception:
+            return 0
 
     def get_is_fully_paid(self, obj):
-        return obj.is_fully_paid()
+        try:
+            if not obj:
+                return False
+            return obj.is_fully_paid()
+        except Exception:
+            return False
 
     def create(self, validated_data):
         """Create installment plan with related installment payments"""
