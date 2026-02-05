@@ -67,7 +67,6 @@ urlpatterns = [
     path('store/', include('store.urls')),
     path('user/', include('users.urls')),
     path('transactions/', include('transactions.urls')),
-    path('api/notifications/', include('users.notification_urls')),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
