@@ -1889,11 +1889,25 @@ class AdminVendorViewSet(AdminBaseViewSet):
         operation_summary="Approve or Unapprove Vendor",
         operation_description="Approve or revoke approval for a vendor. Requires vendor UUID and approval boolean flag.",
         tags=["Vendor Management"],
-        request_body=AdminVendorApprovalSerializer,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid", "approve"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "approve": openapi.Schema(type=openapi.TYPE_BOOLEAN)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "approve": True
+            }
+        ),
         responses={
             200: openapi.Response(
                 "Vendor approval status updated",
-                AdminVendorActionResponseSerializer()
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "approved": True}
+                }
             ),
             400: openapi.Response("Invalid request data"),
             404: openapi.Response("Vendor not found"),
@@ -1929,11 +1943,25 @@ class AdminVendorViewSet(AdminBaseViewSet):
         operation_summary="Suspend or Activate User",
         operation_description="Suspend (deactivate) or activate a user account. Suspended users cannot access the platform.",
         tags=["Vendor Management"],
-        request_body=AdminVendorSuspendSerializer,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid", "suspend"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "suspend": openapi.Schema(type=openapi.TYPE_BOOLEAN)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "suspend": True
+            }
+        ),
         responses={
             200: openapi.Response(
                 "User status updated",
-                AdminVendorActionResponseSerializer()
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "suspended": True}
+                }
             ),
             400: openapi.Response("Invalid request data"),
             404: openapi.Response("User not found"),
@@ -1942,12 +1970,16 @@ class AdminVendorViewSet(AdminBaseViewSet):
         security=[{"Bearer": []}],
     )
     @action(detail=False, methods=["post"])
-    def suspend_user(self, request):
+    def suspend_user(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        serializer = AdminVendorSuspendSerializer(data=request.data)
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if vendor_uuid and not data.get("user_uuid"):
+            data["user_uuid"] = str(vendor_uuid)
+
+        serializer = AdminVendorSuspendSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
@@ -1966,11 +1998,23 @@ class AdminVendorViewSet(AdminBaseViewSet):
         operation_summary="Verify Vendor KYC",
         operation_description="Mark a vendor's KYC (Know Your Customer) documentation as verified.",
         tags=["Vendor Management"],
-        request_body=AdminVendorKYCSerializer,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5"
+            }
+        ),
         responses={
             200: openapi.Response(
                 "KYC verification completed",
-                AdminVendorActionResponseSerializer()
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "message": "Vendor KYC verified"}
+                }
             ),
             400: openapi.Response("Invalid request data"),
             404: openapi.Response("Vendor not found"),

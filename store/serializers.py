@@ -43,7 +43,8 @@ class CategorySerializer(CloudinarySerializer):
     """
     product_count = serializers.SerializerMethodField()
     total_sales = serializers.SerializerMethodField()
-    image = serializers.SerializerMethodField()
+    # Accepts image upload on create/update; representation is normalized to URL
+    image = serializers.ImageField(required=False, allow_null=True)
 
     class Meta:
         model = Category
@@ -68,13 +69,13 @@ class CategorySerializer(CloudinarySerializer):
         except Exception:
             return 0
 
-    def get_image(self, obj):
+    def to_representation(self, instance):
+        rep = super().to_representation(instance)
         try:
-            if not obj:
-                return None
-            return self.get_cloudinary_url(obj.image)
+            rep['image'] = self.get_cloudinary_url(instance.image) if instance and instance.image else None
         except Exception:
-            return None
+            rep['image'] = None
+        return rep
 
 
 class CategoryListSerializer(serializers.ModelSerializer):

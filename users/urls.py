@@ -145,10 +145,11 @@ urlpatterns = [
 
     # ADMIN VENDOR MANAGEMENT
     path("admin/vendors/", admin_list_vendors, name="admin-list-vendors"),
-    re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
     path("admin/vendors/approve/", admin_approve_vendor, name="admin-approve-vendor"),
-    path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
     path("admin/vendors/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc"),
+    path("admin/vendors/<uuid:vendor_uuid>/suspend/", admin_suspend_user, name="admin-vendor-suspend"),
+    path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
+    re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
 
     # ADMIN MARKETPLACE
     path("admin/products/", admin_list_products, name="admin-list-products"),

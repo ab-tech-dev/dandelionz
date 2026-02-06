@@ -63,6 +63,7 @@ urlpatterns = [
     # ADMIN - PRODUCT APPROVAL & REVIEW
     # ==================
     path('admin/products/pending/', PendingProductsListView.as_view(), name='pending-products'),
+    path('admin/products/category/', CategoryListCreateView.as_view(), name='admin-products-category'),
     path('admin/products/<slug:slug>/approve/', ApproveProductView.as_view(), name='approve-product'),
     path('admin/products/<slug:slug>/reject/', RejectProductView.as_view(), name='reject-product'),
     path('admin/products/<int:id>/review/', ProductReviewView.as_view(), name='product-review'),

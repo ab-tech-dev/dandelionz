@@ -1466,7 +1466,31 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
         summary="Create a new category",
         description="Admin only: Create a new product category.",
         request=CategorySerializer,
-        responses={201: CategorySerializer}
+        responses={201: CategorySerializer},
+        examples=[
+            OpenApiExample(
+                "Create category (multipart)",
+                summary="Create category with image upload",
+                description="Use multipart/form-data when uploading an image.",
+                value={
+                    "name": "Electronics",
+                    "description": "Devices and accessories",
+                    "image": "<file>"
+                },
+                request_only=True,
+                media_type="multipart/form-data"
+            ),
+            OpenApiExample(
+                "Create category (json)",
+                summary="Create category without image",
+                value={
+                    "name": "Electronics",
+                    "description": "Devices and accessories"
+                },
+                request_only=True,
+                media_type="application/json"
+            ),
+        ]
     )
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
