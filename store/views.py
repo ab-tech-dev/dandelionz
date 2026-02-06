@@ -1457,7 +1457,27 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
             OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
             OpenApiParameter(name='ordering', description='Order by name or created_at', required=False, type=str),
         ],
-        responses={200: CategorySerializer(many=True)}
+        responses={200: CategorySerializer(many=True)},
+        examples=[
+            OpenApiExample(
+                "List categories response",
+                value=[
+                    {
+                        "id": 12,
+                        "name": "Electronics",
+                        "slug": "electronics",
+                        "description": "Devices and accessories",
+                        "image": "https://res.cloudinary.com/dhpny4uce/.../category.jpg",
+                        "is_active": True,
+                        "product_count": 25,
+                        "total_sales": 1020,
+                        "created_at": "2026-02-06T10:00:00Z",
+                        "updated_at": "2026-02-06T10:00:00Z"
+                    }
+                ],
+                response_only=True
+            )
+        ]
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
@@ -1522,7 +1542,25 @@ class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
     @extend_schema(
         summary="Retrieve category details",
         description="Get detailed information about a specific category including product counts and sales.",
-        responses={200: CategorySerializer}
+        responses={200: CategorySerializer},
+        examples=[
+            OpenApiExample(
+                "Category detail response",
+                value={
+                    "id": 12,
+                    "name": "Electronics",
+                    "slug": "electronics",
+                    "description": "Devices and accessories",
+                    "image": "https://res.cloudinary.com/dhpny4uce/.../category.jpg",
+                    "is_active": True,
+                    "product_count": 25,
+                    "total_sales": 1020,
+                    "created_at": "2026-02-06T10:00:00Z",
+                    "updated_at": "2026-02-06T10:00:00Z"
+                },
+                response_only=True
+            )
+        ]
     )
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
@@ -1531,7 +1569,47 @@ class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
         summary="Update category",
         description="Admin only: Update category details.",
         request=CategorySerializer,
-        responses={200: CategorySerializer}
+        responses={200: CategorySerializer},
+        examples=[
+            OpenApiExample(
+                "Update category (multipart)",
+                summary="Update with new image",
+                value={
+                    "name": "Electronics & Gadgets",
+                    "description": "Updated description",
+                    "image": "<file>"
+                },
+                request_only=True,
+                media_type="multipart/form-data"
+            ),
+            OpenApiExample(
+                "Update category (json)",
+                summary="Update without image",
+                value={
+                    "name": "Electronics & Gadgets",
+                    "description": "Updated description",
+                    "is_active": True
+                },
+                request_only=True,
+                media_type="application/json"
+            ),
+            OpenApiExample(
+                "Update category response",
+                value={
+                    "id": 12,
+                    "name": "Electronics & Gadgets",
+                    "slug": "electronics",
+                    "description": "Updated description",
+                    "image": "https://res.cloudinary.com/dhpny4uce/.../category.jpg",
+                    "is_active": True,
+                    "product_count": 25,
+                    "total_sales": 1020,
+                    "created_at": "2026-02-06T10:00:00Z",
+                    "updated_at": "2026-02-06T10:10:00Z"
+                },
+                response_only=True
+            )
+        ]
     )
     def patch(self, request, *args, **kwargs):
         return super().patch(request, *args, **kwargs)
@@ -1539,6 +1617,17 @@ class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
     @extend_schema(
         summary="Delete category",
         description="Admin only: Delete a category. Associated products will have null category.",
+        responses={
+            204: OpenApiResponse(description="Category deleted"),
+            404: OpenApiResponse(description="Category not found")
+        },
+        examples=[
+            OpenApiExample(
+                "Delete category response",
+                value={"detail": "Category deleted"},
+                response_only=True
+            )
+        ]
     )
     def delete(self, request, *args, **kwargs):
         return super().delete(request, *args, **kwargs)

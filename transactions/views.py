@@ -24,6 +24,19 @@ from users.notification_helpers import send_order_notification
 
 logger = logging.getLogger(__name__)
 
+def _is_platform_admin(user):
+    return bool(
+        user
+        and user.is_authenticated
+        and (
+            getattr(user, "is_admin", False)
+            or getattr(user, "is_business_admin", False)
+            or hasattr(user, "business_admin_profile")
+            or user.is_staff
+            or user.is_superuser
+        )
+    )
+
 from .models import Order, OrderItem, Payment, TransactionLog, Refund
 from store.models import Cart, CartItem
 from .serializers import (
@@ -145,7 +158,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
 class IsOwnerOrAdmin(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         owner = getattr(obj, "customer", None)
-        return bool(request.user and (request.user.is_staff or owner == request.user))
+        return bool(request.user and (_is_platform_admin(request.user) or owner == request.user))
 
 # ----------------------
 # Order endpoints
@@ -184,7 +197,7 @@ class OrderListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_staff:
+        if _is_platform_admin(user):
             return Order.objects.all().order_by("-ordered_at")
         return Order.objects.filter(customer=user).order_by("-ordered_at")
 
@@ -263,7 +276,7 @@ Returns:
         return super().delete(request, *args, **kwargs)
 
     def get_queryset(self):
-        if self.request.user.is_staff:
+        if _is_platform_admin(self.request.user):
             return Order.objects.all()
         return Order.objects.filter(customer=self.request.user)
 
@@ -307,7 +320,7 @@ class OrderItemListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         order_id = self.kwargs.get("order_id")
         user = self.request.user
-        if user.is_staff:
+        if _is_platform_admin(user):
             return OrderItem.objects.filter(order__order_id=order_id)
         return OrderItem.objects.filter(order__order_id=order_id, order__customer=user)
 
@@ -382,7 +395,7 @@ class OrderItemDetailView(generics.RetrieveUpdateDestroyAPIView):
         user = self.request.user
         if not user.is_authenticated:
             return OrderItem.objects.none()
-        if user.is_staff:
+        if _is_platform_admin(user):
             return OrderItem.objects.all()
         return OrderItem.objects.filter(order__customer=user)
 
@@ -840,7 +853,7 @@ class InstallmentPlanListView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_staff:
+        if _is_platform_admin(user):
             return InstallmentPlan.objects.all().order_by("-created_at")
         return InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
 
@@ -868,7 +881,7 @@ class InstallmentPlanDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_staff:
+        if _is_platform_admin(user):
             return InstallmentPlan.objects.all()
         return InstallmentPlan.objects.filter(order__customer=user)
 
@@ -897,7 +910,7 @@ class InstallmentPaymentListView(generics.ListAPIView):
         plan_id = self.kwargs.get("plan_id")
         user = self.request.user
         
-        if user.is_staff:
+        if _is_platform_admin(user):
             return InstallmentPayment.objects.filter(
                 installment_plan_id=plan_id
             ).order_by("payment_number")
@@ -963,7 +976,7 @@ Only works for PENDING installments that haven't been paid yet.""",
             )
 
         # Verify user owns this plan
-        if installment.installment_plan.order.customer != request.user and not request.user.is_staff:
+        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
@@ -1047,7 +1060,7 @@ If all installments are paid, automatically credits vendor wallets.""",
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        if installment.installment_plan.order.customer != request.user and not request.user.is_staff:
+        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
@@ -1233,7 +1246,7 @@ Use the 'reference' or 'trxref' query parameter.""",
         # For GET requests from Paystack redirects, auto-authenticate with payment owner
         # For POST requests with user auth, verify ownership
         if request.user and request.user.is_authenticated:
-            if payment.order.customer != request.user and not request.user.is_staff:
+            if payment.order.customer != request.user and not _is_platform_admin(request.user):
                 return Response(
                     standardized_response(success=False, error="Forbidden"),
                     status=status.HTTP_403_FORBIDDEN
@@ -1745,7 +1758,7 @@ class OrderReceiptView(generics.RetrieveAPIView):
     lookup_url_kwarg = 'order_id'
 
     def get_queryset(self):
-        if self.request.user.is_staff:
+        if _is_platform_admin(self.request.user):
             return Order.objects.all()
         return Order.objects.filter(customer=self.request.user)
 

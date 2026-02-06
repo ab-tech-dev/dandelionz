@@ -14,18 +14,9 @@ class NotificationTypeSerializer(serializers.ModelSerializer):
 
 class NotificationListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for notification lists"""
-    notification_type_display = serializers.CharField(
-        source='notification_type.display_name',
-        read_only=True
-    )
-    notification_type_icon = serializers.CharField(
-        source='notification_type.icon',
-        read_only=True
-    )
-    notification_type_color = serializers.CharField(
-        source='notification_type.color',
-        read_only=True
-    )
+    notification_type_display = serializers.SerializerMethodField()
+    notification_type_icon = serializers.SerializerMethodField()
+    notification_type_color = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -39,6 +30,21 @@ class NotificationListSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'id', 'user', 'created_at', 'read_at', 'updated_at'
         ]
+
+    def get_notification_type_display(self, obj):
+        if not obj or not obj.notification_type:
+            return None
+        return obj.notification_type.display_name
+
+    def get_notification_type_icon(self, obj):
+        if not obj or not obj.notification_type:
+            return None
+        return obj.notification_type.icon
+
+    def get_notification_type_color(self, obj):
+        if not obj or not obj.notification_type:
+            return None
+        return obj.notification_type.color
 
 
 class NotificationDetailSerializer(serializers.ModelSerializer):
