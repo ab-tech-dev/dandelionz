@@ -6,6 +6,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from django.utils import timezone
 from django.db import transaction
+from users.notification_service import NotificationService
 
 from store.serializers import ProductSerializer, CreateProductSerializer
 
