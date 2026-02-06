@@ -20,7 +20,11 @@ from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
-from users.notification_helpers import send_order_notification
+from users.notification_helpers import (
+    send_order_notification,
+    send_payment_notification,
+    notify_admin,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +39,83 @@ def _is_platform_admin(user):
             or user.is_staff
             or user.is_superuser
         )
+    )
+
+def _notify_checkout(
+    order,
+    user,
+    cart_items,
+    payment_reference=None,
+    is_installment=False,
+    installment_plan=None,
+):
+    try:
+        item_count = cart_items.count()
+    except Exception:
+        item_count = 0
+
+    try:
+        total_amount = float(order.total_price) if order and order.total_price is not None else None
+    except Exception:
+        total_amount = None
+
+    # Customer notification
+    send_order_notification(
+        user,
+        "Order Created",
+        f"Your order {order.order_id} has been created successfully.",
+        order_id=str(order.order_id),
+        action_url=f"/orders/{order.order_id}",
+        total_amount=total_amount,
+        item_count=item_count,
+        delivery_fee=float(order.delivery_fee) if order.delivery_fee else 0,
+        payment_type="installment" if is_installment else "single",
+    )
+
+    # Payment initialization notification (customer)
+    if payment_reference:
+        send_payment_notification(
+            user,
+            "Payment Initialized",
+            f"Payment has been initialized for order {order.order_id}. Complete payment to confirm your order.",
+            transaction_id=payment_reference,
+            amount=total_amount,
+            action_url=f"/payments/{payment_reference}",
+            order_id=str(order.order_id),
+        )
+
+    # Vendor notifications (unique vendors)
+    vendors = set()
+    try:
+        for item in cart_items:
+            product = getattr(item, "product", None)
+            vendor = getattr(product, "store", None)
+            if vendor:
+                vendors.add(vendor)
+    except Exception:
+        pass
+
+    for vendor in vendors:
+        vendor_user = getattr(vendor, "user", None) or vendor
+        send_order_notification(
+            vendor_user,
+            "New Order Placed",
+            f"A new order {order.order_id} includes your products.",
+            order_id=str(order.order_id),
+            action_url=f"/vendor/orders/{order.order_id}",
+            item_count=item_count,
+            payment_type="installment" if is_installment else "single",
+        )
+
+    # Admin notification
+    notify_admin(
+        "New Order Created",
+        f"Order {order.order_id} created by {user.email}.",
+        action_url=f"/admin/orders/{order.order_id}",
+        order_id=str(order.order_id),
+        total_amount=total_amount,
+        item_count=item_count,
+        payment_type="installment" if is_installment else "single",
     )
 
 from .models import Order, OrderItem, Payment, TransactionLog, Refund
@@ -577,6 +658,14 @@ class CheckoutView(APIView):
                 )
                 logger.info(f"Paystack payment initialized for order {order.order_id}")
 
+                _notify_checkout(
+                    order=order,
+                    user=user,
+                    cart_items=cart_items,
+                    payment_reference=payment.reference,
+                    is_installment=False,
+                )
+
                 # Clear cart (vendors will be notified when payment is verified)
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
@@ -800,6 +889,15 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                     callback_url=settings.PAYSTACK_CALLBACK_URL
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
+
+                _notify_checkout(
+                    order=order,
+                    user=user,
+                    cart_items=cart_items,
+                    payment_reference=first_installment.reference,
+                    is_installment=True,
+                    installment_plan=installment_plan,
+                )
 
                 # Clear cart (vendors will be notified when payment is verified)
                 cart_items.delete()
