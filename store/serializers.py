@@ -41,6 +41,7 @@ class CategorySerializer(CloudinarySerializer):
     """
     Serializer for Category model with aggregated stats.
     """
+    is_active = serializers.BooleanField(required=False, default=True)
     product_count = serializers.SerializerMethodField()
     total_sales = serializers.SerializerMethodField()
     # Accepts image upload on create/update; representation is normalized to URL
