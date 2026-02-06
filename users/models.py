@@ -142,7 +142,10 @@ class PaymentPIN(models.Model):
         # Mark as no longer default if a new PIN is being set
         if pin != '0000':
             self.is_default = False
-        self.save(update_fields=['pin_hash', 'updated_at', 'is_default'])
+        if self.pk:
+            self.save(update_fields=['pin_hash', 'updated_at', 'is_default'])
+        else:
+            self.save()
     
     def verify_pin(self, pin):
         """Verify the provided PIN against the hash"""
