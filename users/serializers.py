@@ -1076,7 +1076,15 @@ class PaymentSettingsSerializer(serializers.Serializer):
     has_pin = serializers.SerializerMethodField(read_only=True)
     
     def get_has_pin(self, obj):
-        return hasattr(obj, 'payment_pin') and obj.payment_pin is not None
+        try:
+            if hasattr(obj, "payment_pin"):
+                return obj.payment_pin is not None
+            user = getattr(obj, "user", None)
+            if user and hasattr(user, "payment_pin"):
+                return user.payment_pin is not None
+        except Exception:
+            pass
+        return False
 
 
 class PaymentSettingsUpdateSerializer(serializers.Serializer):
