@@ -161,6 +161,11 @@ class AdminDashboardOrderCancelSerializer(serializers.Serializer):
     )
 
 
+class AdminDashboardOrderStatusUpdateSerializer(serializers.Serializer):
+    """Serializer for updating order status (admin)"""
+    status = serializers.ChoiceField(choices=Order.Status.choices)
+
+
 # =====================================================
 # ADMIN PROFILE MANAGEMENT SERIALIZERS
 # =====================================================

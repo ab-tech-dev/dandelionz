@@ -59,7 +59,8 @@ class NotificationViewSet(viewsets.ModelViewSet):
         """Filter notifications for current user"""
         return Notification.objects.filter(
             user=self.request.user,
-            is_deleted=False
+            is_deleted=False,
+            is_draft=False
         ).select_related('notification_type')
 
     def get_serializer_class(self):

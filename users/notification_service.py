@@ -41,6 +41,8 @@ class NotificationService:
         related_object_type: str = '',
         related_object_id: str = '',
         expires_at: Optional[timezone.datetime] = None,
+        is_draft: bool = False,
+        scheduled_for: Optional[timezone.datetime] = None,
         send_websocket: bool = True,
         send_email: bool = False,
         send_push: bool = False,
@@ -88,6 +90,8 @@ class NotificationService:
                 related_object_type=related_object_type,
                 related_object_id=related_object_id,
                 expires_at=expires_at,
+                is_draft=is_draft,
+                scheduled_for=scheduled_for,
             )
 
             # Log creation
@@ -98,15 +102,22 @@ class NotificationService:
                 channel='websocket'
             )
 
-            # Send via different channels
-            if send_websocket:
-                NotificationService.send_websocket_notification(notification)
-            
-            if send_email:
-                NotificationService.send_email_notification(notification)
-            
-            if send_push:
-                NotificationService.send_push_notification(notification)
+            # Send via different channels (skip if draft or scheduled for future)
+            send_now = True
+            if is_draft:
+                send_now = False
+            if scheduled_for and scheduled_for > timezone.now():
+                send_now = False
+
+            if send_now:
+                if send_websocket:
+                    NotificationService.send_websocket_notification(notification)
+                
+                if send_email:
+                    NotificationService.send_email_notification(notification)
+                
+                if send_push:
+                    NotificationService.send_push_notification(notification)
 
             logger.info(f"Notification created: {notification.id} for user {user.email if hasattr(user, 'email') else user}")
             return notification
@@ -119,6 +130,9 @@ class NotificationService:
     def send_websocket_notification(notification: Notification) -> bool:
         """Send notification via WebSocket"""
         try:
+            if notification.is_draft:
+                return False
+
             # Get user's personal group
             group_name = f"user_{notification.user.pk}"
             
@@ -135,9 +149,11 @@ class NotificationService:
                 }
             )
 
-            # Update flag
+            # Update flags
             notification.was_sent_websocket = True
-            notification.save(update_fields=['was_sent_websocket'])
+            notification.sent_at = timezone.now()
+            notification.send_attempts = (notification.send_attempts or 0) + 1
+            notification.save(update_fields=['was_sent_websocket', 'sent_at', 'send_attempts'])
 
             # Log delivery
             NotificationLog.objects.create(
@@ -265,7 +281,8 @@ class NotificationService:
         try:
             query = Notification.objects.filter(
                 user=user,
-                is_deleted=False
+                is_deleted=False,
+                is_draft=False
             )
 
             if filters:
@@ -294,7 +311,8 @@ class NotificationService:
             return Notification.objects.filter(
                 user=user,
                 is_read=False,
-                is_deleted=False
+                is_deleted=False,
+                is_draft=False
             ).count()
         except Exception as e:
             logger.error(f"Error getting unread count: {str(e)}")

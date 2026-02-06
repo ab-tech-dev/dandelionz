@@ -110,6 +110,13 @@ class Notification(models.Model):
     # Timestamps
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     read_at = models.DateTimeField(null=True, blank=True)
+    sent_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    scheduled_for = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Schedule notification for future delivery"
+    )
     expires_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -123,6 +130,7 @@ class Notification(models.Model):
     was_sent_email = models.BooleanField(default=False, help_text="Optional email delivery")
     was_sent_push = models.BooleanField(default=False, help_text="Optional push notification")
     send_attempts = models.IntegerField(default=0, help_text="Track retry attempts")
+    is_draft = models.BooleanField(default=False, db_index=True, help_text="Draft notification not yet sent")
 
     class Meta:
         db_table = 'notifications'
@@ -184,8 +192,10 @@ class Notification(models.Model):
             'action_url': self.action_url,
             'action_text': self.action_text,
             'is_read': self.is_read,
+            'is_draft': self.is_draft,
             'metadata': self.metadata,
             'created_at': self.created_at.isoformat(),
+            'scheduled_for': self.scheduled_for.isoformat() if self.scheduled_for else None,
             'notification_type': {
                 'name': self.notification_type.name,
                 'display_name': self.notification_type.display_name,

@@ -1267,7 +1267,8 @@ class VendorViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"])
     def notifications(self, request):
         notifications = Notification.objects.filter(
-            user=request.user
+            user=request.user,
+            is_draft=False
         ).order_by("-created_at")
 
         serializer = NotificationSerializer(notifications, many=True)
@@ -3964,12 +3965,108 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             context={'request': request}
         )
         serializer.is_valid(raise_exception=True)
-        notification = serializer.save()
+        data = serializer.validated_data
+
+        user = data.get('user')
+        user_uuid = data.get('user_uuid')
+        recipient_group = data.get('recipient_group')
+        is_draft = data.get('is_draft', False)
+        scheduled_for = data.get('scheduled_for')
+        send_websocket = data.get('send_websocket', True)
+        send_email = data.get('send_email', False)
+        send_push = data.get('send_push', False)
+
+        # Resolve user if user_uuid provided
+        if user is None and user_uuid:
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            user = User.objects.filter(uuid=user_uuid).first()
+            if not user:
+                return Response({"message": "User not found"}, status=404)
+
+        # Create notifications
+        created_notifications = []
+        if user:
+            notification = NotificationService.create_notification(
+                user=user,
+                title=data.get('title'),
+                message=data.get('message'),
+                notification_type=data.get('notification_type'),
+                category=data.get('category', ''),
+                priority=data.get('priority', 'normal'),
+                description=data.get('description', ''),
+                action_url=data.get('action_url', ''),
+                action_text=data.get('action_text', ''),
+                metadata=data.get('metadata', {}),
+                related_object_type=data.get('related_object_type', ''),
+                related_object_id=data.get('related_object_id', ''),
+                expires_at=data.get('expires_at'),
+                is_draft=is_draft,
+                scheduled_for=scheduled_for,
+                send_websocket=send_websocket,
+                send_email=send_email,
+                send_push=send_push,
+            )
+            if notification:
+                created_notifications.append(notification)
+        else:
+            # Broadcast to group
+            group = recipient_group or 'all'
+            if group not in ['admin', 'vendor', 'customer', 'all']:
+                return Response({"message": "Invalid recipient_group"}, status=400)
+
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            if group == 'admin':
+                users = User.objects.filter(is_staff=True)
+            elif group == 'vendor':
+                users = User.objects.filter(role='VENDOR')
+            elif group == 'customer':
+                users = User.objects.filter(role='CUSTOMER')
+            else:
+                users = User.objects.filter(is_active=True)
+
+            for u in users:
+                notification = NotificationService.create_notification(
+                    user=u,
+                    title=data.get('title'),
+                    message=data.get('message'),
+                    notification_type=data.get('notification_type'),
+                    category=data.get('category', ''),
+                    priority=data.get('priority', 'normal'),
+                    description=data.get('description', ''),
+                    action_url=data.get('action_url', ''),
+                    action_text=data.get('action_text', ''),
+                    metadata=data.get('metadata', {}),
+                    related_object_type=data.get('related_object_type', ''),
+                    related_object_id=data.get('related_object_id', ''),
+                    expires_at=data.get('expires_at'),
+                    is_draft=is_draft,
+                    scheduled_for=scheduled_for,
+                    send_websocket=send_websocket,
+                    send_email=send_email,
+                    send_push=send_push,
+                )
+                if notification:
+                    created_notifications.append(notification)
+
+        # Schedule if needed
+        if scheduled_for and created_notifications:
+            try:
+                from users.tasks import send_scheduled_notification
+                for n in created_notifications:
+                    send_scheduled_notification.apply_async(args=[str(n.id)], eta=scheduled_for)
+            except Exception:
+                pass
+
+        if not created_notifications:
+            return Response({"message": "Notification not created"}, status=400)
 
         return Response({
             "success": True,
-            "data": AdminNotificationCreateSerializer(notification).data,
-            "message": "Notification created successfully"
+            "data": AdminNotificationCreateSerializer(created_notifications[0]).data,
+            "message": "Notification created successfully",
+            "count": len(created_notifications)
         }, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
@@ -4009,12 +4106,63 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         if category_filter:
             notifications = notifications.filter(category=category_filter)
 
+        draft_filter = request.query_params.get('is_draft')
+        if draft_filter is not None:
+            if str(draft_filter).lower() in ['true', '1', 'yes']:
+                notifications = notifications.filter(is_draft=True)
+            elif str(draft_filter).lower() in ['false', '0', 'no']:
+                notifications = notifications.filter(is_draft=False)
+
         serializer = AdminNotificationListSerializer(notifications, many=True)
 
         return Response({
             "success": True,
             "data": serializer.data,
             "count": notifications.count()
+        })
+
+    @swagger_auto_schema(
+        operation_id="admin_publish_notification",
+        operation_summary="Publish Draft Notification",
+        operation_description="Publish a draft notification and send it in real-time.",
+        tags=["Admin Notifications"],
+        manual_parameters=[
+            openapi.Parameter(
+                'notification_id',
+                openapi.IN_PATH,
+                description="Draft notification ID",
+                type=openapi.TYPE_STRING,
+                format=openapi.FORMAT_UUID
+            )
+        ],
+        responses={
+            200: openapi.Response("Notification published successfully"),
+            404: openapi.Response("Notification not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"], url_path=r'publish/(?P<notification_id>[^/.]+)')
+    def publish_notification(self, request, notification_id=None):
+        """Publish a draft notification"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        notification = Notification.objects.filter(id=notification_id).first()
+        if not notification:
+            return Response({"message": "Notification not found"}, status=404)
+
+        if notification.is_draft:
+            notification.is_draft = False
+            notification.scheduled_for = None
+            notification.save(update_fields=['is_draft', 'scheduled_for'])
+
+        NotificationService.send_websocket_notification(notification)
+
+        return Response({
+            "success": True,
+            "message": "Notification published successfully"
         })
 
 

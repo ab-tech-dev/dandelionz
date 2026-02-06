@@ -32,6 +32,7 @@ class NotificationListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'message', 'priority', 'category',
             'is_read', 'is_archived', 'created_at', 'read_at',
+            'sent_at', 'scheduled_for',
             'notification_type_display', 'notification_type_icon', 'notification_type_color',
             'action_url', 'action_text'
         ]
@@ -53,7 +54,7 @@ class NotificationDetailSerializer(serializers.ModelSerializer):
             'is_read', 'is_archived', 'is_deleted', 'metadata',
             'related_object_type', 'related_object_id',
             'was_sent_websocket', 'was_sent_email', 'was_sent_push',
-            'created_at', 'read_at', 'expires_at', 'updated_at'
+            'created_at', 'read_at', 'sent_at', 'scheduled_for', 'expires_at', 'updated_at', 'is_draft'
         ]
         read_only_fields = [
             'id', 'user', 'created_at', 'updated_at', 'read_at',

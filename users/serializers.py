@@ -404,6 +404,9 @@ class NotificationSerializer(serializers.ModelSerializer):
             'category',
             'is_read',
             'is_archived',
+            'is_draft',
+            'scheduled_for',
+            'sent_at',
             'created_at',
         ]
         read_only_fields = [
@@ -420,11 +423,25 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
     Handles creating notifications with metadata for specific recipient groups.
     """
     
+    user_uuid = serializers.UUIDField(write_only=True, required=False)
+    recipient_group = serializers.ChoiceField(
+        choices=['admin', 'vendor', 'customer', 'all'],
+        write_only=True,
+        required=False
+    )
+    is_draft = serializers.BooleanField(required=False, default=False)
+    scheduled_for = serializers.DateTimeField(required=False, allow_null=True)
+    send_websocket = serializers.BooleanField(required=False, default=True)
+    send_email = serializers.BooleanField(required=False, default=False)
+    send_push = serializers.BooleanField(required=False, default=False)
+
     class Meta:
         model = Notification
         fields = [
             'id',
             'user',
+            'user_uuid',
+            'recipient_group',
             'notification_type',
             'title',
             'message',
@@ -435,6 +452,11 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
             'action_text',
             'metadata',
             'expires_at',
+            'is_draft',
+            'scheduled_for',
+            'send_websocket',
+            'send_email',
+            'send_push',
             'created_at',
         ]
         read_only_fields = ['id', 'created_at']
@@ -452,6 +474,7 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
         """
         Cross-field validation:
         - expires_at must be in the future if provided
+        - scheduled_for must be in the future if provided
         """
         from django.utils import timezone
         
@@ -459,6 +482,12 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
         if expires_at and expires_at <= timezone.now():
             raise serializers.ValidationError(
                 "expires_at must be a future date and time"
+            )
+
+        scheduled_for = data.get('scheduled_for')
+        if scheduled_for and scheduled_for <= timezone.now():
+            raise serializers.ValidationError(
+                "scheduled_for must be a future date and time"
             )
         
         return data
@@ -498,6 +527,9 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
             'user_name',
             'is_read',
             'is_archived',
+            'is_draft',
+            'scheduled_for',
+            'sent_at',
             'created_at',
             'updated_at',
         ]

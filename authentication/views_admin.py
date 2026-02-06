@@ -14,6 +14,8 @@ from django.shortcuts import get_object_or_404
 from django.contrib.auth import get_user_model
 from django.db.models import Q, Sum
 from django.utils import timezone
+from drf_yasg.utils import swagger_auto_schema
+from drf_yasg import openapi
 
 from authentication.core.permissions import IsBusinessAdmin
 from authentication.core.response import standardized_response
@@ -25,6 +27,7 @@ from authentication.serializers_admin import (
     AdminDashboardOrderListSerializer,
     AdminDashboardOrderDetailSerializer,
     AdminDashboardOrderCancelSerializer,
+    AdminDashboardOrderStatusUpdateSerializer,
     AdminDashboardProfileSerializer,
     AdminDashboardProfileUpdateSerializer,
     AdminDashboardPasswordVerifySerializer,
@@ -270,17 +273,145 @@ class AdminOrderListView(generics.ListAPIView):
         return Response(standardized_response(data=serializer.data))
 
 
-class AdminOrderDetailView(generics.RetrieveAPIView):
-    """Retrieve detailed information about a specific order"""
+class AdminOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
+    """Retrieve, update status, or delete a specific order"""
     permission_classes = [IsAuthenticated, IsBusinessAdmin]
-    serializer_class = AdminDashboardOrderDetailSerializer
     queryset = Order.objects.all()
     lookup_field = 'order_id'
+
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return AdminDashboardOrderStatusUpdateSerializer
+        return AdminDashboardOrderDetailSerializer
     
+    @swagger_auto_schema(
+        operation_id="admin_order_detail",
+        operation_summary="Get Order Details",
+        operation_description="Retrieve detailed information about a specific order.",
+        tags=["Order Management"],
+        manual_parameters=[
+            openapi.Parameter(
+                "order_id",
+                openapi.IN_PATH,
+                description="Order UUID",
+                type=openapi.TYPE_STRING,
+                format=openapi.FORMAT_UUID,
+                required=True
+            )
+        ],
+        responses={
+            200: openapi.Response("Order details retrieved", AdminDashboardOrderDetailSerializer()),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
     def retrieve(self, request, *args, **kwargs):
         instance = self.get_object()
-        serializer = self.get_serializer(instance)
+        serializer = AdminDashboardOrderDetailSerializer(instance)
         return Response(standardized_response(data=serializer.data))
+
+    @swagger_auto_schema(
+        operation_id="admin_order_update_status",
+        operation_summary="Update Order Status",
+        operation_description="Update order status. Only allowed for PAID orders. Patchable field: status only.",
+        tags=["Order Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["status"],
+            properties={
+                "status": openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=[choice[0] for choice in Order.Status.choices]
+                )
+            },
+            example={"status": "SHIPPED"}
+        ),
+        responses={
+            200: openapi.Response(
+                "Order status updated",
+                AdminDashboardOrderDetailSerializer(),
+                examples={
+                    "application/json": {
+                        "success": True,
+                        "message": "Order status updated",
+                        "data": {"order_id": "19149b71-8f31-4142-9260-b48d0bc3f0f9", "status": "SHIPPED"}
+                    }
+                }
+            ),
+            400: openapi.Response("Only paid orders can be updated"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def update(self, request, *args, **kwargs):
+        order = self.get_object()
+
+        if order.status != Order.Status.PAID:
+            return Response(
+                standardized_response(success=False, error="Only paid orders can be updated"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        new_status = serializer.validated_data['status']
+        if new_status != order.status:
+            order.status = new_status
+            order.save(update_fields=['status'])
+
+            OrderStatusHistory.objects.create(
+                order=order,
+                status=new_status,
+                changed_by='ADMIN',
+                admin=request.user,
+                reason=f"Order status updated to {new_status} by admin"
+            )
+
+        response_serializer = AdminDashboardOrderDetailSerializer(order)
+        return Response(
+            standardized_response(data=response_serializer.data, message="Order status updated")
+        )
+
+    @swagger_auto_schema(
+        operation_id="admin_order_delete",
+        operation_summary="Delete Pending Order",
+        operation_description="Delete an order. Only allowed for PENDING orders.",
+        tags=["Order Management"],
+        responses={
+            200: openapi.Response(
+                "Order deleted",
+                examples={
+                    "application/json": {
+                        "success": True,
+                        "message": "Order 19149b71-8f31-4142-9260-b48d0bc3f0f9 deleted successfully"
+                    }
+                }
+            ),
+            400: openapi.Response("Only pending orders can be deleted"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def destroy(self, request, *args, **kwargs):
+        order = self.get_object()
+
+        if order.status != Order.Status.PENDING:
+            return Response(
+                standardized_response(success=False, error="Only pending orders can be deleted"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        order_id = order.order_id
+        order.delete()
+
+        return Response(
+            standardized_response(message=f"Order {order_id} deleted successfully"),
+            status=status.HTTP_200_OK
+        )
 
 
 class AdminOrderCancelView(generics.GenericAPIView):

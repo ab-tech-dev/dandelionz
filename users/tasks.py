@@ -2,6 +2,7 @@ import logging
 from celery import shared_task
 from django.utils import timezone
 from .notification_models import Notification
+from .notification_service import NotificationService
 from authentication.models import CustomUser
 from users.models import Vendor
 
@@ -34,9 +35,22 @@ def send_scheduled_notification(self, notification_id: int):
             f"[NotificationTask] Processing notification {notification_id}: {notification.title}"
         )
 
-        # Mark notification as read after some processing
-        notification.was_sent_websocket = True
-        notification.save()
+        if notification.is_draft:
+            return {
+                "status": "skipped",
+                "reason": "draft",
+                "notification_id": notification_id,
+            }
+
+        if notification.scheduled_for and notification.scheduled_for > timezone.now():
+            return {
+                "status": "skipped",
+                "reason": "scheduled_for_future",
+                "notification_id": notification_id,
+            }
+
+        # Send notification via WebSocket (and log)
+        NotificationService.send_websocket_notification(notification)
 
         return {
             "status": "success",
