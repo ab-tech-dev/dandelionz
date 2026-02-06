@@ -1937,6 +1937,21 @@ class AdminVendorViewSet(AdminBaseViewSet):
         user.is_verified = approve
         user.save(update_fields=["is_verified"])
 
+        from users.notification_helpers import send_user_notification
+        approval_title = "Vendor Approved" if approve else "Vendor Approval Revoked"
+        approval_message = (
+            "Your vendor account has been approved. You can now list products and start selling."
+            if approve
+            else "Your vendor approval has been revoked. Please contact support if you need assistance."
+        )
+        send_user_notification(
+            user,
+            approval_title,
+            approval_message,
+            vendor_uuid=str(user.vendor_profile.uuid) if getattr(user, "vendor_profile", None) else None,
+            approved=approve,
+        )
+
         response_serializer = AdminVendorActionResponseSerializer({"success": True, "approved": approve})
         return Response(response_serializer.data)
 
@@ -1992,6 +2007,21 @@ class AdminVendorViewSet(AdminBaseViewSet):
         user.is_active = not suspend
         user.save(update_fields=["is_active"])
 
+        from users.notification_helpers import send_user_notification
+        suspension_title = "Account Suspended" if suspend else "Account Reactivated"
+        suspension_message = (
+            "Your account has been suspended by an administrator. Please contact support for details."
+            if suspend
+            else "Your account has been reactivated. You can access the platform again."
+        )
+        send_user_notification(
+            user,
+            suspension_title,
+            suspension_message,
+            vendor_uuid=str(user.vendor_profile.uuid) if getattr(user, "vendor_profile", None) else None,
+            suspended=suspend,
+        )
+
         response_serializer = AdminVendorActionResponseSerializer({"success": True, "suspended": suspend})
         return Response(response_serializer.data)
 
@@ -2039,6 +2069,15 @@ class AdminVendorViewSet(AdminBaseViewSet):
 
         user.vendor_profile.is_verified_vendor = True
         user.vendor_profile.save(update_fields=["is_verified_vendor"])
+
+        from users.notification_helpers import send_user_notification
+        send_user_notification(
+            user,
+            "KYC Verified",
+            "Your KYC verification has been approved. Thank you for completing your verification.",
+            vendor_uuid=str(user.vendor_profile.uuid),
+            kyc_verified=True,
+        )
 
         response_serializer = AdminVendorActionResponseSerializer({
             "success": True,
@@ -2541,15 +2580,13 @@ Access: Delivery Agent (assigned to order) or Admin (staff)""",
                 )
                 
                 # Notify all admins about order completion
-                admin_users = CustomUser.objects.filter(is_staff=True).exclude(id=request.user.id)
-                for admin in admin_users:
-                    notify_admin(
-                        "Order Delivered & Fulfilled",
-                        f"Order {order.order_id} (₦{order.total_price}) has been delivered successfully. "
-                        f"Customer: {order.customer.email}. Vendors have been credited.",
-                        order_id=order.order_id,
-                        customer_email=order.customer.email
-                    )
+                notify_admin(
+                    "Order Delivered & Fulfilled",
+                    f"Order {order.order_id} (NGN {order.total_price}) has been delivered successfully. "
+                    f"Customer: {order.customer.email}. Vendors have been credited.",
+                    order_id=order.order_id,
+                    customer_email=order.customer.email
+                )
                 
                 # Notify vendors
                 vendors = {item.product.store for item in order.order_items.all() if item.product.store}

@@ -116,16 +116,14 @@ def product_approval_notification(sender, instance, created, **kwargs):
                 logger.info(f"Notification sent to vendor {vendor_user.email}: Product pending approval")
                 
                 # Notify all admins that a new product needs approval
-                admin_users = CustomUser.objects.filter(is_admin=True).select_related('id')
-                for admin in admin_users:
-                    if admin and admin.pk:  # Verify admin exists and is saved
-                        _send_notification_safely(
-                            admin,
-                            "New Product Pending Approval",
-                            f"New product '{instance.name}' from vendor '{instance.store.store_name}' "
-                            f"needs your approval. Click to review."
-                        )
-                logger.info(f"Notifications sent to {admin_users.count()} admins: New product needs approval")
+                notify_admin(
+                    "New Product Pending Approval",
+                    f"New product '{instance.name}' from vendor '{instance.store.store_name}' "
+                    f"needs your approval. Click to review.",
+                    product_name=instance.name,
+                    vendor_name=instance.store.store_name
+                )
+                logger.info("Notifications sent to admins: New product needs approval")
             except AttributeError as e:
                 logger.error(f"Missing required product/vendor attributes: {str(e)}")
             except Exception as e:

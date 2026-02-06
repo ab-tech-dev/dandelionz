@@ -1030,6 +1030,15 @@ class ApproveProductView(BaseAPIView):
         # Send email notification to vendor
         from store.tasks import send_product_approval_email_task
         send_product_approval_email_task.delay(product.id)
+        from users.notification_helpers import send_product_notification
+        send_product_notification(
+            product.store,
+            "Product Approved",
+            f"Your product '{product.name}' has been approved and is now live.",
+            product_name=product.name,
+            product_slug=product.slug,
+            action_url=f"/vendor/products/{product.slug}",
+        )
 
         serializer = PendingProductsSerializer(product)
         return Response(
@@ -1087,6 +1096,16 @@ class RejectProductView(BaseAPIView):
         # Send email notification to vendor
         from store.tasks import send_product_rejection_email_task
         send_product_rejection_email_task.delay(product.id, reason)
+        from users.notification_helpers import send_product_notification
+        send_product_notification(
+            product.store,
+            "Product Rejected",
+            f"Your product '{product.name}' was rejected. Reason: {reason}",
+            product_name=product.name,
+            product_slug=product.slug,
+            rejection_reason=reason,
+            action_url=f"/vendor/products/{product.slug}",
+        )
 
         serializer = PendingProductsSerializer(product)
         return Response(
@@ -1872,8 +1891,27 @@ class ProductReviewView(BaseAPIView):
     
         if status_action == 'approved':
             send_product_approval_email_task.delay(product.id)
+            from users.notification_helpers import send_product_notification
+            send_product_notification(
+                product.store,
+                "Product Approved",
+                f"Your product '{product.name}' has been approved and is now live.",
+                product_name=product.name,
+                product_slug=product.slug,
+                action_url=f"/vendor/products/{product.slug}",
+            )
         else:
             send_product_rejection_email_task.delay(product.id, reason)
+            from users.notification_helpers import send_product_notification
+            send_product_notification(
+                product.store,
+                "Product Rejected",
+                f"Your product '{product.name}' was rejected. Reason: {reason}",
+                product_name=product.name,
+                product_slug=product.slug,
+                rejection_reason=reason,
+                action_url=f"/vendor/products/{product.slug}",
+            )
 
         serializer = PendingProductsSerializer(product)
         return Response(

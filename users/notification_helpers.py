@@ -12,6 +12,7 @@ Usage:
 import logging
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from django.contrib.auth import get_user_model
+from django.db import models
 
 from e_commerce_api import settings
 from .notification_service import NotificationService
@@ -24,6 +25,21 @@ else:
 
 logger = logging.getLogger(__name__)
 
+def _resolve_user(recipient: 'User'):
+    """
+    Normalize recipient to CustomUser instance.
+    Accepts CustomUser or related profile models with .user
+    """
+    try:
+        if recipient is None:
+            return None
+        if hasattr(recipient, "email"):
+            return recipient
+        if hasattr(recipient, "user"):
+            return recipient.user
+    except Exception:
+        pass
+    return recipient
 
 def send_order_notification(
     user: 'User',
@@ -52,12 +68,16 @@ def send_order_notification(
         bool: Success status
     """
     try:
+        user_obj = _resolve_user(user)
+        if not user_obj:
+            return False
         notification_data = {
-            'user': user,
+            'user': user_obj,
             'title': title,
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'category': 'order',
         }
         
         # Add metadata
@@ -70,7 +90,7 @@ def send_order_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send order notification to {user.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send order notification to {getattr(user, 'email', user)}: {str(e)}", exc_info=True)
         return False
 
 
@@ -101,12 +121,16 @@ def send_product_notification(
         bool: Success status
     """
     try:
+        user_obj = _resolve_user(user)
+        if not user_obj:
+            return False
         notification_data = {
-            'user': user,
+            'user': user_obj,
             'title': title,
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'category': 'product',
         }
         
         # Add metadata
@@ -119,7 +143,7 @@ def send_product_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send product notification to {user.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send product notification to {getattr(user, 'email', user)}: {str(e)}", exc_info=True)
         return False
 
 
@@ -152,12 +176,16 @@ def send_payment_notification(
         bool: Success status
     """
     try:
+        user_obj = _resolve_user(user)
+        if not user_obj:
+            return False
         notification_data = {
-            'user': user,
+            'user': user_obj,
             'title': title,
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'category': 'payment',
         }
         
         # Add metadata
@@ -174,7 +202,7 @@ def send_payment_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send payment notification to {user.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send payment notification to {getattr(user, 'email', user)}: {str(e)}", exc_info=True)
         return False
 
 def send_delivery_notification(
@@ -204,12 +232,16 @@ def send_delivery_notification(
         bool: Success status
     """
     try:
+        user_obj = _resolve_user(user)
+        if not user_obj:
+            return False
         notification_data = {
-            'user': user,
+            'user': user_obj,
             'title': title,
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'category': 'delivery',
         }
         
         # Add metadata
@@ -222,7 +254,7 @@ def send_delivery_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send delivery notification to {user.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send delivery notification to {getattr(user, 'email', user)}: {str(e)}", exc_info=True)
         return False
 
 
@@ -251,13 +283,17 @@ def send_user_notification(
         bool: Success status
     """
     try:
+        user_obj = _resolve_user(user)
+        if not user_obj:
+            return False
         notification_data = {
-            'user': user,
+            'user': user_obj,
             'title': title,
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
             'metadata': kwargs,
+            'category': 'general',
         }
         
         if action_url:
@@ -266,7 +302,7 @@ def send_user_notification(
         NotificationService.create_notification(**notification_data)
         return True
     except Exception as e:
-        logger.error(f"Failed to send user notification to {user.email}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to send user notification to {getattr(user, 'email', user)}: {str(e)}", exc_info=True)
         return False
 
 
@@ -299,8 +335,11 @@ def send_bulk_notification(
         
         for user in users:
             try:
+                user_obj = _resolve_user(user)
+                if not user_obj:
+                    continue
                 notification_data = {
-                    'user': user,
+                    'user': user_obj,
                     'title': title,
                     'message': message,
                     'send_email': send_email,
@@ -314,7 +353,7 @@ def send_bulk_notification(
                 NotificationService.create_notification(**notification_data)
                 sent_count += 1
             except Exception as e:
-                logger.error(f"Failed to send bulk notification to {user.email}: {str(e)}")
+                logger.error(f"Failed to send bulk notification to {getattr(user, 'email', user)}: {str(e)}")
                 continue
         
         logger.info(f"Sent bulk notification to {sent_count}/{len(users)} users")
@@ -347,7 +386,9 @@ def notify_admin(
         int: Number of admins notified
     """
     try:
-        admin_users = User.objects.filter(role='admin', is_active=True)
+        admin_users = User.objects.filter(
+            models.Q(role='ADMIN') | models.Q(role='BUSINESS_ADMIN') | models.Q(is_staff=True)
+        ).filter(is_active=True, status='ACTIVE')
         return send_bulk_notification(
             list(admin_users),
             title,
@@ -423,7 +464,7 @@ def notify_all_vendors(
         int: Number of vendors notified
     """
     try:
-        from store.models import Vendor
+        from users.models import Vendor
         
         vendor_users = User.objects.filter(
             uuid__in=Vendor.objects.filter(

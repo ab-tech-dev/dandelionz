@@ -78,17 +78,16 @@ def check_overdue_deliveries():
                 f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}"
             )
             
-            # Notify admin users about overdue delivery
-            for admin in admin_users:
-                notify_admin(
-                    f"Overdue Delivery Alert: Order {order.order_id}",
-                    f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
-                    f"Customer: {order.customer.email}. "
-                    f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
-                    f"Please investigate and take appropriate action.",
-                    order_id=order.order_id,
-                    customer_email=order.customer.email
-                )
+        # Notify all admins about overdue delivery
+        notify_admin(
+            f"Overdue Delivery Alert: Order {order.order_id}",
+            f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
+            f"Customer: {order.customer.email}. "
+            f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
+            f"Please investigate and take appropriate action.",
+            order_id=order.order_id,
+            customer_email=order.customer.email
+        )
             
             # Optional: Send email notification to admin
             if admin_users.exists():
@@ -291,62 +290,59 @@ def notify_stakeholders_order_paid(self, order_id):
                     notifications_created += 1
                     vendor_details.append({
                         "vendor_id": vendor.id,
-                        "vendor_email": vendor.email,
+                        "vendor_email": vendor.user.email,
                         "items_count": items_count
                     })
                     
                     logger.info(
-                        f"[notify_stakeholders_order_paid] Notified vendor {vendor.email} | "
+                        f"[notify_stakeholders_order_paid] Notified vendor {vendor.user.email} | "
                         f"Order: {order_id} | Items: {items_count}"
                     )
                 except Exception as e:
                     logger.error(
-                        f"[notify_stakeholders_order_paid] Failed to notify vendor {vendor.email}: {str(e)}", 
+                        f"[notify_stakeholders_order_paid] Failed to notify vendor {vendor.user.email}: {str(e)}", 
                         exc_info=True
                     )
                     # Continue with other vendors if one fails
                     continue
         else:
             logger.warning(f"[notify_stakeholders_order_paid] No vendors found for order {order_id}")
-        
-        # Notify all business admins
+
+        # Notify all admins
         try:
-            admin_users = CustomUser.objects.filter(is_staff=True)
-            
-            for admin in admin_users:
-                try:
-                    vendor_names = ', '.join([v.user.email for v in vendors]) if vendors else 'Unknown'
-                    
-                    notify_admin(
-                        "New Paid Order - Requires Fulfillment",
-                        f"Order {order.order_id} payment verified (₦{order.total_price}). "
-                        f"Customer: {order.customer.email}. "
-                        f"Vendors involved: {vendor_names}. "
-                        f"Status: Ready for shipment. Monitor fulfillment progress.",
-                        order_id=order.order_id,
-                        total_price=order.total_price,
-                        customer_email=order.customer.email,
-                        is_read=False
-                    )
-                    
-                    admin_notified += 1
-                    
-                    logger.info(
-                        f"[notify_stakeholders_order_paid] Notified admin {admin.email} | "
-                        f"Order: {order_id} | Amount: ₦{order.total_price}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[notify_stakeholders_order_paid] Failed to notify admin {admin.email}: {str(e)}", 
-                        exc_info=True
-                    )
-                    # Continue with other admins if one fails
-                    continue
+            vendor_names = ', '.join([v.user.email for v in vendors]) if vendors else 'Unknown'
+            notify_admin(
+                "New Paid Order - Requires Fulfillment",
+                f"Order {order.order_id} payment verified (NGN {order.total_price}). "
+                f"Customer: {order.customer.email}. "
+                f"Vendors involved: {vendor_names}. "
+                f"Status: Ready for shipment. Monitor fulfillment progress.",
+                order_id=order.order_id,
+                total_price=order.total_price,
+                customer_email=order.customer.email,
+                is_read=False
+            )
+            admin_notified = 1
         except Exception as e:
             logger.error(
-                f"[notify_stakeholders_order_paid] Error retrieving admin users for order {order_id}: {str(e)}", 
+                f"[notify_stakeholders_order_paid] Error notifying admins for order {order_id}: {str(e)}",
                 exc_info=True
             )
+
+        # Notify customer that payment is confirmed
+        try:
+            send_order_notification(
+                order.customer,
+                "Payment Confirmed",
+                f"Your payment for order {order.order_id} was successful. Your order is now being prepared.",
+                order_id=order.order_id
+            )
+        except Exception as e:
+            logger.error(
+                f"[notify_stakeholders_order_paid] Failed to notify customer {order.customer.email}: {str(e)}",
+                exc_info=True
+            )
+
         
         return {
             "status": "success",
@@ -370,4 +366,6 @@ def notify_stakeholders_order_paid(self, order_id):
 
 # Keep old task name for backward compatibility
 notify_vendors_order_paid = notify_stakeholders_order_paid
+
+
 

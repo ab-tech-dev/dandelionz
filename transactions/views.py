@@ -201,12 +201,13 @@ def credit_vendors_for_order(order, source_prefix="Order"):
     
     for item in order.order_items.all():
         vendor = item.product.store
-        if not vendor:
+        if not vendor or not getattr(vendor, "user", None):
             continue
         vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
         commission_amount = item.item_subtotal * PLATFORM_COMMISSION
         
-        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
+        vendor_user = vendor.user
+        wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
         wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
         
         # Log the transaction for audit trail
@@ -214,12 +215,12 @@ def credit_vendors_for_order(order, source_prefix="Order"):
             order=order,
             action=TransactionLog.Action.VENDOR_CREDITED,
             level=TransactionLog.Level.SUCCESS,
-            message=f"Vendor {vendor.email} credited ₦{vendor_share} for delivery (Item: {item.product.name})",
-            related_user=vendor,
+            message=f"Vendor {vendor_user.email} credited ₦{vendor_share} for delivery (Item: {item.product.name})",
+            related_user=vendor_user,
             amount=vendor_share,
             metadata={
                 "vendor_id": vendor.id,
-                "vendor_email": vendor.email,
+                "vendor_email": vendor_user.email,
                 "item_id": item.id,
                 "item_name": item.product.name,
                 "item_subtotal": str(item.item_subtotal),
@@ -229,7 +230,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         )
         
         logger.info(
-            f"Vendor credited: {vendor.email} | Amount: ₦{vendor_share} | "
+            f"Vendor credited: {vendor_user.email} | Amount: ₦{vendor_share} | "
             f"Commission: ₦{commission_amount} | Order: {order.order_id}"
         )
 
@@ -1648,7 +1649,7 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                 vendor_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
                                 vendors_affected.append({
                                     "vendor_id": vendor.id,
-                                    "vendor_email": vendor.email,
+                                    "vendor_email": vendor_user.email,
                                     "commission_reversed": str(commission_amount)
                                 })
                                 
@@ -1657,12 +1658,12 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                     order=order,
                                     action=TransactionLog.Action.COMMISSION_DEDUCTED,
                                     level=TransactionLog.Level.SUCCESS,
-                                    message=f"Commission reversed for vendor {vendor.email}: ₦{commission_amount} (Order refunded)",
-                                    related_user=vendor,
+                                    message=f"Commission reversed for vendor {vendor_user.email}: ₦{commission_amount} (Order refunded)",
+                                    related_user=vendor_user,
                                     amount=-commission_amount,
                                     metadata={
                                         "vendor_id": vendor.id,
-                                        "vendor_email": vendor.email,
+                                        "vendor_email": vendor_user.email,
                                         "commission_amount": str(commission_amount),
                                         "reason": "Refund Approval",
                                         "refund_id": refund.id
@@ -1670,12 +1671,12 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                 )
                                 
                                 logger.info(
-                                    f"Commission reversed for vendor {vendor.email}: ₦{commission_amount} | "
+                                    f"Commission reversed for vendor {vendor_user.email}: ₦{commission_amount} | "
                                     f"Reason: Order refund {order.order_id}"
                                 )
                                 
                             except ValueError as e:
-                                logger.error(f"Failed to debit vendor {vendor.email}: {str(e)}")
+                                logger.error(f"Failed to debit vendor {vendor_user.email}: {str(e)}")
                                 # Continue with other vendors if one fails
                                 pass
                     
@@ -1988,8 +1989,8 @@ Metrics include:
                         if vendor.id not in commission_by_vendor:
                             commission_by_vendor[vendor.id] = {
                                 "vendor_id": vendor.id,
-                                "vendor_email": vendor.email,
-                                "vendor_name": getattr(vendor, 'store_name', vendor.email),
+                                "vendor_email": vendor_user.email,
+                                "vendor_name": getattr(vendor, 'store_name', vendor_user.email),
                                 "total_commission": Decimal("0.00"),
                                 "order_count": 0,
                             }
@@ -2100,3 +2101,5 @@ __all__ = [
     'InstallmentPaymentListView', 'InitializeInstallmentPaymentView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView',
     'CommissionAnalyticsView'
 ]
+
+
