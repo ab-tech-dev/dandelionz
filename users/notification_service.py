@@ -182,7 +182,7 @@ class NotificationService:
         """Send notification via email (async via Celery)"""
         try:
             # Import here to avoid circular imports
-            from authentication.verification.tasks import send_notification_email
+            from users.notification_tasks import send_notification_email
             
             # Queue async task
             send_notification_email.delay(str(notification.id))
