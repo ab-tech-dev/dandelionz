@@ -1,4 +1,4 @@
-from django.db.models.signals import post_save, post_delete
+from django.db.models.signals import post_save, post_delete, pre_save
 from django.dispatch import receiver
 from django.db import transaction
 import logging
@@ -25,6 +25,22 @@ def create_wallet_on_user_creation(sender, instance, created, **kwargs):
             logger.error(f"[signals.create_wallet_on_user_creation] Error creating wallet for user {instance.email}: {e}", exc_info=True)
 
 
+@receiver(pre_save, sender=Order)
+def cache_order_previous_state(sender, instance, **kwargs):
+    """
+    Cache previous order status/credit flag before save.
+    This enables accurate post-save change detection even when update_fields is None.
+    """
+    if not instance.pk:
+        instance._previous_status = None
+        instance._previous_vendors_credited = False
+        return
+
+    prev = Order.objects.filter(pk=instance.pk).values('status', 'vendors_credited').first()
+    instance._previous_status = prev['status'] if prev else None
+    instance._previous_vendors_credited = prev['vendors_credited'] if prev else False
+
+
 @receiver(post_save, sender=Order)
 def track_order_status_changes(sender, instance, update_fields, **kwargs):
     """
@@ -32,27 +48,44 @@ def track_order_status_changes(sender, instance, update_fields, **kwargs):
     This ensures complete audit trail of order progression.
     Runs after order save to track status transitions.
     """
-    if update_fields and 'status' in update_fields:
+    if update_fields is None or 'status' in update_fields:
         try:
             with transaction.atomic():
-                # Check if this is an actual status change by comparing with previous status
-                # The instance at this point has the new status
+                previous_status = getattr(instance, '_previous_status', None)
+                previous_credited = getattr(instance, '_previous_vendors_credited', False)
+
                 current_status = instance.status
-                
-                # Determine who changed the status (default to SYSTEM)
-                changed_by = 'SYSTEM'
-                admin_user = None
-                
-                # Create status history entry
-                OrderStatusHistory.objects.create(
-                    order=instance,
-                    status=current_status,
-                    changed_by=changed_by,
-                    admin=admin_user,
-                    reason=f"Order status updated to {current_status}"
-                )
-                
-                logger.info(f"[signals.track_order_status_changes] Order {instance.order_id} status changed to {current_status}")
+                status_changed = previous_status and previous_status != current_status
+
+                if status_changed:
+                    # Determine who changed the status (default to SYSTEM)
+                    changed_by = 'SYSTEM'
+                    admin_user = None
+
+                    # Create status history entry
+                    OrderStatusHistory.objects.create(
+                        order=instance,
+                        status=current_status,
+                        changed_by=changed_by,
+                        admin=admin_user,
+                        reason=f"Order status updated to {current_status}"
+                    )
+
+                    logger.info(f"[signals.track_order_status_changes] Order {instance.order_id} status changed to {current_status}")
+
+                # Auto-credit vendors if order just moved to DELIVERED and not yet credited
+                if current_status == Order.Status.DELIVERED and not previous_credited and not instance.vendors_credited:
+                    from transactions.views import credit_vendors_for_order
+                    try:
+                        credit_vendors_for_order(instance, source_prefix="Delivery")
+                        instance.vendors_credited = True
+                        instance.save(update_fields=['vendors_credited'])
+                        logger.info(f"[signals.track_order_status_changes] Vendors credited for delivered order {instance.order_id}")
+                    except Exception as credit_error:
+                        logger.error(
+                            f"[signals.track_order_status_changes] Failed to credit vendors for order {instance.order_id}: {credit_error}",
+                            exc_info=True
+                        )
         except Exception as e:
             # Log error but don't fail the main transaction
             logger.error(f"[signals.track_order_status_changes] Error tracking status change for order {getattr(instance, 'order_id', None)}: {e}", exc_info=True)
