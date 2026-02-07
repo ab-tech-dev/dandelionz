@@ -3,7 +3,7 @@ import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, MethodNotAllowed
 from rest_framework_simplejwt.exceptions import TokenError
 
 from .response import standardized_response
@@ -32,6 +32,15 @@ class BaseAPIView(APIView):
                   status=status.HTTP_401_UNAUTHORIZED
              )
         
+        if isinstance(exc, MethodNotAllowed):
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=str(exc)
+                ),
+                status=status.HTTP_405_METHOD_NOT_ALLOWED
+            )
+
         logger.error(f"Unexpected error: {str(exc)}")
         logger.error(traceback.format_exc())
 

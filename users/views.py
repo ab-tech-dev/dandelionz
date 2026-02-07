@@ -916,6 +916,47 @@ class VendorViewSet(viewsets.ViewSet):
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
+        method="get",
+        operation_id="vendor_product_detail",
+        operation_summary="Retrieve Vendor Product",
+        operation_description="Retrieve a single product in the vendor's store by slug.",
+        tags=["Vendor Products"],
+        responses={
+            200: openapi.Response(
+                "Product retrieved successfully",
+                ProductSerializer()
+            ),
+            404: openapi.Response("Product not found"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=True, methods=["get"])
+    def product_detail(self, request, slug=None):
+        vendor = self.get_vendor(request)
+
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            product = Product.objects.get(
+                slug=slug,
+                store=vendor,
+                publish_status='submitted',
+            )
+        except Product.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Product not found or not a submitted product"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = ProductSerializer(product)
+        return Response({"success": True, "data": serializer.data})
+
+    @swagger_auto_schema(
         method="put",
         operation_summary="Update Product (Full)",
         operation_description="Fully update a product's information. All fields must be provided.",
@@ -950,7 +991,7 @@ class VendorViewSet(viewsets.ViewSet):
         security=[{"Bearer": []}],
     )
     @action(detail=True, methods=["put", "patch"])
-    def update_product(self, request, pk=None):
+    def update_product(self, request, slug=None):
         vendor = self.get_vendor(request)
 
         if not vendor:
@@ -961,7 +1002,11 @@ class VendorViewSet(viewsets.ViewSet):
 
         try:
             # Only allow updates to submitted products (not drafts)
-            product = Product.objects.get(pk=pk, store=vendor, publish_status='submitted')
+            product = Product.objects.get(
+                slug=slug,
+                store=vendor,
+                publish_status='submitted',
+            )
         except Product.DoesNotExist:
             return Response(
                 {"success": False, "message": "Product not found or not a submitted product"},
@@ -992,7 +1037,7 @@ class VendorViewSet(viewsets.ViewSet):
         security=[{"Bearer": []}],
     )
     @action(detail=True, methods=["delete"])
-    def delete_product(self, request, pk=None):
+    def delete_product(self, request, slug=None):
         vendor = self.get_vendor(request)
 
         if not vendor:
@@ -1003,7 +1048,11 @@ class VendorViewSet(viewsets.ViewSet):
 
         try:
             # Only allow deletion of submitted products (not drafts)
-            product = Product.objects.get(pk=pk, store=vendor, publish_status='submitted')
+            product = Product.objects.get(
+                slug=slug,
+                store=vendor,
+                publish_status='submitted',
+            )
             product.delete()
         except Product.DoesNotExist:
             return Response(
@@ -1197,7 +1246,7 @@ class VendorViewSet(viewsets.ViewSet):
         method="get",
         operation_id="vendor_analytics",
         operation_summary="Get Vendor Sales Analytics",
-        operation_description="Retrieve vendor's total revenue and top 5 best-selling products with quantity sold.",
+        operation_description="Retrieve vendor analytics: withdrawable balance, total orders, total products sold, and new customers.",
         tags=["Vendor Analytics"],
         responses={
             200: openapi.Response(
@@ -1218,30 +1267,32 @@ class VendorViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        from transactions.models import OrderItem
-        from django.db.models import Sum, F
+        from transactions.models import Order, OrderItem
+        from django.db.models import Sum
 
-        items = OrderItem.objects.filter(product__store=vendor)
+        orders = Order.objects.filter(
+            order_items__product__store=vendor
+        ).distinct()
 
-        total_revenue = (
-            items.aggregate(
-                total=Sum(F("product__price") * F("quantity"))
-            )["total"]
-            or 0
+        delivered_items = OrderItem.objects.filter(
+            product__store=vendor,
+            order__status=Order.Status.DELIVERED,
         )
 
-        product_stats = (
-            items.values("product__name")
-            .annotate(sold=Sum("quantity"))
-            .order_by("-sold")[:5]
+        total_products_sold = (
+            delivered_items.aggregate(total=Sum("quantity"))["total"] or 0
         )
+
+        new_customers = orders.values("customer_id").distinct().count()
 
         return Response(
             {
                 "success": True,
                 "data": {
-                    "total_revenue": total_revenue,
-                    "top_products": product_stats,
+                    "total_balance": float(vendor.get_available_balance()),
+                    "total_orders": orders.count(),
+                    "total_products_sold": total_products_sold,
+                    "new_customers": new_customers,
                 },
             }
         )
@@ -1512,7 +1563,8 @@ class VendorWalletViewSet(viewsets.ViewSet):
             account_number=vendor.account_number,
             account_name=vendor.account_name or '',
             recipient_code=vendor.recipient_code or '',
-            vendor=vendor
+            vendor=vendor,
+            auto_process=True
         )
         
         if error:

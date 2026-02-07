@@ -119,7 +119,18 @@ urlpatterns = [
     path("vendor/account/", vendor_close_account, name="vendor-close-account"),
     path("vendor/products/add/", VendorViewSet.as_view({"post": "add_product"}), name="vendor-add-product"),
     path("vendor/products/", VendorViewSet.as_view({"get": "list_products"}), name="vendor-list-products"),
-    path("vendor/products/<slug:slug>/", VendorViewSet.as_view({"put": "update_product", "patch": "update_product", "delete": "delete_product"}), name="vendor-product-detail"),
+    path(
+        "vendor/products/<slug:slug>/",
+        VendorViewSet.as_view(
+            {
+                "get": "product_detail",
+                "put": "update_product",
+                "patch": "update_product",
+                "delete": "delete_product",
+            }
+        ),
+        name="vendor-product-detail",
+    ),
     path("vendor/orders/", VendorViewSet.as_view({"get": "orders"}), name="vendor-orders"),
     path("vendor/orders/list/", VendorViewSet.as_view({"get": "list_orders"}), name="vendor-orders-list"),
     re_path(r"^vendor/orders/(?P<order_uuid>[^/]+)/$", VendorViewSet.as_view({"get": "order_detail"}), name="vendor-order-detail"),

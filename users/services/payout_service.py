@@ -83,6 +83,13 @@ class PayoutService:
         except PaymentPIN.DoesNotExist:
             return False, "Please set a secure payment PIN in Payment Settings before you can withdraw funds."
         
+        # Vendor-specific verification checks
+        if hasattr(user, "vendor_profile"):
+            vendor = user.vendor_profile
+            is_verified, error = PayoutService._validate_vendor_verified_earnings(vendor, amount)
+            if not is_verified:
+                return False, error
+
         return True, None
     
     @staticmethod
@@ -109,7 +116,8 @@ class PayoutService:
         account_number,
         account_name,
         recipient_code='',
-        vendor=None
+        vendor=None,
+        auto_process=False
     ):
         """
         Create a withdrawal request and debit the wallet.
@@ -139,7 +147,8 @@ class PayoutService:
                 account_name=account_name,
                 recipient_code=recipient_code,
                 reference=f"WTH-{uuid_lib.uuid4().hex[:12].upper()}",
-                status='pending'
+                status='processing' if auto_process else 'pending',
+                processed_at=timezone.now() if auto_process else None,
             )
             
             # Debit wallet
@@ -223,3 +232,40 @@ class PayoutService:
             
         except Exception as e:
             logger.error(f"Error notifying admins of withdrawal: {str(e)}", exc_info=True)
+
+    @staticmethod
+    def _validate_vendor_verified_earnings(vendor, amount):
+        """
+        Ensure vendor withdrawal amount is backed by verified, delivered orders.
+        """
+        from transactions.models import Order, OrderItem
+        from django.db.models import F, Sum, DecimalField, ExpressionWrapper
+
+        # Block if any delivered, credited orders are tied to unverified payments
+        unverified_orders = Order.objects.filter(
+            order_items__product__store=vendor,
+            status=Order.Status.DELIVERED,
+            vendors_credited=True,
+        ).exclude(payment__verified=True).distinct()
+
+        if unverified_orders.exists():
+            return False, "Withdrawal blocked: some delivered orders have unverified payments."
+
+        subtotal_expr = ExpressionWrapper(
+            F('price_at_purchase') * F('quantity'),
+            output_field=DecimalField(max_digits=12, decimal_places=2)
+        )
+        subtotal = OrderItem.objects.filter(
+            product__store=vendor,
+            order__status=Order.Status.DELIVERED,
+            order__vendors_credited=True,
+            order__payment__verified=True,
+        ).aggregate(total=Sum(subtotal_expr))['total'] or Decimal("0")
+
+        # Vendor share is 90% after 10% commission
+        verified_earnings = subtotal * Decimal("0.90")
+
+        if Decimal(str(amount)) > verified_earnings:
+            return False, "Withdrawal amount exceeds verified earnings."
+
+        return True, None

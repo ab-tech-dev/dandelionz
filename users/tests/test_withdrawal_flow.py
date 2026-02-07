@@ -7,7 +7,9 @@ from django.test import TestCase
 from django.contrib.auth import get_user_model
 from decimal import Decimal
 from users.models import Vendor, PayoutRequest, PaymentPIN, Customer
-from transactions.models import Wallet
+from transactions.models import Wallet, Order, OrderItem, Payment
+from store.models import Product
+from django.utils import timezone
 from users.services.payout_service import PayoutService
 import uuid
 
@@ -44,6 +46,40 @@ class WithdrawalValidationTests(TestCase):
         self.pin_obj = PaymentPIN()
         self.pin_obj.user = self.user
         self.pin_obj.set_pin('1234')
+
+        self._create_verified_order(amount=Decimal('60000.00'))
+
+    def _create_verified_order(self, amount):
+        customer = User.objects.create_user(
+            email='customer@test.com',
+            password='test123',
+            full_name='Test Customer'
+        )
+        product = Product.objects.create(
+            store=self.vendor,
+            name='Test Product',
+            price=amount
+        )
+        order = Order.objects.create(
+            customer=customer,
+            status=Order.Status.DELIVERED,
+            payment_status='PAID',
+            vendors_credited=True,
+            total_price=amount
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            quantity=1,
+            price_at_purchase=amount
+        )
+        Payment.objects.create(
+            order=order,
+            amount=amount,
+            status='SUCCESS',
+            verified=True,
+            paid_at=timezone.now()
+        )
     
     def test_validate_withdrawal_with_sufficient_balance(self):
         """Test validation passes with sufficient balance"""
@@ -151,6 +187,40 @@ class WithdrawalRequestCreationTests(TestCase):
         self.pin_obj = PaymentPIN()
         self.pin_obj.user = self.user
         self.pin_obj.set_pin('1234')
+
+        self._create_verified_order(amount=Decimal('60000.00'))
+
+    def _create_verified_order(self, amount):
+        customer = User.objects.create_user(
+            email='customer2@test.com',
+            password='test123',
+            full_name='Test Customer'
+        )
+        product = Product.objects.create(
+            store=self.vendor,
+            name='Test Product',
+            price=amount
+        )
+        order = Order.objects.create(
+            customer=customer,
+            status=Order.Status.DELIVERED,
+            payment_status='PAID',
+            vendors_credited=True,
+            total_price=amount
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            quantity=1,
+            price_at_purchase=amount
+        )
+        Payment.objects.create(
+            order=order,
+            amount=amount,
+            status='SUCCESS',
+            verified=True,
+            paid_at=timezone.now()
+        )
     
     def test_create_withdrawal_request_success(self):
         """Test successful withdrawal request creation"""
@@ -163,14 +233,15 @@ class WithdrawalRequestCreationTests(TestCase):
             bank_name='GTBank',
             account_number='0123456789',
             account_name='Test Store Ltd',
-            vendor=self.vendor
+            vendor=self.vendor,
+            auto_process=True
         )
         
         # Check payout was created
         self.assertIsNotNone(payout)
         self.assertIsNone(error)
         self.assertEqual(payout.amount, amount)
-        self.assertEqual(payout.status, 'pending')
+        self.assertEqual(payout.status, 'processing')
         self.assertTrue(payout.reference.startswith('WTH-'))
         
         # Check wallet was debited
