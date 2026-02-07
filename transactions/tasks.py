@@ -78,17 +78,17 @@ def check_overdue_deliveries():
                 f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}"
             )
             
-        # Notify all admins about overdue delivery
-        notify_admin(
-            f"Overdue Delivery Alert: Order {order.order_id}",
-            f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
-            f"Customer: {order.customer.email}. "
-            f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
-            f"Please investigate and take appropriate action.",
-            order_id=order.order_id,
-            customer_email=order.customer.email
-        )
-            
+            # Notify all admins about overdue delivery
+            notify_admin(
+                f"Overdue Delivery Alert: Order {order.order_id}",
+                f"Order {order.order_id} has been in SHIPPED status for {days_shipped} days. "
+                f"Customer: {order.customer.email}. "
+                f"Delivery Agent: {order.delivery_agent.user.email if order.delivery_agent else 'Not assigned'}. "
+                f"Please investigate and take appropriate action.",
+                order_id=order.order_id,
+                customer_email=order.customer.email
+            )
+
             # Optional: Send email notification to admin
             if admin_users.exists():
                 admin_emails = list(admin_users.values_list('email', flat=True))
@@ -101,10 +101,10 @@ def check_overdue_deliveries():
                         'shipped_date': order.shipped_at.strftime('%Y-%m-%d %H:%M:%S'),
                         'delivery_agent': order.delivery_agent.user.email if order.delivery_agent else 'Not assigned',
                     }
-                    
+
                     html_message = render_to_string('emails/overdue_delivery_alert.html', context)
                     plain_message = strip_tags(html_message)
-                    
+
                     send_mail(
                         subject=f"URGENT: Overdue Delivery Alert - Order {order.order_id}",
                         message=plain_message,
@@ -113,10 +113,14 @@ def check_overdue_deliveries():
                         html_message=html_message,
                         fail_silently=True,
                     )
-                    
-                    logger.info(f"Overdue delivery notification email sent to {len(admin_emails)} admins for order {order.order_id}")
+
+                    logger.info(
+                        f"Overdue delivery notification email sent to {len(admin_emails)} admins for order {order.order_id}"
+                    )
                 except Exception as e:
-                    logger.error(f"Failed to send overdue delivery email for order {order.order_id}: {str(e)}")
+                    logger.error(
+                        f"Failed to send overdue delivery email for order {order.order_id}: {str(e)}"
+                    )
         
         return {
             "status": "success",
