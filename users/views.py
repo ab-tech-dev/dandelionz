@@ -1969,13 +1969,17 @@ class AdminVendorViewSet(AdminBaseViewSet):
         },
         security=[{"Bearer": []}],
     )
-    @action(detail=False, methods=["post"])
-    def approve_vendor(self, request):
+    @action(detail=False, methods=["post", "put"])
+    def approve_vendor(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        serializer = AdminVendorApprovalSerializer(data=request.data)
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if vendor_uuid and not data.get("user_uuid"):
+            data["user_uuid"] = str(vendor_uuid)
+
+        serializer = AdminVendorApprovalSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
@@ -2038,7 +2042,7 @@ class AdminVendorViewSet(AdminBaseViewSet):
         },
         security=[{"Bearer": []}],
     )
-    @action(detail=False, methods=["post"])
+    @action(detail=False, methods=["post", "put"])
     def suspend_user(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
@@ -2106,13 +2110,17 @@ class AdminVendorViewSet(AdminBaseViewSet):
         },
         security=[{"Bearer": []}],
     )
-    @action(detail=False, methods=["post"])
-    def verify_kyc(self, request):
+    @action(detail=False, methods=["post", "put"])
+    def verify_kyc(self, request, vendor_uuid=None):
         admin = self.get_admin(request)
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        serializer = AdminVendorKYCSerializer(data=request.data)
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if vendor_uuid and not data.get("user_uuid"):
+            data["user_uuid"] = str(vendor_uuid)
+
+        serializer = AdminVendorKYCSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
@@ -2785,6 +2793,225 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         PayoutService.execute_payout(user, total_payable)
 
         return Response({"success": True, "amount": total_payable})
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_summary",
+        operation_summary="Admin Finance Summary",
+        operation_description="Retrieve finance summary totals for revenue and settlements.",
+        tags=["Finance"],
+        responses={
+            200: openapi.Response("Summary retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """Get finance summary data for admin dashboard"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from transactions.models import Settlement, Order
+        from django.db.models import Sum
+        from django.utils import timezone
+        from decimal import Decimal
+
+        total_revenue = Order.objects.filter(
+            payment_status='PAID'
+        ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+
+        total_payouts = Settlement.objects.filter(
+            status='PROCESSED'
+        ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+
+        pending_settlements = Settlement.objects.filter(
+            status__in=['PENDING', 'PROCESSING']
+        ).aggregate(Sum('amount'))['amount__sum'] or Decimal('0.00')
+
+        upcoming_payouts = Settlement.objects.filter(
+            status='PENDING',
+            payout_date__gt=timezone.now()
+        ).values('vendor').distinct().count()
+
+        data = {
+            'total_revenue': str(total_revenue),
+            'total_payouts': str(total_payouts),
+            'pending_settlements': str(pending_settlements),
+            'upcoming_payouts': upcoming_payouts,
+        }
+
+        return Response({"success": True, "data": data})
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_transactions",
+        operation_summary="Transaction History",
+        operation_description="Retrieve combined payment and payout transaction history.",
+        tags=["Finance"],
+        manual_parameters=[
+            openapi.Parameter(
+                'type',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description='Filter by type: payment, payout, all',
+                required=False,
+            ),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+        ],
+        responses={
+            200: openapi.Response("Transactions retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def transactions(self, request):
+        """Get combined payment and payout transaction history"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from users.models import PayoutRequest
+        from transactions.models import Payment
+        from rest_framework.pagination import LimitOffsetPagination
+
+        type_filter = request.query_params.get('type', 'all').lower()
+
+        items = []
+
+        if type_filter in ['all', 'payment', 'payments']:
+            payments = Payment.objects.select_related('order', 'order__customer').order_by('-created_at')
+            for p in payments:
+                customer = getattr(p.order, 'customer', None)
+                customer_name = None
+                if customer:
+                    customer_name = customer.full_name or customer.email
+                items.append({
+                    'id': f"payment_{p.id}",
+                    'reference': p.reference,
+                    'type': 'payment',
+                    'amount': str(p.amount),
+                    'status': p.status,
+                    'counterparty': customer_name,
+                    'order_id': str(p.order.order_id),
+                    'created_at': p.created_at,
+                })
+
+        if type_filter in ['all', 'payout', 'withdrawal', 'withdrawals']:
+            payouts = PayoutRequest.objects.select_related('vendor', 'user').order_by('-created_at')
+            for w in payouts:
+                if w.vendor:
+                    requestor_name = w.vendor.store_name
+                    requestor_type = 'Vendor'
+                else:
+                    requestor_name = w.user.full_name or w.user.email
+                    requestor_type = 'Customer'
+
+                items.append({
+                    'id': f"payout_{w.id}",
+                    'reference': w.reference,
+                    'type': 'payout',
+                    'amount': str(w.amount),
+                    'status': w.status,
+                    'counterparty': requestor_name,
+                    'counterparty_type': requestor_type,
+                    'created_at': w.created_at,
+                })
+
+        items.sort(key=lambda x: x['created_at'], reverse=True)
+
+        paginator = LimitOffsetPagination()
+        paginated = paginator.paginate_queryset(items, request)
+
+        data = []
+        for item in paginated:
+            data.append({
+                'id': item['id'],
+                'reference': item['reference'],
+                'type': item['type'],
+                'amount': item['amount'],
+                'status': item['status'],
+                'counterparty': item.get('counterparty'),
+                'counterparty_type': item.get('counterparty_type'),
+                'order_id': item.get('order_id'),
+                'created_at': item['created_at'].isoformat(),
+            })
+
+        return paginator.get_paginated_response(data)
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_payouts",
+        operation_summary="Payouts List",
+        operation_description="Retrieve payout requests with filtering by status.",
+        tags=["Finance"],
+        manual_parameters=[
+            openapi.Parameter(
+                'status',
+                openapi.IN_QUERY,
+                type=openapi.TYPE_STRING,
+                description='Filter by status: pending, paid, failed',
+                required=False,
+            ),
+            openapi.Parameter('limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20),
+            openapi.Parameter('offset', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=0),
+        ],
+        responses={
+            200: openapi.Response("Payouts retrieved successfully"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def payouts(self, request):
+        """Get payout requests (paid/pending)"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from users.models import PayoutRequest
+        from rest_framework.pagination import LimitOffsetPagination
+
+        status_filter = request.query_params.get('status', '').lower()
+        status_map = {
+            'paid': ['successful'],
+            'pending': ['pending', 'processing'],
+            'failed': ['failed', 'cancelled'],
+        }
+
+        payouts = PayoutRequest.objects.select_related('vendor', 'user').order_by('-created_at')
+        if status_filter in status_map:
+            payouts = payouts.filter(status__in=status_map[status_filter])
+
+        paginator = LimitOffsetPagination()
+        paginated = paginator.paginate_queryset(payouts, request)
+
+        data = []
+        for w in paginated:
+            if w.vendor:
+                requestor_name = w.vendor.store_name
+                requestor_type = 'Vendor'
+            else:
+                requestor_name = w.user.full_name or w.user.email
+                requestor_type = 'Customer'
+
+            display_status = 'PAID' if w.status == 'successful' else 'PENDING' if w.status in ['pending', 'processing'] else w.status.upper()
+
+            data.append({
+                'id': w.id,
+                'reference': w.reference,
+                'requestor_name': requestor_name,
+                'requestor_type': requestor_type,
+                'amount': str(w.amount),
+                'status': display_status,
+                'bank_name': w.bank_name,
+                'account_number': w.account_number,
+                'account_name': w.account_name,
+                'created_at': w.created_at.isoformat(),
+                'processed_at': w.processed_at.isoformat() if w.processed_at else None,
+            })
+
+        return paginator.get_paginated_response(data)
 
     @swagger_auto_schema(
         operation_id="admin_list_withdrawals",
@@ -4787,36 +5014,84 @@ class AdminSettlementsViewSet(AdminBaseViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
         
-        from transactions.models import Dispute
+        from transactions.models import Dispute, Refund
         from rest_framework.pagination import LimitOffsetPagination
         
         disputes = Dispute.objects.select_related(
             'order', 'customer', 'vendor'
+        ).order_by('-created_at')
+
+        refunds = Refund.objects.select_related(
+            'payment', 'payment__order', 'payment__order__customer'
         ).order_by('-created_at')
         
         # Filter by status if provided
         status_filter = request.query_params.get('status')
         if status_filter and status_filter.upper() in ['PENDING', 'APPROVED', 'REJECTED']:
             disputes = disputes.filter(status=status_filter.upper())
-        
-        # Paginate
-        paginator = LimitOffsetPagination()
-        paginated = paginator.paginate_queryset(disputes, request)
+            refunds = refunds.filter(status=status_filter.upper())
         
         data = []
-        for dispute in paginated:
+        for dispute in disputes:
             data.append({
                 'id': dispute.id,
+                'type': 'dispute',
                 'order_id': str(dispute.order.order_id),
-                'customer_name': dispute.customer.full_name,
+                'customer_name': dispute.customer.full_name or dispute.customer.email,
                 'vendor_name': dispute.vendor.store_name,
                 'amount': str(dispute.amount),
                 'reason': dispute.reason,
                 'status': dispute.status,
-                'created_at': dispute.created_at.isoformat(),
+                'created_at': dispute.created_at,
             })
-        
-        return paginator.get_paginated_response(data)
+
+        for refund in refunds:
+            order = refund.payment.order
+            customer = order.customer
+            vendor_names = list(
+                order.order_items.values_list('product__store__store_name', flat=True).distinct()
+            )
+            if len(vendor_names) == 1:
+                vendor_name = vendor_names[0]
+            elif len(vendor_names) > 1:
+                vendor_name = "Multiple Vendors"
+            else:
+                vendor_name = None
+
+            data.append({
+                'id': refund.id,
+                'type': 'refund',
+                'order_id': str(order.order_id),
+                'customer_name': customer.full_name or customer.email,
+                'vendor_name': vendor_name,
+                'amount': str(refund.refunded_amount),
+                'reason': refund.reason or '',
+                'status': refund.status,
+                'created_at': refund.created_at,
+                'processed_at': refund.processed_at.isoformat() if refund.processed_at else None,
+            })
+
+        data.sort(key=lambda x: x['created_at'], reverse=True)
+
+        paginator = LimitOffsetPagination()
+        paginated = paginator.paginate_queryset(data, request)
+
+        response_data = []
+        for item in paginated:
+            response_data.append({
+                'id': item['id'],
+                'type': item['type'],
+                'order_id': item['order_id'],
+                'customer_name': item['customer_name'],
+                'vendor_name': item['vendor_name'],
+                'amount': item['amount'],
+                'reason': item['reason'],
+                'status': item['status'],
+                'created_at': item['created_at'].isoformat(),
+                'processed_at': item.get('processed_at'),
+            })
+
+        return paginator.get_paginated_response(response_data)
 
     @swagger_auto_schema(
         operation_id="admin_resolve_dispute",

@@ -62,9 +62,9 @@ admin_change_password = AdminProfileViewSet.as_view({"post": "change_password"})
 
 admin_list_vendors = AdminVendorViewSet.as_view({"get": "list_vendors"})
 admin_vendor_details = AdminVendorViewSet.as_view({"get": "get_vendor_details"})
-admin_approve_vendor = AdminVendorViewSet.as_view({"post": "approve_vendor"})
-admin_suspend_user = AdminVendorViewSet.as_view({"post": "suspend_user"})
-admin_verify_kyc = AdminVendorViewSet.as_view({"post": "verify_kyc"})
+admin_approve_vendor = AdminVendorViewSet.as_view({"post": "approve_vendor", "put": "approve_vendor"})
+admin_suspend_user = AdminVendorViewSet.as_view({"post": "suspend_user", "put": "suspend_user"})
+admin_verify_kyc = AdminVendorViewSet.as_view({"post": "verify_kyc", "put": "verify_kyc"})
 
 admin_list_products = AdminMarketplaceViewSet.as_view({"get": "list_products"})
 admin_update_product = AdminMarketplaceViewSet.as_view({"put": "update_product", "patch": "update_product"})
@@ -75,6 +75,13 @@ admin_process_refund = AdminOrdersViewSet.as_view({"post": "process_refund"})
 
 admin_payments = AdminFinanceViewSet.as_view({"get": "payments"})
 admin_trigger_payout = AdminFinanceViewSet.as_view({"post": "trigger_payout"})
+admin_finance_summary = AdminFinanceViewSet.as_view({"get": "summary"})
+admin_finance_transactions = AdminFinanceViewSet.as_view({"get": "transactions"})
+admin_finance_payouts = AdminFinanceViewSet.as_view({"get": "payouts"})
+admin_finance_withdrawals = AdminFinanceViewSet.as_view({"get": "list_withdrawals"})
+admin_finance_withdrawal_detail = AdminFinanceViewSet.as_view({"get": "withdrawal_detail"})
+admin_finance_withdrawal_approve = AdminFinanceViewSet.as_view({"post": "approve_withdrawal"})
+admin_finance_withdrawal_reject = AdminFinanceViewSet.as_view({"post": "reject_withdrawal"})
 
 admin_analytics = AdminAnalyticsViewSet.as_view({"get": "overview"})
 
@@ -157,7 +164,9 @@ urlpatterns = [
     # ADMIN VENDOR MANAGEMENT
     path("admin/vendors/", admin_list_vendors, name="admin-list-vendors"),
     path("admin/vendors/approve/", admin_approve_vendor, name="admin-approve-vendor"),
+    path("admin/vendors/<uuid:vendor_uuid>/approve/", admin_approve_vendor, name="admin-approve-vendor-by-uuid"),
     path("admin/vendors/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc"),
+    path("admin/vendors/<uuid:vendor_uuid>/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc-by-uuid"),
     path("admin/vendors/<uuid:vendor_uuid>/suspend/", admin_suspend_user, name="admin-vendor-suspend"),
     path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
     re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
@@ -175,6 +184,13 @@ urlpatterns = [
     # ADMIN FINANCE
     path("admin/payments/", admin_payments, name="admin-payments"),
     path("admin/payouts/trigger/", admin_trigger_payout, name="admin-trigger-payout"),
+    path("admin/finance/summary/", admin_finance_summary, name="admin-finance-summary"),
+    path("admin/finance/transactions/", admin_finance_transactions, name="admin-finance-transactions"),
+    path("admin/finance/payouts/", admin_finance_payouts, name="admin-finance-payouts"),
+    path("admin/finance/withdrawals/", admin_finance_withdrawals, name="admin-finance-withdrawals"),
+    path("admin/finance/withdrawals/detail/", admin_finance_withdrawal_detail, name="admin-finance-withdrawal-detail"),
+    path("admin/finance/withdrawals/approve/", admin_finance_withdrawal_approve, name="admin-finance-withdrawal-approve"),
+    path("admin/finance/withdrawals/reject/", admin_finance_withdrawal_reject, name="admin-finance-withdrawal-reject"),
 
     # ADMIN ANALYTICS
     path("admin/analytics/", admin_analytics, name="admin-analytics"),
