@@ -399,10 +399,25 @@ class InstallmentPlan(models.Model):
     def mark_as_completed(self):
         """Mark installment plan as completed (idempotent - safe to call multiple times)"""
         if self.is_fully_paid():
+            # Ensure a Payment record exists for installment orders
+            payment, created = Payment.objects.get_or_create(
+                order=self.order,
+                defaults={
+                    "amount": self.total_amount,
+                    "gateway": "Paystack",
+                },
+            )
+
+            # Keep payment amount in sync with total_amount
+            if payment.amount != self.total_amount:
+                payment.amount = self.total_amount
+                payment.save(update_fields=["amount"])
+
+            # Mark payment successful (will update order status and notify stakeholders)
+            if not payment.verified:
+                payment.mark_as_successful()
+
             self.status = 'COMPLETED'
-            self.order.payment_status = 'PAID'
-            self.order.status = Order.Status.PAID
-            self.order.save(update_fields=['payment_status', 'status'])
             self.save(update_fields=['status', 'updated_at', 'vendors_credited'])
             return True
         return False

@@ -1188,13 +1188,7 @@ If all installments are paid, automatically credits vendor wallets.""",
             # Mark installment as paid
             installment.mark_as_paid()
             
-            # Check if all installments are paid
-            plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
-            if plan.is_fully_paid():
-                # Mark order as PAID when all installments are received
-                # Vendors will be credited when order is DELIVERED, not here
-                plan.order.status = Order.Status.PAID
-                plan.order.save(update_fields=['status'])
+            # InstallmentPlan.mark_as_completed handles order/payment status and notifications
 
         return Response(
             standardized_response(
@@ -1243,11 +1237,6 @@ No authentication required (webhook signature validation instead)""",
         if not reference:
             return Response({"status": "ok"})
 
-        try:
-            installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
-        except InstallmentPayment.DoesNotExist:
-            return Response({"status": "ok"})
-
         paystack = Paystack()
         verify = paystack.verify_payment(reference)
         pdata = verify.get("data", {})
@@ -1263,15 +1252,15 @@ No authentication required (webhook signature validation instead)""",
             return Response({"status": "ok"})
 
         with transaction.atomic():
+            try:
+                installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
+            except InstallmentPayment.DoesNotExist:
+                return Response({"status": "ok"})
+
             if installment.status != InstallmentPayment.PaymentStatus.PAID:
                 installment.mark_as_paid()
                 
-                # Mark order as PAID when all installments are paid
-                plan = InstallmentPlan.objects.select_for_update().get(pk=installment.installment_plan.pk)
-                if plan.is_fully_paid():
-                    # Vendors are credited when order is DELIVERED, not when payments are complete
-                    plan.order.status = Order.Status.PAID
-                    plan.order.save(update_fields=['status'])
+                # InstallmentPlan.mark_as_completed handles order/payment status and notifications
 
         return Response({"status": "ok"})
 
