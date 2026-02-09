@@ -2045,6 +2045,39 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
+        method="post",
+        operation_id="admin_suspend_user",
+        operation_summary="Suspend or Activate User",
+        operation_description="Suspend (deactivate) or activate a user account. Suspended users cannot access the platform.",
+        tags=["Vendor Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid", "suspend"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "suspend": openapi.Schema(type=openapi.TYPE_BOOLEAN)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "suspend": True
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                "User status updated",
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "suspended": True}
+                }
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("User not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @swagger_auto_schema(
+        method="put",
         operation_id="admin_suspend_user",
         operation_summary="Suspend or Activate User",
         operation_description="Suspend (deactivate) or activate a user account. Suspended users cannot access the platform.",
