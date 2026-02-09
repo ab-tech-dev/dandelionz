@@ -1939,6 +1939,39 @@ class AdminVendorViewSet(AdminBaseViewSet):
             return Response({"message": "Vendor not found"}, status=404)
 
     @swagger_auto_schema(
+        method="post",
+        operation_id="admin_approve_vendor",
+        operation_summary="Approve or Unapprove Vendor",
+        operation_description="Approve or revoke approval for a vendor. Requires vendor UUID and approval boolean flag.",
+        tags=["Vendor Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid", "approve"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "approve": openapi.Schema(type=openapi.TYPE_BOOLEAN)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "approve": True
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                "Vendor approval status updated",
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "approved": True}
+                }
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Vendor not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @swagger_auto_schema(
+        method="put",
         operation_id="admin_approve_vendor",
         operation_summary="Approve or Unapprove Vendor",
         operation_description="Approve or revoke approval for a vendor. Requires vendor UUID and approval boolean flag.",
