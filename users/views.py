@@ -2148,6 +2148,37 @@ class AdminVendorViewSet(AdminBaseViewSet):
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
+        method="post",
+        operation_id="admin_verify_kyc",
+        operation_summary="Verify Vendor KYC",
+        operation_description="Mark a vendor's KYC (Know Your Customer) documentation as verified.",
+        tags=["Vendor Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID)
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5"
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                "KYC verification completed",
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {"success": True, "message": "Vendor KYC verified"}
+                }
+            ),
+            400: openapi.Response("Invalid request data"),
+            404: openapi.Response("Vendor not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @swagger_auto_schema(
+        method="put",
         operation_id="admin_verify_kyc",
         operation_summary="Verify Vendor KYC",
         operation_description="Mark a vendor's KYC (Know Your Customer) documentation as verified.",
