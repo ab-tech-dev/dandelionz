@@ -1237,24 +1237,24 @@ No authentication required (webhook signature validation instead)""",
         if not reference:
             return Response({"status": "ok"})
 
-        paystack = Paystack()
-        verify = paystack.verify_payment(reference)
-        pdata = verify.get("data", {})
-
-        if pdata.get("status") != "success":
-            return Response({"status": "ok"})
-
-        if pdata.get("currency") != EXPECTED_CURRENCY:
-            return Response({"status": "ok"})
-
-        paid_amount = Decimal(pdata["amount"]) / Decimal(100)
-        if paid_amount != installment.amount:
-            return Response({"status": "ok"})
-
         with transaction.atomic():
             try:
                 installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
             except InstallmentPayment.DoesNotExist:
+                return Response({"status": "ok"})
+
+            paystack = Paystack()
+            verify = paystack.verify_payment(reference)
+            pdata = verify.get("data", {})
+
+            if pdata.get("status") != "success":
+                return Response({"status": "ok"})
+
+            if pdata.get("currency") != EXPECTED_CURRENCY:
+                return Response({"status": "ok"})
+
+            paid_amount = Decimal(pdata["amount"]) / Decimal(100)
+            if paid_amount != installment.amount:
                 return Response({"status": "ok"})
 
             if installment.status != InstallmentPayment.PaymentStatus.PAID:
@@ -1312,9 +1312,72 @@ Use the 'reference' or 'trxref' query parameter.""",
         try:
             payment = Payment.objects.select_related("order").get(reference=reference)
         except Payment.DoesNotExist:
+            payment = None
+
+        if not payment:
+            try:
+                installment = InstallmentPayment.objects.select_related(
+                    "installment_plan__order"
+                ).get(reference=reference)
+            except InstallmentPayment.DoesNotExist:
+                return Response(
+                    standardized_response(success=False, error="Payment not found"),
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
+                return Response(
+                    standardized_response(success=False, error="Forbidden"),
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            paystack = Paystack()
+            try:
+                resp = paystack.verify_payment(reference)
+            except Exception as e:
+                return Response(
+                    standardized_response(success=False, error=f"Paystack verification failed: {str(e)}"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            data = resp.get("data", {})
+
+            if data.get("status") != "success":
+                return Response(
+                    standardized_response(success=False, error="Payment not successful"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if data.get("currency") != EXPECTED_CURRENCY:
+                return Response(
+                    standardized_response(success=False, error="Invalid currency"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            paid_amount = Decimal(data["amount"]) / Decimal(100)
+            if paid_amount != installment.amount:
+                return Response(
+                    standardized_response(success=False, error="Amount mismatch"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            with transaction.atomic():
+                installment = InstallmentPayment.objects.select_for_update().get(pk=installment.pk)
+                if installment.status == InstallmentPayment.PaymentStatus.PAID:
+                    return Response(
+                        standardized_response(
+                            data=InstallmentPaymentSerializer(installment).data,
+                            message="Payment already verified"
+                        )
+                    )
+
+                installment.mark_as_paid()
+
             return Response(
-                standardized_response(success=False, error="Payment not found"),
-                status=status.HTTP_404_NOT_FOUND
+                standardized_response(
+                    data=InstallmentPaymentSerializer(installment).data,
+                    message="Installment payment verified successfully"
+                )
             )
 
         # For GET requests from Paystack redirects, auto-authenticate with payment owner
@@ -1614,12 +1677,13 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                     for item in order.order_items.all():
                         vendor = item.product.store
                         if vendor:
+                            vendor_user = getattr(vendor, "user", None) or vendor
                             # Commission is 10% of item subtotal
                             commission_amount = item.item_subtotal * PLATFORM_COMMISSION
                             commission_reversal_amount += commission_amount
                             
                             # Debit vendor wallet (reverse the credit they received)
-                            vendor_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor)
+                            vendor_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
                             try:
                                 vendor_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
                                 vendors_affected.append({
@@ -1964,8 +2028,8 @@ Metrics include:
                         if vendor.id not in commission_by_vendor:
                             commission_by_vendor[vendor.id] = {
                                 "vendor_id": vendor.id,
-                                "vendor_email": vendor_user.email,
-                                "vendor_name": getattr(vendor, 'store_name', vendor_user.email),
+                                "vendor_email": vendor.email,
+                                "vendor_name": getattr(vendor, 'store_name', vendor.email),
                                 "total_commission": Decimal("0.00"),
                                 "order_count": 0,
                             }
