@@ -172,10 +172,20 @@ class AdminDashboardOrderStatusUpdateSerializer(serializers.Serializer):
 
 class AdminDashboardProfileSerializer(serializers.ModelSerializer):
     """Admin's own profile information"""
+    profile_picture = serializers.SerializerMethodField()
+
     class Meta:
         model = CustomUser
         fields = ['uuid', 'email', 'full_name', 'phone_number', 'profile_picture', 'created_at', 'updated_at']
         read_only_fields = ['uuid', 'email', 'created_at', 'updated_at']
+
+    def get_profile_picture(self, obj):
+        try:
+            if hasattr(obj, 'profile_picture') and obj.profile_picture:
+                return f"https://res.cloudinary.com/dhpny4uce/{obj.profile_picture}"
+        except Exception:
+            return None
+        return None
 
 
 class AdminDashboardProfileUpdateSerializer(serializers.ModelSerializer):
