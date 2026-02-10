@@ -379,6 +379,10 @@ DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '20')
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 
+# Geoapify Geocoding (for missing coordinates)
+GEOAPIFY_API_KEY = os.getenv('GEOAPIFY_API_KEY')
+GEOAPIFY_DEFAULT_COUNTRY_CODE = os.getenv('GEOAPIFY_DEFAULT_COUNTRY_CODE', 'ng')
+
 # Cloudinary
 cloudinary.config(
     cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),

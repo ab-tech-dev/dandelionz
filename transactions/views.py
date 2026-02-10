@@ -20,6 +20,7 @@ from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
 from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
+from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
     send_order_notification,
     send_payment_notification,
@@ -27,6 +28,49 @@ from users.notification_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _compose_address(parts):
+    return ", ".join([p.strip() for p in parts if p and str(p).strip()])
+
+def _country_code_from_profile(profile):
+    try:
+        country = (profile.country or "").strip()
+        if len(country) == 2:
+            return country.lower()
+    except Exception:
+        pass
+    return getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng")
+
+def _ensure_customer_coords(customer_profile):
+    if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+        return True
+    address = _compose_address([
+        customer_profile.shipping_address,
+        customer_profile.city,
+        customer_profile.postal_code,
+        customer_profile.country,
+    ])
+    if not address:
+        return False
+    coords = geocode_address(address, _country_code_from_profile(customer_profile))
+    if not coords:
+        return False
+    customer_profile.shipping_latitude, customer_profile.shipping_longitude = coords
+    customer_profile.save(update_fields=["shipping_latitude", "shipping_longitude"])
+    return True
+
+def _ensure_vendor_coords(vendor):
+    if vendor.store_latitude and vendor.store_longitude:
+        return True
+    address = _compose_address([vendor.address, vendor.store_name])
+    if not address:
+        return False
+    coords = geocode_address(address, getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng"))
+    if not coords:
+        return False
+    vendor.store_latitude, vendor.store_longitude = coords
+    vendor.save(update_fields=["store_latitude", "store_longitude"])
+    return True
 
 def _is_platform_admin(user):
     return bool(
@@ -563,6 +607,9 @@ class CheckoutView(APIView):
         
         customer_profile = user.customer_profile
         if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+            if _ensure_customer_coords(customer_profile):
+                logger.info(f"Customer coordinates geocoded for user {user.uuid}")
+        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
             if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
                 logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
                 return Response(
@@ -599,6 +646,9 @@ class CheckoutView(APIView):
                     if first_item and first_item.product and hasattr(first_item.product, 'store'):
                         vendor = first_item.product.store
                         if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                            if (not vendor.store_latitude or not vendor.store_longitude):
+                                if _ensure_vendor_coords(vendor):
+                                    logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
                             if vendor.store_latitude and vendor.store_longitude:
                                 order.restaurant_lat = vendor.store_latitude
                                 order.restaurant_lng = vendor.store_longitude
@@ -762,6 +812,9 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
         
         customer_profile = user.customer_profile
         if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+            if _ensure_customer_coords(customer_profile):
+                logger.info(f"Customer coordinates geocoded for user {user.uuid}")
+        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
             if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
                 logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
                 return Response(
@@ -809,6 +862,9 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                     if first_item and first_item.product and hasattr(first_item.product, 'store'):
                         vendor = first_item.product.store
                         if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                            if (not vendor.store_latitude or not vendor.store_longitude):
+                                if _ensure_vendor_coords(vendor):
+                                    logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
                             if vendor.store_latitude and vendor.store_longitude:
                                 order.restaurant_lat = vendor.store_latitude
                                 order.restaurant_lng = vendor.store_longitude
