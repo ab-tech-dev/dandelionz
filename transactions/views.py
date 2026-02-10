@@ -43,6 +43,7 @@ def _country_code_from_profile(profile):
 
 def _ensure_customer_coords(customer_profile):
     if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+        logger.info("Customer coordinates already present; skipping geocoding.")
         return True
     address = _compose_address([
         customer_profile.shipping_address,
@@ -51,25 +52,32 @@ def _ensure_customer_coords(customer_profile):
         customer_profile.country,
     ])
     if not address:
+        logger.warning("Customer address incomplete; cannot geocode coordinates.")
         return False
     coords = geocode_address(address, _country_code_from_profile(customer_profile))
     if not coords:
+        logger.warning("Customer geocoding failed; no coordinates returned.")
         return False
     customer_profile.shipping_latitude, customer_profile.shipping_longitude = coords
     customer_profile.save(update_fields=["shipping_latitude", "shipping_longitude"])
+    logger.info(f"Customer geocoded coords saved: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
     return True
 
 def _ensure_vendor_coords(vendor):
     if vendor.store_latitude and vendor.store_longitude:
+        logger.info("Vendor coordinates already present; skipping geocoding.")
         return True
     address = _compose_address([vendor.address, vendor.store_name])
     if not address:
+        logger.warning("Vendor address incomplete; cannot geocode coordinates.")
         return False
     coords = geocode_address(address, getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng"))
     if not coords:
+        logger.warning("Vendor geocoding failed; no coordinates returned.")
         return False
     vendor.store_latitude, vendor.store_longitude = coords
     vendor.save(update_fields=["store_latitude", "store_longitude"])
+    logger.info(f"Vendor geocoded coords saved: ({vendor.store_latitude}, {vendor.store_longitude})")
     return True
 
 def _is_platform_admin(user):
@@ -610,14 +618,7 @@ class CheckoutView(APIView):
             if _ensure_customer_coords(customer_profile):
                 logger.info(f"Customer coordinates geocoded for user {user.uuid}")
         if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
-            if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
-                logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
-                return Response(
-                    standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            else:
-                logger.info(f"Delivery fee enforcement disabled: Allowing checkout without coordinates for user {user.uuid}")
+            logger.info(f"Checkout proceeding without coordinates for user {user.uuid}")
         elif not apply_delivery:
             logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
 
@@ -815,14 +816,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
             if _ensure_customer_coords(customer_profile):
                 logger.info(f"Customer coordinates geocoded for user {user.uuid}")
         if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
-            if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
-                logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
-                return Response(
-                    standardized_response(success=False, error="Shipping address with coordinates is required. Please update your profile with your shipping location before checking out."),
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            else:
-                logger.info(f"Delivery fee enforcement disabled: Allowing installment checkout without coordinates for user {user.uuid}")
+            logger.info(f"Installment checkout proceeding without coordinates for user {user.uuid}")
         elif not apply_delivery:
             logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
 

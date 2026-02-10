@@ -20,7 +20,6 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 REFERRAL_BONUS_AMOUNT = os.getenv('REFERRAL_BONUS_AMOUNT')  # Could be Naira, points, etc.
 
 # Feature Flags & Business Logic Settings
-ENFORCE_DELIVERY_FEE_ON_CHECKOUT = os.getenv('ENFORCE_DELIVERY_FEE_ON_CHECKOUT', 'False').lower() in ('true', '1', 'yes')
 
 # Application definition
 INSTALLED_APPS = [
