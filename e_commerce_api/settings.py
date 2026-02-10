@@ -20,7 +20,7 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS').split(',')
 REFERRAL_BONUS_AMOUNT = os.getenv('REFERRAL_BONUS_AMOUNT')  # Could be Naira, points, etc.
 
 # Feature Flags & Business Logic Settings
-ENFORCE_DELIVERY_FEE_ON_CHECKOUT = os.getenv('ENFORCE_DELIVERY_FEE_ON_CHECKOUT', 'False').lower() in ('true', '1', 'yes')
+ENFORCE_DELIVERY_FEE_ON_CHECKOUT = os.getenv('ENFORCE_DELIVERY_FEE_ON_CHECKOUT', 'True').lower() in ('true', '1', 'yes')
 
 # Application definition
 INSTALLED_APPS = [
@@ -365,15 +365,19 @@ PAYSTACK_WEBHOOK_URL = os.getenv(
     "https://api.dandelionz.com.ng/transactions/webhook/"
 )
 
-# Radar API Configuration for Delivery Fees
-RADAR_API_KEY = os.getenv('RADAR_API_KEY')
-RADAR_API_BASE_URL = 'https://api.radar.io/v1'
-
-# Delivery Fee Configuration
-DELIVERY_BASE_FEE = float(os.getenv('DELIVERY_BASE_FEE', '2.99'))
-DELIVERY_PER_MILE_RATE = float(os.getenv('DELIVERY_PER_MILE_RATE', '0.50'))
-DELIVERY_MAX_FEE = float(os.getenv('DELIVERY_MAX_FEE', '15.00'))
+# Delivery Fee Configuration (Nigeria - NGN)
+# Fuel cost defaults to 1000 NGN/liter as assumed in requirements.
+DELIVERY_FUEL_PRICE_PER_LITER_NGN = float(os.getenv('DELIVERY_FUEL_PRICE_PER_LITER_NGN', '1000'))
+# Approx fuel consumption in liters per km (e.g., 12L/100km = 0.12 L/km)
+DELIVERY_FUEL_CONSUMPTION_L_PER_KM = float(os.getenv('DELIVERY_FUEL_CONSUMPTION_L_PER_KM', '0.12'))
+# Average product weight handling cost per km (assumed)
+DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN = float(os.getenv('DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN', '50'))
+# Minimum order total to apply delivery (in NGN)
+DELIVERY_MIN_ORDER_TOTAL_NGN = float(os.getenv('DELIVERY_MIN_ORDER_TOTAL_NGN', '15000'))
+# Optional max delivery radius (miles) for validation
 DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '20'))
+# Optional average delivery speed to estimate duration (km/h)
+DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 
 # Cloudinary
 cloudinary.config(

@@ -7,6 +7,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from .delivery_service import DeliveryFeeCalculator
 import json
+from django.conf import settings
+from decimal import Decimal
 
 
 @method_decorator(csrf_exempt, name='dispatch')
@@ -24,6 +26,20 @@ class CalculateDeliveryFeeView(View):
                     'error': 'Missing required fields',
                     'required': required_fields
                 }, status=400)
+
+            if 'order_total' in data:
+                min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+                order_total = Decimal(str(data['order_total']))
+                if order_total < min_total:
+                    return JsonResponse({
+                        'success': True,
+                        'fee': 0,
+                        'distance': None,
+                        'duration': None,
+                        'distance_miles': None,
+                        'cached': False,
+                        'note': f'Delivery not applied for orders below {min_total}'
+                    })
             
             # Calculate fee
             calculator = DeliveryFeeCalculator()

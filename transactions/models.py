@@ -126,11 +126,21 @@ class Order(models.Model):
         return self.status == self.Status.DELIVERED
 
     def calculate_and_save_delivery_fee(self):
-        """Calculate and save delivery fee for this order using Radar API"""
+        """Calculate and save delivery fee for this order"""
         from .delivery_service import DeliveryFeeCalculator
+        from django.conf import settings
         
+        min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+        if self.subtotal < min_total:
+            self.delivery_fee = Decimal('0.00')
+            self.delivery_distance = ''
+            self.delivery_duration = ''
+            self.delivery_distance_miles = None
+            self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+            return False
+
         # Validate required coordinates
-        if not all([self.restaurant_lat, self.restaurant_lng, 
+        if not all([self.restaurant_lat, self.restaurant_lng,
                     self.customer_lat, self.customer_lng]):
             raise ValueError("All coordinate fields are required for delivery fee calculation")
         

@@ -548,6 +548,10 @@ class CheckoutView(APIView):
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+        cart_subtotal = sum((item.product.get_final_price * item.quantity) for item in cart_items)
+        apply_delivery = cart_subtotal >= min_total
 
         # Check customer has shipping address with coordinates
         if not hasattr(user, 'customer_profile'):
@@ -558,7 +562,7 @@ class CheckoutView(APIView):
             )
         
         customer_profile = user.customer_profile
-        if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
+        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
             if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
                 logger.warning(f"Checkout failed: User {user.uuid} has no shipping address coordinates")
                 return Response(
@@ -567,6 +571,8 @@ class CheckoutView(APIView):
                 )
             else:
                 logger.info(f"Delivery fee enforcement disabled: Allowing checkout without coordinates for user {user.uuid}")
+        elif not apply_delivery:
+            logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
 
         try:
             with transaction.atomic():
@@ -608,15 +614,15 @@ class CheckoutView(APIView):
                                 logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
                     
                     # Calculate delivery fee if both vendor and customer coordinates are available
-                    if order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                    if apply_delivery and order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
                         try:
                             order.calculate_and_save_delivery_fee()
-                            logger.info(f"Delivery fee calculated: ${order.delivery_fee} for order {order.order_id}")
+                            logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
                         except Exception as e:
                             logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
                             # Continue checkout even if delivery fee fails - can be calculated later
                             pass
-                    else:
+                    elif apply_delivery:
                         logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
                 except Exception as e:
                     logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
@@ -741,6 +747,10 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 standardized_response(success=False, error="Cart has no items"),
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
+        min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+        cart_subtotal = sum((item.product.get_final_price * item.quantity) for item in cart_items)
+        apply_delivery = cart_subtotal >= min_total
 
         # Check customer has shipping address with coordinates
         if not hasattr(user, 'customer_profile'):
@@ -751,7 +761,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
             )
         
         customer_profile = user.customer_profile
-        if not customer_profile.shipping_latitude or not customer_profile.shipping_longitude:
+        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
             if settings.ENFORCE_DELIVERY_FEE_ON_CHECKOUT:
                 logger.warning(f"Installment checkout failed: User {user.uuid} has no shipping address coordinates")
                 return Response(
@@ -760,6 +770,8 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 )
             else:
                 logger.info(f"Delivery fee enforcement disabled: Allowing installment checkout without coordinates for user {user.uuid}")
+        elif not apply_delivery:
+            logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
 
         # Validate installment duration
         serializer = InstallmentCheckoutSerializer(data=request.data)
@@ -812,15 +824,15 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                                 logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
                     
                     # Calculate delivery fee if both vendor and customer coordinates are available
-                    if order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                    if apply_delivery and order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
                         try:
                             order.calculate_and_save_delivery_fee()
-                            logger.info(f"Delivery fee calculated: ${order.delivery_fee} for order {order.order_id}")
+                            logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
                         except Exception as e:
                             logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
                             # Continue checkout even if delivery fee fails - can be calculated later
                             pass
-                    else:
+                    elif apply_delivery:
                         logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
                 except Exception as e:
                     logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
