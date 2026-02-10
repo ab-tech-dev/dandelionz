@@ -2037,7 +2037,7 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             approval_title,
             approval_message,
-            vendor_uuid=str(user.vendor_profile.uuid) if getattr(user, "vendor_profile", None) else None,
+            vendor_uuid=str(user.uuid) if getattr(user, "vendor_profile", None) else None,
             approved=approve,
         )
 
@@ -2140,7 +2140,7 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             suspension_title,
             suspension_message,
-            vendor_uuid=str(user.vendor_profile.uuid) if getattr(user, "vendor_profile", None) else None,
+            vendor_uuid=str(user.uuid) if getattr(user, "vendor_profile", None) else None,
             suspended=suspend,
         )
 
@@ -2232,7 +2232,7 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             "KYC Verified",
             "Your KYC verification has been approved. Thank you for completing your verification.",
-            vendor_uuid=str(user.vendor_profile.uuid),
+            vendor_uuid=str(user.uuid),
             kyc_verified=True,
         )
 
