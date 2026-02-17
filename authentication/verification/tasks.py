@@ -17,7 +17,8 @@ logger = logging.getLogger("authentication.verification")
     retry_backoff=True,
     retry_backoff_max=300,  # Max 5 minute backoff
     retry_jitter=True,
-    name="authentication.verification.send_verification_email"
+    name="authentication.verification.send_verification_email",
+    queue="emails",
 )
 def send_verification_email_task(self, user_uuid: str):
     """Celery task to send verification email with improved retry logic"""
@@ -54,7 +55,8 @@ def send_verification_email_task(self, user_uuid: str):
     retry_backoff=True,
     retry_backoff_max=300,  # Max 5 minute backoff
     retry_jitter=True,
-    name="authentication.verification.send_password_reset_email"
+    name="authentication.verification.send_password_reset_email",
+    queue="emails",
 )
 def send_password_reset_email_task(self, user_uuid: str):
     """Celery task to send password reset email with improved retry logic"""

@@ -1,5 +1,6 @@
 import logging
 import traceback
+import time
 from django.conf import settings
 from django.core.mail import send_mail
 
@@ -57,15 +58,26 @@ class EmailService:
                     fail_silently=False,
                 )
 
+                if result == 0:
+                    raise RuntimeError("Email backend reported zero messages sent")
+
                 logger.info(f"Verification email sent to {user.email}, result: {result}")
                 return True
 
             except Exception as e:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Error sending verification email to {user.email} (attempt {attempt + 1}/{max_retries}): {str(e)}")
-                else:
-                    logger.error(f"Failed to send verification email to {user.email} after {max_retries} attempts: {str(e)}")
-                    logger.error(traceback.format_exc())
+                    logger.warning(
+                        f"Error sending verification email to {user.email} "
+                        f"(attempt {attempt + 1}/{max_retries}): {str(e)}"
+                    )
+                    time.sleep(2 ** attempt)
+                    continue
+
+                logger.error(
+                    f"Failed to send verification email to {user.email} "
+                    f"after {max_retries} attempts: {str(e)}"
+                )
+                logger.error(traceback.format_exc())
                 raise
 
     @staticmethod
