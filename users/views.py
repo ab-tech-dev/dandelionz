@@ -2021,7 +2021,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
 
         approve = serializer.validated_data["approve"]
         user.vendor_profile.is_verified_vendor = approve
-        user.vendor_profile.save(update_fields=["is_verified_vendor"])
+        user.vendor_profile.vendor_status = "approved" if approve else "pending"
+        user.vendor_profile.save(update_fields=["is_verified_vendor", "vendor_status"])
 
         user.is_verified = approve
         user.save(update_fields=["is_verified"])
