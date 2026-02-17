@@ -30,6 +30,13 @@ from django.db.utils import OperationalError
 import redis
 import os
 
+# Vendor wallet quick-access aliases (legacy frontend paths)
+from users.views import VendorWalletViewSet
+
+vendor_wallet_balance = VendorWalletViewSet.as_view({"get": "wallet_balance"})
+vendor_wallet_transactions = VendorWalletViewSet.as_view({"get": "wallet_transactions"})
+vendor_wallet_withdraw = VendorWalletViewSet.as_view({"post": "request_withdrawal"})
+
 
 def api_root(request):
     """Root API endpoint - provides API information and health check"""
@@ -67,6 +74,11 @@ urlpatterns = [
     path('store/', include('store.urls')),
     path('user/', include('users.urls')),
     path('transactions/', include('transactions.urls')),
+
+    # Legacy vendor wallet endpoints (frontend uses /vendor/*)
+    path('vendor/wallet/', vendor_wallet_balance, name='vendor-wallet-balance-legacy'),
+    path('vendor/wallet/transactions/', vendor_wallet_transactions, name='vendor-wallet-transactions-legacy'),
+    path('vendor/wallet/withdraw/', vendor_wallet_withdraw, name='vendor-request-withdrawal-legacy'),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
