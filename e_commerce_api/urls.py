@@ -31,11 +31,14 @@ import redis
 import os
 
 # Vendor wallet quick-access aliases (legacy frontend paths)
-from users.views import VendorWalletViewSet
+from users.views import VendorWalletViewSet, VendorPaymentSettingsViewSet
 
 vendor_wallet_balance = VendorWalletViewSet.as_view({"get": "wallet_balance"})
 vendor_wallet_transactions = VendorWalletViewSet.as_view({"get": "wallet_transactions"})
 vendor_wallet_withdraw = VendorWalletViewSet.as_view({"post": "request_withdrawal"})
+vendor_payment_settings = VendorPaymentSettingsViewSet.as_view({"get": "payment_settings", "put": "update_payment_settings"})
+vendor_payment_pin = VendorPaymentSettingsViewSet.as_view({"post": "set_payment_pin"})
+vendor_payment_pin_forgot = VendorPaymentSettingsViewSet.as_view({"post": "forgot_payment_pin"})
 
 
 def api_root(request):
@@ -79,6 +82,9 @@ urlpatterns = [
     path('vendor/wallet/', vendor_wallet_balance, name='vendor-wallet-balance-legacy'),
     path('vendor/wallet/transactions/', vendor_wallet_transactions, name='vendor-wallet-transactions-legacy'),
     path('vendor/wallet/withdraw/', vendor_wallet_withdraw, name='vendor-request-withdrawal-legacy'),
+    path('vendor/payment-settings/', vendor_payment_settings, name='vendor-payment-settings-legacy'),
+    path('vendor/payment-settings/pin/', vendor_payment_pin, name='vendor-payment-settings-pin-legacy'),
+    path('vendor/payment-settings/pin/forgot/', vendor_payment_pin_forgot, name='vendor-payment-settings-pin-forgot-legacy'),
 
     # Swagger
     re_path(r'^swagger(?P<format>\.json|\.yaml)$', schema_view.without_ui(cache_timeout=0), name='schema-json'),
