@@ -65,6 +65,14 @@ class CheckoutShippingFeeTests(TestCase):
         mock_initialize_payment,
         mock_notify_checkout,
     ):
+        self.customer_profile.shipping_address = "123 Main Street"
+        self.customer_profile.city = "Lagos"
+        self.customer_profile.country = "Nigeria"
+        self.customer_profile.postal_code = "100001"
+        self.customer_profile.shipping_latitude = None
+        self.customer_profile.shipping_longitude = None
+        self.customer_profile.save()
+
         product = Product.objects.create(
             store=self.vendor,
             name="Phone",

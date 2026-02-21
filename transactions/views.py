@@ -44,6 +44,14 @@ def _country_code_from_profile(profile):
 def _has_coords(lat, lng):
     return lat is not None and lng is not None
 
+def _extract_coords(coords):
+    if not isinstance(coords, (tuple, list)) or len(coords) != 2:
+        return None
+    lat, lng = coords
+    if lat is None or lng is None:
+        return None
+    return lat, lng
+
 def _ensure_customer_coords(customer_profile):
     if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
         logger.info("Customer coordinates already present; skipping geocoding.")
@@ -58,10 +66,11 @@ def _ensure_customer_coords(customer_profile):
         logger.warning("Customer address incomplete; cannot geocode coordinates.")
         return False
     coords = geocode_address(address, _country_code_from_profile(customer_profile))
-    if not coords:
+    parsed_coords = _extract_coords(coords)
+    if not parsed_coords:
         logger.warning("Customer geocoding failed; no coordinates returned.")
         return False
-    customer_profile.shipping_latitude, customer_profile.shipping_longitude = coords
+    customer_profile.shipping_latitude, customer_profile.shipping_longitude = parsed_coords
     customer_profile.save(update_fields=["shipping_latitude", "shipping_longitude"])
     logger.info(f"Customer geocoded coords saved: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
     return True
@@ -75,10 +84,11 @@ def _ensure_vendor_coords(vendor):
         logger.warning("Vendor address incomplete; cannot geocode coordinates.")
         return False
     coords = geocode_address(address, getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng"))
-    if not coords:
+    parsed_coords = _extract_coords(coords)
+    if not parsed_coords:
         logger.warning("Vendor geocoding failed; no coordinates returned.")
         return False
-    vendor.store_latitude, vendor.store_longitude = coords
+    vendor.store_latitude, vendor.store_longitude = parsed_coords
     vendor.save(update_fields=["store_latitude", "store_longitude"])
     logger.info(f"Vendor geocoded coords saved: ({vendor.store_latitude}, {vendor.store_longitude})")
     return True
@@ -642,46 +652,48 @@ class CheckoutView(APIView):
                 
                 # Keep order.discount at 0 because item prices already include discounts.
                 order.discount = Decimal('0.00')
+                order.save(update_fields=['discount'])
 
                 # 3. Auto-retrieve and set vendor & customer delivery coordinates
-                try:
-                    # Get vendor (store) coordinates from the first product vendor
-                    first_item = cart_items.first()
-                    if first_item and first_item.product and hasattr(first_item.product, 'store'):
-                        vendor = first_item.product.store
-                        if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
-                            if not _has_coords(vendor.store_latitude, vendor.store_longitude):
-                                if _ensure_vendor_coords(vendor):
-                                    logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
-                            if _has_coords(vendor.store_latitude, vendor.store_longitude):
-                                order.restaurant_lat = vendor.store_latitude
-                                order.restaurant_lng = vendor.store_longitude
-                                logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
-                    
-                    # Get customer coordinates from customer profile
-                    if hasattr(user, 'customer_profile'):
-                        customer_profile = user.customer_profile
-                        if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
-                            if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
-                                order.customer_lat = customer_profile.shipping_latitude
-                                order.customer_lng = customer_profile.shipping_longitude
-                                logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
-                    order.save(update_fields=['discount', 'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
+                if apply_delivery:
+                    try:
+                        # Get vendor (store) coordinates from the first product vendor
+                        first_item = cart_items.first()
+                        if first_item and first_item.product and hasattr(first_item.product, 'store'):
+                            vendor = first_item.product.store
+                            if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                                if not _has_coords(vendor.store_latitude, vendor.store_longitude):
+                                    if _ensure_vendor_coords(vendor):
+                                        logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
+                                if _has_coords(vendor.store_latitude, vendor.store_longitude):
+                                    order.restaurant_lat = vendor.store_latitude
+                                    order.restaurant_lng = vendor.store_longitude
+                                    logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
+                        
+                        # Get customer coordinates from customer profile
+                        if hasattr(user, 'customer_profile'):
+                            customer_profile = user.customer_profile
+                            if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
+                                if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
+                                    order.customer_lat = customer_profile.shipping_latitude
+                                    order.customer_lng = customer_profile.shipping_longitude
+                                    logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
+                        order.save(update_fields=['restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
 
-                    # Calculate delivery fee if both vendor and customer coordinates are available
-                    if apply_delivery and _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
-                        try:
-                            order.calculate_and_save_delivery_fee()
-                            logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
-                        except Exception as e:
-                            logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
-                            raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
-                    elif apply_delivery:
-                        logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
-                        raise ValueError("Shipping coordinates are required to calculate delivery fee.")
-                except Exception as e:
-                    logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
-                    raise
+                        # Calculate delivery fee if both vendor and customer coordinates are available
+                        if _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
+                            try:
+                                order.calculate_and_save_delivery_fee()
+                                logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
+                            except Exception as e:
+                                logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                                raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
+                        else:
+                            logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                            raise ValueError("Shipping coordinates are required to calculate delivery fee.")
+                    except Exception as e:
+                        logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                        raise
 
                 # 4. Calculate total
                 order.update_total()
@@ -851,46 +863,48 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                 
                 # Keep order.discount at 0 because item prices already include discounts.
                 order.discount = Decimal('0.00')
+                order.save(update_fields=['discount'])
 
                 # 3. Auto-retrieve and set vendor & customer delivery coordinates
-                try:
-                    # Get vendor (store) coordinates from the first product vendor
-                    first_item = cart_items.first()
-                    if first_item and first_item.product and hasattr(first_item.product, 'store'):
-                        vendor = first_item.product.store
-                        if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
-                            if not _has_coords(vendor.store_latitude, vendor.store_longitude):
-                                if _ensure_vendor_coords(vendor):
-                                    logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
-                            if _has_coords(vendor.store_latitude, vendor.store_longitude):
-                                order.restaurant_lat = vendor.store_latitude
-                                order.restaurant_lng = vendor.store_longitude
-                                logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
-                    
-                    # Get customer coordinates from customer profile
-                    if hasattr(user, 'customer_profile'):
-                        customer_profile = user.customer_profile
-                        if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
-                            if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
-                                order.customer_lat = customer_profile.shipping_latitude
-                                order.customer_lng = customer_profile.shipping_longitude
-                                logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
-                    order.save(update_fields=['discount', 'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
+                if apply_delivery:
+                    try:
+                        # Get vendor (store) coordinates from the first product vendor
+                        first_item = cart_items.first()
+                        if first_item and first_item.product and hasattr(first_item.product, 'store'):
+                            vendor = first_item.product.store
+                            if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
+                                if not _has_coords(vendor.store_latitude, vendor.store_longitude):
+                                    if _ensure_vendor_coords(vendor):
+                                        logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
+                                if _has_coords(vendor.store_latitude, vendor.store_longitude):
+                                    order.restaurant_lat = vendor.store_latitude
+                                    order.restaurant_lng = vendor.store_longitude
+                                    logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
+                        
+                        # Get customer coordinates from customer profile
+                        if hasattr(user, 'customer_profile'):
+                            customer_profile = user.customer_profile
+                            if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
+                                if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
+                                    order.customer_lat = customer_profile.shipping_latitude
+                                    order.customer_lng = customer_profile.shipping_longitude
+                                    logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
+                        order.save(update_fields=['restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
 
-                    # Calculate delivery fee if both vendor and customer coordinates are available
-                    if apply_delivery and _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
-                        try:
-                            order.calculate_and_save_delivery_fee()
-                            logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
-                        except Exception as e:
-                            logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
-                            raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
-                    elif apply_delivery:
-                        logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
-                        raise ValueError("Shipping coordinates are required to calculate delivery fee.")
-                except Exception as e:
-                    logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
-                    raise
+                        # Calculate delivery fee if both vendor and customer coordinates are available
+                        if _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
+                            try:
+                                order.calculate_and_save_delivery_fee()
+                                logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
+                            except Exception as e:
+                                logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                                raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
+                        else:
+                            logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                            raise ValueError("Shipping coordinates are required to calculate delivery fee.")
+                    except Exception as e:
+                        logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                        raise
 
                 # 4. Calculate total
                 order.update_total()
