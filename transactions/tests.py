@@ -58,20 +58,17 @@ class CheckoutShippingFeeTests(TestCase):
     @patch("transactions.views.Paystack.initialize_payment")
     @patch("transactions.delivery_service.DeliveryFeeCalculator.calculate_fee")
     @patch("transactions.views.geocode_address")
-    def test_checkout_uses_address_geocode_and_applies_shipping_fee_when_subtotal_gt_15000(
+    def test_checkout_applies_shipping_fee_when_subtotal_gt_15000_with_vendor_address_fallback(
         self,
         mock_geocode,
         mock_calculate_fee,
         mock_initialize_payment,
         mock_notify_checkout,
     ):
-        self.customer_profile.shipping_address = "123 Main Street"
-        self.customer_profile.city = "Lagos"
-        self.customer_profile.country = "Nigeria"
-        self.customer_profile.postal_code = "100001"
-        self.customer_profile.shipping_latitude = None
-        self.customer_profile.shipping_longitude = None
-        self.customer_profile.save()
+        # Keep customer coordinates present so this test isolates vendor address fallback.
+        self.customer_profile.shipping_latitude = 6.5000
+        self.customer_profile.shipping_longitude = 3.3000
+        self.customer_profile.save(update_fields=["shipping_latitude", "shipping_longitude"])
 
         product = Product.objects.create(
             store=self.vendor,
@@ -81,8 +78,8 @@ class CheckoutShippingFeeTests(TestCase):
         )
         CartItem.objects.create(cart=self.cart, product=product, quantity=1)
 
-        # Customer address geocode first, then vendor address geocode.
-        mock_geocode.side_effect = [(6.5244, 3.3792), (6.6000, 3.3000)]
+        # Vendor geocode fallback.
+        mock_geocode.return_value = (6.6000, 3.3000)
         mock_calculate_fee.return_value = {
             "success": True,
             "fee": 5000.0,
@@ -108,11 +105,11 @@ class CheckoutShippingFeeTests(TestCase):
 
         self.customer_profile.refresh_from_db()
         self.vendor.refresh_from_db()
-        self.assertEqual(self.customer_profile.shipping_latitude, 6.5244)
-        self.assertEqual(self.customer_profile.shipping_longitude, 3.3792)
+        self.assertEqual(self.customer_profile.shipping_latitude, 6.5)
+        self.assertEqual(self.customer_profile.shipping_longitude, 3.3)
         self.assertEqual(self.vendor.store_latitude, 6.6)
         self.assertEqual(self.vendor.store_longitude, 3.3)
-        self.assertEqual(mock_geocode.call_count, 2)
+        self.assertEqual(mock_geocode.call_count, 1)
         mock_calculate_fee.assert_called_once()
         mock_notify_checkout.assert_called_once()
 

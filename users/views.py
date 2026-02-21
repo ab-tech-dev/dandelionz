@@ -2024,12 +2024,11 @@ class AdminVendorViewSet(AdminBaseViewSet):
                 return Response({"message": "Vendor not found"}, status=404)
 
             vendor = user.vendor_profile
-            vendor.is_verified_vendor = approve
             vendor.vendor_status = target_status
-            vendor.save(update_fields=["is_verified_vendor", "vendor_status"])
+            vendor.save(update_fields=["vendor_status"])
 
-            user_update_fields = ["is_verified"]
-            user.is_verified = approve
+            user_update_fields = ["is_active"]
+            user.is_active = approve
 
             # Keep role aligned with approval so vendor-only permissions work.
             if approve and user.role != CustomUser.Role.VENDOR:
@@ -2038,13 +2037,12 @@ class AdminVendorViewSet(AdminBaseViewSet):
 
             user.save(update_fields=user_update_fields)
 
-            user.refresh_from_db(fields=["role", "is_verified"])
-            vendor.refresh_from_db(fields=["is_verified_vendor", "vendor_status"])
+            user.refresh_from_db(fields=["role", "is_active"])
+            vendor.refresh_from_db(fields=["vendor_status"])
 
             persisted = (
-                vendor.is_verified_vendor == approve
-                and vendor.vendor_status == target_status
-                and user.is_verified == approve
+                vendor.vendor_status == target_status
+                and user.is_active == approve
                 and (not approve or user.role == CustomUser.Role.VENDOR)
             )
             if not persisted:
@@ -2072,7 +2070,7 @@ class AdminVendorViewSet(AdminBaseViewSet):
             {
                 "success": True,
                 "approved": approve,
-                "message": f"Vendor status updated to {target_status}",
+                "message": f"Vendor status updated to {target_status}, account {'activated' if approve else 'deactivated'}",
             }
         )
         return Response(response_serializer.data)
@@ -2188,12 +2186,14 @@ class AdminVendorViewSet(AdminBaseViewSet):
         tags=["Vendor Management"],
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=["user_uuid"],
+            required=["user_uuid", "approve"],
             properties={
-                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID)
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "approve": openapi.Schema(type=openapi.TYPE_BOOLEAN, description="true=approve KYC, false=reject KYC"),
             },
             example={
-                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5"
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "approve": True
             }
         ),
         responses={
@@ -2218,12 +2218,14 @@ class AdminVendorViewSet(AdminBaseViewSet):
         tags=["Vendor Management"],
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
-            required=["user_uuid"],
+            required=["user_uuid", "approve"],
             properties={
-                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID)
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+                "approve": openapi.Schema(type=openapi.TYPE_BOOLEAN, description="true=approve KYC, false=reject KYC"),
             },
             example={
-                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5"
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+                "approve": True
             }
         ),
         responses={
@@ -2257,21 +2259,29 @@ class AdminVendorViewSet(AdminBaseViewSet):
         if not user or not hasattr(user, "vendor_profile"):
             return Response({"message": "Vendor not found"}, status=404)
 
-        user.vendor_profile.is_verified_vendor = True
+        approve = serializer.validated_data["approve"]
+        user.vendor_profile.is_verified_vendor = approve
         user.vendor_profile.save(update_fields=["is_verified_vendor"])
 
         from users.notification_helpers import send_user_notification
+        title = "KYC Verified" if approve else "KYC Rejected"
+        message = (
+            "Your KYC verification has been approved. Thank you for completing your verification."
+            if approve
+            else "Your KYC verification was rejected. Please review your submitted details and try again."
+        )
         send_user_notification(
             user,
-            "KYC Verified",
-            "Your KYC verification has been approved. Thank you for completing your verification.",
+            title,
+            message,
             vendor_uuid=str(user.uuid),
-            kyc_verified=True,
+            kyc_verified=approve,
         )
 
         response_serializer = AdminVendorActionResponseSerializer({
             "success": True,
-            "message": "Vendor KYC verified"
+            "approved": approve,
+            "message": "Vendor KYC verified" if approve else "Vendor KYC rejected",
         })
         return Response(response_serializer.data)
 

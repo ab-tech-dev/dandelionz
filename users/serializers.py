@@ -852,6 +852,7 @@ class AdminVendorSuspendSerializer(serializers.Serializer):
 
 class AdminVendorKYCSerializer(serializers.Serializer):
     user_uuid = serializers.UUIDField()
+    approve = serializers.BooleanField(required=False, default=True)
 
 class AdminVendorActionResponseSerializer(serializers.Serializer):
     success = serializers.BooleanField()
