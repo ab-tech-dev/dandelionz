@@ -129,9 +129,12 @@ class Order(models.Model):
         """Calculate and save delivery fee for this order"""
         from .delivery_service import DeliveryFeeCalculator
         from django.conf import settings
+
+        def has_coords(lat, lng):
+            return lat is not None and lng is not None
         
         min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
-        if self.subtotal < min_total:
+        if self.subtotal <= min_total:
             self.delivery_fee = Decimal('0.00')
             self.delivery_distance = ''
             self.delivery_duration = ''
@@ -140,8 +143,7 @@ class Order(models.Model):
             return False
 
         # Validate required coordinates
-        if not all([self.restaurant_lat, self.restaurant_lng,
-                    self.customer_lat, self.customer_lng]):
+        if not (has_coords(self.restaurant_lat, self.restaurant_lng) and has_coords(self.customer_lat, self.customer_lng)):
             raise ValueError("All coordinate fields are required for delivery fee calculation")
         
         calculator = DeliveryFeeCalculator()
@@ -164,7 +166,7 @@ class Order(models.Model):
 
     def is_within_delivery_radius(self):
         """Check if order is within delivery radius"""
-        if not self.delivery_distance_miles:
+        if self.delivery_distance_miles is None:
             try:
                 self.calculate_and_save_delivery_fee()
             except ValueError:

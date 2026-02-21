@@ -41,8 +41,11 @@ def _country_code_from_profile(profile):
         pass
     return getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng")
 
+def _has_coords(lat, lng):
+    return lat is not None and lng is not None
+
 def _ensure_customer_coords(customer_profile):
-    if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+    if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
         logger.info("Customer coordinates already present; skipping geocoding.")
         return True
     address = _compose_address([
@@ -64,7 +67,7 @@ def _ensure_customer_coords(customer_profile):
     return True
 
 def _ensure_vendor_coords(vendor):
-    if vendor.store_latitude and vendor.store_longitude:
+    if _has_coords(vendor.store_latitude, vendor.store_longitude):
         logger.info("Vendor coordinates already present; skipping geocoding.")
         return True
     address = _compose_address([vendor.address, vendor.store_name])
@@ -603,7 +606,7 @@ class CheckoutView(APIView):
         
         min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
         cart_subtotal = sum((item.product.get_final_price * item.quantity) for item in cart_items)
-        apply_delivery = cart_subtotal >= min_total
+        apply_delivery = cart_subtotal > min_total
 
         # Check customer has shipping address with coordinates
         if not hasattr(user, 'customer_profile'):
@@ -614,10 +617,10 @@ class CheckoutView(APIView):
             )
         
         customer_profile = user.customer_profile
-        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+        if apply_delivery and not _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
             if _ensure_customer_coords(customer_profile):
                 logger.info(f"Customer coordinates geocoded for user {user.uuid}")
-        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+        if apply_delivery and not _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
             logger.info(f"Checkout proceeding without coordinates for user {user.uuid}")
         elif not apply_delivery:
             logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
@@ -647,10 +650,10 @@ class CheckoutView(APIView):
                     if first_item and first_item.product and hasattr(first_item.product, 'store'):
                         vendor = first_item.product.store
                         if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
-                            if (not vendor.store_latitude or not vendor.store_longitude):
+                            if not _has_coords(vendor.store_latitude, vendor.store_longitude):
                                 if _ensure_vendor_coords(vendor):
                                     logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
-                            if vendor.store_latitude and vendor.store_longitude:
+                            if _has_coords(vendor.store_latitude, vendor.store_longitude):
                                 order.restaurant_lat = vendor.store_latitude
                                 order.restaurant_lng = vendor.store_longitude
                                 logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
@@ -659,26 +662,26 @@ class CheckoutView(APIView):
                     if hasattr(user, 'customer_profile'):
                         customer_profile = user.customer_profile
                         if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
-                            if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+                            if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
                                 order.customer_lat = customer_profile.shipping_latitude
                                 order.customer_lng = customer_profile.shipping_longitude
                                 logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
-                    
+                    order.save(update_fields=['discount', 'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
+
                     # Calculate delivery fee if both vendor and customer coordinates are available
-                    if apply_delivery and order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                    if apply_delivery and _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
                         try:
                             order.calculate_and_save_delivery_fee()
                             logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
                         except Exception as e:
                             logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
-                            # Continue checkout even if delivery fee fails - can be calculated later
-                            pass
+                            raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                     elif apply_delivery:
                         logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                        raise ValueError("Shipping coordinates are required to calculate delivery fee.")
                 except Exception as e:
                     logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
-                    # Continue checkout even if coordinate retrieval fails
-                    pass
+                    raise
 
                 # 4. Calculate total
                 order.update_total()
@@ -801,7 +804,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
         
         min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
         cart_subtotal = sum((item.product.get_final_price * item.quantity) for item in cart_items)
-        apply_delivery = cart_subtotal >= min_total
+        apply_delivery = cart_subtotal > min_total
 
         # Check customer has shipping address with coordinates
         if not hasattr(user, 'customer_profile'):
@@ -812,10 +815,10 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
             )
         
         customer_profile = user.customer_profile
-        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+        if apply_delivery and not _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
             if _ensure_customer_coords(customer_profile):
                 logger.info(f"Customer coordinates geocoded for user {user.uuid}")
-        if apply_delivery and (not customer_profile.shipping_latitude or not customer_profile.shipping_longitude):
+        if apply_delivery and not _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
             logger.info(f"Installment checkout proceeding without coordinates for user {user.uuid}")
         elif not apply_delivery:
             logger.info(f"Delivery fee not applied (subtotal {cart_subtotal} below {min_total}) for user {user.uuid}")
@@ -856,10 +859,10 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                     if first_item and first_item.product and hasattr(first_item.product, 'store'):
                         vendor = first_item.product.store
                         if vendor and hasattr(vendor, 'store_latitude') and hasattr(vendor, 'store_longitude'):
-                            if (not vendor.store_latitude or not vendor.store_longitude):
+                            if not _has_coords(vendor.store_latitude, vendor.store_longitude):
                                 if _ensure_vendor_coords(vendor):
                                     logger.info(f"Vendor coordinates geocoded for store {vendor.id}")
-                            if vendor.store_latitude and vendor.store_longitude:
+                            if _has_coords(vendor.store_latitude, vendor.store_longitude):
                                 order.restaurant_lat = vendor.store_latitude
                                 order.restaurant_lng = vendor.store_longitude
                                 logger.info(f"Vendor coordinates retrieved for order {order.order_id}: ({vendor.store_latitude}, {vendor.store_longitude})")
@@ -868,26 +871,26 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                     if hasattr(user, 'customer_profile'):
                         customer_profile = user.customer_profile
                         if hasattr(customer_profile, 'shipping_latitude') and hasattr(customer_profile, 'shipping_longitude'):
-                            if customer_profile.shipping_latitude and customer_profile.shipping_longitude:
+                            if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
                                 order.customer_lat = customer_profile.shipping_latitude
                                 order.customer_lng = customer_profile.shipping_longitude
                                 logger.info(f"Customer coordinates retrieved for order {order.order_id}: ({customer_profile.shipping_latitude}, {customer_profile.shipping_longitude})")
-                    
+                    order.save(update_fields=['discount', 'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng'])
+
                     # Calculate delivery fee if both vendor and customer coordinates are available
-                    if apply_delivery and order.restaurant_lat and order.restaurant_lng and order.customer_lat and order.customer_lng:
+                    if apply_delivery and _has_coords(order.restaurant_lat, order.restaurant_lng) and _has_coords(order.customer_lat, order.customer_lng):
                         try:
                             order.calculate_and_save_delivery_fee()
                             logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
                         except Exception as e:
                             logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
-                            # Continue checkout even if delivery fee fails - can be calculated later
-                            pass
+                            raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                     elif apply_delivery:
                         logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
+                        raise ValueError("Shipping coordinates are required to calculate delivery fee.")
                 except Exception as e:
                     logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
-                    # Continue checkout even if coordinate retrieval fails
-                    pass
+                    raise
 
                 # 4. Calculate total
                 order.update_total()
