@@ -27,22 +27,29 @@ class CheckoutShippingFeeTests(TestCase):
             role="VENDOR",
         )
 
-        self.customer_profile = Customer.objects.create(
-            user=self.customer_user,
-            shipping_address="123 Main Street",
-            city="Lagos",
-            country="Nigeria",
-            postal_code="100001",
-            shipping_latitude=None,
-            shipping_longitude=None,
-        )
-        self.vendor = Vendor.objects.create(
+        self.customer_profile, _ = Customer.objects.get_or_create(user=self.customer_user)
+        self.customer_profile.shipping_address = "123 Main Street"
+        self.customer_profile.city = "Lagos"
+        self.customer_profile.country = "Nigeria"
+        self.customer_profile.postal_code = "100001"
+        self.customer_profile.shipping_latitude = None
+        self.customer_profile.shipping_longitude = None
+        self.customer_profile.save()
+
+        self.vendor, _ = Vendor.objects.get_or_create(
             user=self.vendor_user,
-            store_name="Demo Store",
-            address="45 Market Road",
-            store_latitude=None,
-            store_longitude=None,
+            defaults={
+                "store_name": "Demo Store",
+                "address": "45 Market Road",
+                "store_latitude": None,
+                "store_longitude": None,
+            },
         )
+        self.vendor.store_name = "Demo Store"
+        self.vendor.address = "45 Market Road"
+        self.vendor.store_latitude = None
+        self.vendor.store_longitude = None
+        self.vendor.save()
 
         self.cart = Cart.objects.create(customer=self.customer_user)
         self.client.force_authenticate(user=self.customer_user)

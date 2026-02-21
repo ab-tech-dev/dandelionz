@@ -2015,17 +2015,43 @@ class AdminVendorViewSet(AdminBaseViewSet):
         serializer = AdminVendorApprovalSerializer(data=data)
         serializer.is_valid(raise_exception=True)
 
-        user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
-        if not user or not hasattr(user, "vendor_profile"):
-            return Response({"message": "Vendor not found"}, status=404)
-
         approve = serializer.validated_data["approve"]
-        user.vendor_profile.is_verified_vendor = approve
-        user.vendor_profile.vendor_status = "approved" if approve else "pending"
-        user.vendor_profile.save(update_fields=["is_verified_vendor", "vendor_status"])
+        target_status = "approved" if approve else "pending"
 
-        user.is_verified = approve
-        user.save(update_fields=["is_verified"])
+        with transaction.atomic():
+            user = User.objects.select_for_update().filter(uuid=serializer.validated_data["user_uuid"]).first()
+            if not user or not hasattr(user, "vendor_profile"):
+                return Response({"message": "Vendor not found"}, status=404)
+
+            vendor = user.vendor_profile
+            vendor.is_verified_vendor = approve
+            vendor.vendor_status = target_status
+            vendor.save(update_fields=["is_verified_vendor", "vendor_status"])
+
+            user_update_fields = ["is_verified"]
+            user.is_verified = approve
+
+            # Keep role aligned with approval so vendor-only permissions work.
+            if approve and user.role != CustomUser.Role.VENDOR:
+                user.role = CustomUser.Role.VENDOR
+                user_update_fields.append("role")
+
+            user.save(update_fields=user_update_fields)
+
+            user.refresh_from_db(fields=["role", "is_verified"])
+            vendor.refresh_from_db(fields=["is_verified_vendor", "vendor_status"])
+
+            persisted = (
+                vendor.is_verified_vendor == approve
+                and vendor.vendor_status == target_status
+                and user.is_verified == approve
+                and (not approve or user.role == CustomUser.Role.VENDOR)
+            )
+            if not persisted:
+                return Response(
+                    {"success": False, "message": "Vendor approval update did not persist"},
+                    status=500,
+                )
 
         from users.notification_helpers import send_user_notification
         approval_title = "Vendor Approved" if approve else "Vendor Approval Revoked"
@@ -2042,7 +2068,13 @@ class AdminVendorViewSet(AdminBaseViewSet):
             approved=approve,
         )
 
-        response_serializer = AdminVendorActionResponseSerializer({"success": True, "approved": approve})
+        response_serializer = AdminVendorActionResponseSerializer(
+            {
+                "success": True,
+                "approved": approve,
+                "message": f"Vendor status updated to {target_status}",
+            }
+        )
         return Response(response_serializer.data)
 
     @swagger_auto_schema(
