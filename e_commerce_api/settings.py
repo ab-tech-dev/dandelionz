@@ -69,6 +69,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
+    "https://dandelionz.vercel.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -89,6 +90,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
+    "https://dandelionz.vercel.app",
 ]
 
 ROOT_URLCONF = 'e_commerce_api.urls'
@@ -375,6 +377,8 @@ DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN = float(os.getenv('DELIVERY_AVG_WEIGHT_FEE_PE
 DELIVERY_MIN_ORDER_TOTAL_NGN = float(os.getenv('DELIVERY_MIN_ORDER_TOTAL_NGN', '15000'))
 # Optional max delivery radius (miles) for validation
 DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '20'))
+# If True, reject checkout outside max radius. If False, still calculate fee.
+DELIVERY_ENFORCE_MAX_DISTANCE = os.getenv('DELIVERY_ENFORCE_MAX_DISTANCE', 'False').lower() in ('true', '1', 'yes')
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

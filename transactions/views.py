@@ -685,14 +685,17 @@ class CheckoutView(APIView):
                             try:
                                 order.calculate_and_save_delivery_fee()
                                 logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
+                            except ValueError as e:
+                                logger.warning(f"Delivery fee validation failed for order {order.order_id}: {str(e)}")
+                                raise ValueError(str(e))
                             except Exception as e:
-                                logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                                logger.warning(f"Unexpected delivery fee error for order {order.order_id}: {str(e)}")
                                 raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                         else:
                             logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
                             raise ValueError("Shipping coordinates are required to calculate delivery fee.")
                     except Exception as e:
-                        logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                        logger.warning(f"Delivery setup failed for order {order.order_id}: {str(e)}")
                         raise
 
                 # 4. Calculate total
@@ -896,14 +899,17 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                             try:
                                 order.calculate_and_save_delivery_fee()
                                 logger.info(f"Delivery fee calculated: NGN {order.delivery_fee} for order {order.order_id}")
+                            except ValueError as e:
+                                logger.warning(f"Delivery fee validation failed for order {order.order_id}: {str(e)}")
+                                raise ValueError(str(e))
                             except Exception as e:
-                                logger.warning(f"Delivery fee calculation failed for order {order.order_id}: {str(e)}")
+                                logger.warning(f"Unexpected delivery fee error for order {order.order_id}: {str(e)}")
                                 raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                         else:
                             logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
                             raise ValueError("Shipping coordinates are required to calculate delivery fee.")
                     except Exception as e:
-                        logger.warning(f"Error retrieving delivery coordinates for order {order.order_id}: {str(e)}")
+                        logger.warning(f"Delivery setup failed for order {order.order_id}: {str(e)}")
                         raise
 
                 # 4. Calculate total

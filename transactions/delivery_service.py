@@ -17,6 +17,7 @@ class DeliveryFeeCalculator:
         self.fuel_consumption_per_km = Decimal(str(settings.DELIVERY_FUEL_CONSUMPTION_L_PER_KM))
         self.avg_weight_fee_per_km = Decimal(str(settings.DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN))
         self.max_distance_miles = settings.DELIVERY_MAX_DISTANCE_MILES
+        self.enforce_max_distance = getattr(settings, "DELIVERY_ENFORCE_MAX_DISTANCE", False)
         self.avg_speed_kmph = Decimal(str(settings.DELIVERY_AVG_SPEED_KMPH))
 
     def calculate_fee(
@@ -48,7 +49,11 @@ class DeliveryFeeCalculator:
             distance_km = self._haversine_km(origin_lat, origin_lng, dest_lat, dest_lng)
             distance_miles = distance_km * 0.621371
 
-            if self.max_distance_miles and distance_miles > self.max_distance_miles:
+            if (
+                self.enforce_max_distance
+                and self.max_distance_miles
+                and distance_miles > self.max_distance_miles
+            ):
                 result = {
                     'success': False,
                     'error': f'Delivery address is outside our {self.max_distance_miles} mile radius',
