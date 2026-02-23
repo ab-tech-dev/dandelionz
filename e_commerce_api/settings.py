@@ -367,16 +367,18 @@ PAYSTACK_WEBHOOK_URL = os.getenv(
 )
 
 # Delivery Fee Configuration (Nigeria - NGN)
-# Fuel cost defaults to 1000 NGN/liter as assumed in requirements.
-DELIVERY_FUEL_PRICE_PER_LITER_NGN = float(os.getenv('DELIVERY_FUEL_PRICE_PER_LITER_NGN', '1000'))
-# Approx fuel consumption in liters per km (e.g., 12L/100km = 0.12 L/km)
-DELIVERY_FUEL_CONSUMPTION_L_PER_KM = float(os.getenv('DELIVERY_FUEL_CONSUMPTION_L_PER_KM', '0.12'))
-# Average product weight handling cost per km (assumed)
-DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN = float(os.getenv('DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN', '50'))
+# Tuned for friendlier inter-state pricing in Nigeria.
+# Effective cost/km = (fuel_price * fuel_consumption_per_km) + avg_weight_fee_per_km
+# Default below targets roughly ~NGN 5,000 for ~180km routes (~NGN 28/km).
+DELIVERY_FUEL_PRICE_PER_LITER_NGN = float(os.getenv('DELIVERY_FUEL_PRICE_PER_LITER_NGN', '900'))
+# Approx fuel consumption in liters per km (e.g., 2L/100km = 0.02 L/km)
+DELIVERY_FUEL_CONSUMPTION_L_PER_KM = float(os.getenv('DELIVERY_FUEL_CONSUMPTION_L_PER_KM', '0.02'))
+# Average weight/handling component per km
+DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN = float(os.getenv('DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN', '10'))
 # Minimum order total to apply delivery (in NGN)
 DELIVERY_MIN_ORDER_TOTAL_NGN = float(os.getenv('DELIVERY_MIN_ORDER_TOTAL_NGN', '15000'))
 # Optional max delivery radius (miles) for validation
-DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '20'))
+DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '220'))
 # If True, reject checkout outside max radius. If False, still calculate fee.
 DELIVERY_ENFORCE_MAX_DISTANCE = os.getenv('DELIVERY_ENFORCE_MAX_DISTANCE', 'False').lower() in ('true', '1', 'yes')
 # Optional average delivery speed to estimate duration (km/h)
