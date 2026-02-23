@@ -555,7 +555,16 @@ class CreateProductSerializer(CloudinarySerializer):
         Accept stringified JSON for multipart/form-data payloads.
         Frontends commonly send variants/images_data/video_data as strings.
         """
-        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        # Normalize QueryDict/MultiValueDict into a plain dict so assigning
+        # parsed list/dict values does not get re-wrapped as nested list items.
+        if hasattr(data, "getlist") and hasattr(data, "keys"):
+            mutable = {}
+            for key in data.keys():
+                values = data.getlist(key)
+                mutable[key] = values if len(values) > 1 else values[0]
+        else:
+            mutable = data.copy() if hasattr(data, "copy") else dict(data)
+
         self._parse_multipart_nested_fields(data, mutable)
 
         for field in ("variants", "images_data", "video_data"):
