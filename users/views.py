@@ -3634,10 +3634,12 @@ class AdminFinanceViewSet(AdminBaseViewSet):
             return Response({"message": "Access denied"}, status=403)
 
         withdrawal_id = request.data.get('withdrawal_id')
-        reason = request.data.get('reason', '')
+        reason = (request.data.get('reason') or '').strip()
         
         if not withdrawal_id:
             return Response({"message": "withdrawal_id is required"}, status=400)
+        if not reason:
+            return Response({"message": "reason is required"}, status=400)
         
         from users.models import PayoutRequest
         from transactions.models import Wallet
@@ -3699,7 +3701,8 @@ class AdminFinanceViewSet(AdminBaseViewSet):
             
             return Response({
                 "success": True,
-                "message": f"Withdrawal {w.reference} rejected. Amount of ₦{w.amount:,.2f} refunded to wallet."
+                "message": f"Withdrawal {w.reference} rejected. Amount of ₦{w.amount:,.2f} refunded to wallet.",
+                "status": w.status
             })
         except Exception as e:
             logger.error(f"Error rejecting withdrawal {withdrawal_id}: {str(e)}", exc_info=True)

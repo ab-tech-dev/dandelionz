@@ -22,6 +22,7 @@ from authentication.views_admin import (
     AdminUserListView,
     AdminUserDetailView,
     AdminUserSuspendView,
+    AdminUserActivateView,
     AdminOrderListView,
     AdminOrderDetailView,
     AdminOrderCancelView,
@@ -247,6 +248,7 @@ urlpatterns = [
     path("admin/users/", AdminUserListView.as_view(), name="admin-users-list"),
     path("admin/users/<uuid:uuid>/", AdminUserDetailView.as_view(), name="admin-users-detail"),
     path("admin/users/<uuid:uuid>/suspend/", AdminUserSuspendView.as_view(), name="admin-users-suspend"),
+    path("admin/users/<uuid:uuid>/activate/", AdminUserActivateView.as_view(), name="admin-users-activate"),
     
     # Order Management (with status history)
     path("admin/orders/list/", AdminOrderListView.as_view(), name="admin-orders-list"),

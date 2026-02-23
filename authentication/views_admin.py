@@ -143,15 +143,9 @@ class AdminUserSuspendView(generics.GenericAPIView):
     serializer_class = AdminDashboardUserSuspendSerializer
     queryset = CustomUser.objects.all()
     lookup_field = 'uuid'
-    
-    def post(self, request, uuid):
-        user = get_object_or_404(CustomUser, uuid=uuid)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        action = serializer.validated_data.get('action', 'suspend')
-        reason = serializer.validated_data['reason']
-        
+
+    @staticmethod
+    def _apply_action(user, action, reason, request):
         if action == 'suspend':
             if user.status == CustomUser.UserStatus.SUSPENDED:
                 return Response(
@@ -212,7 +206,7 @@ class AdminUserSuspendView(generics.GenericAPIView):
             )
             
             message = f"User {user.email} has been reinstated"
-        
+
         return Response(
             standardized_response(
                 success=True,
@@ -221,6 +215,41 @@ class AdminUserSuspendView(generics.GenericAPIView):
             ),
             status=status.HTTP_200_OK
         )
+
+    def post(self, request, uuid):
+        user = get_object_or_404(CustomUser, uuid=uuid)
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        action = serializer.validated_data.get('action', 'suspend')
+        reason = serializer.validated_data['reason']
+        return self._apply_action(user, action, reason, request)
+
+
+class AdminUserActivateView(generics.GenericAPIView):
+    """
+    Reinstate a suspended user back to ACTIVE.
+
+    POST /admin/users/{uuid}/activate/
+    {
+        "reason": "Issue resolved"
+    }
+    """
+    permission_classes = [IsAuthenticated, IsBusinessAdmin]
+    serializer_class = AdminDashboardUserSuspendSerializer
+    queryset = CustomUser.objects.all()
+    lookup_field = 'uuid'
+
+    def post(self, request, uuid):
+        user = get_object_or_404(CustomUser, uuid=uuid)
+
+        payload = request.data.copy()
+        payload['action'] = 'reinstate'
+        serializer = self.get_serializer(data=payload)
+        serializer.is_valid(raise_exception=True)
+
+        reason = serializer.validated_data['reason']
+        return AdminUserSuspendView._apply_action(user, 'reinstate', reason, request)
 
 
 # =====================================================
