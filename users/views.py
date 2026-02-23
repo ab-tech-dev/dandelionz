@@ -3098,7 +3098,7 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        payments = Payment.objects.all()
+        payments = Payment.objects.select_related("order", "order__customer").all()
         serializer = AdminFinancePaymentSerializer(payments, many=True)
         return Response({"success": True, "data": serializer.data})
 

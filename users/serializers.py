@@ -719,7 +719,7 @@ class AdminDetailedAnalyticsSerializer(serializers.Serializer):
 
 class AdminFinancePaymentSerializer(serializers.Serializer):
     id = serializers.IntegerField()
-    user = serializers.CharField(source="user.email")
+    user = serializers.CharField(source="order.customer.email")
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     status = serializers.CharField()
     created_at = serializers.DateTimeField()
