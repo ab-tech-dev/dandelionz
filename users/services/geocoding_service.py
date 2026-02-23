@@ -33,10 +33,18 @@ def geocode_address(address: str, country_code: Optional[str] = None) -> Optiona
         if not results:
             return None
         top = results[0]
+        if country_code:
+            result_country_code = (top.get("country_code") or "").lower()
+            if result_country_code and result_country_code != country_code.lower():
+                return None
         lat = top.get("lat")
         lon = top.get("lon")
         if lat is None or lon is None:
             return None
-        return float(lat), float(lon)
+        lat = float(lat)
+        lon = float(lon)
+        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+            return None
+        return lat, lon
     except Exception:
         return None

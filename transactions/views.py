@@ -79,7 +79,8 @@ def _ensure_vendor_coords(vendor):
     if _has_coords(vendor.store_latitude, vendor.store_longitude):
         logger.info("Vendor coordinates already present; skipping geocoding.")
         return True
-    address = _compose_address([vendor.address, vendor.store_name])
+    # Prefer concrete location text for geocoding; business name is often ambiguous.
+    address = _compose_address([vendor.address, "Nigeria"])
     if not address:
         logger.warning("Vendor address incomplete; cannot geocode coordinates.")
         return False
@@ -426,6 +427,58 @@ Returns:
         if _is_platform_admin(self.request.user):
             return Order.objects.all()
         return Order.objects.filter(customer=self.request.user)
+
+
+class OrderDeliveryFeeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="retrieve_order_delivery_fee",
+        operation_summary="Get Order Delivery Fee",
+        operation_description="Retrieve delivery fee details for a specific order. Customers can access only their orders; admins can access all orders.",
+        tags=["Orders"],
+        responses={
+            200: openapi.Response(
+                "Delivery fee retrieved successfully",
+                schema=openapi.Schema(
+                    type=openapi.TYPE_OBJECT,
+                    properties={
+                        "order_id": openapi.Schema(type=openapi.TYPE_STRING),
+                        "delivery_applied": openapi.Schema(type=openapi.TYPE_BOOLEAN),
+                        "delivery_fee": openapi.Schema(type=openapi.TYPE_NUMBER),
+                        "delivery_distance": openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+                        "delivery_duration": openapi.Schema(type=openapi.TYPE_STRING, nullable=True),
+                        "delivery_distance_miles": openapi.Schema(type=openapi.TYPE_NUMBER, nullable=True),
+                    },
+                ),
+            ),
+            401: openapi.Response("Unauthorized"),
+            404: openapi.Response("Order not found"),
+        },
+    )
+    def get(self, request, order_id):
+        if _is_platform_admin(request.user):
+            queryset = Order.objects.all()
+        else:
+            queryset = Order.objects.filter(customer=request.user)
+
+        order = get_object_or_404(queryset, order_id=order_id)
+        fee_value = float(order.delivery_fee or 0)
+
+        return Response(
+            standardized_response(
+                data={
+                    "order_id": str(order.order_id),
+                    "delivery_applied": fee_value > 0,
+                    "delivery_fee": fee_value,
+                    "delivery_distance": order.delivery_distance or None,
+                    "delivery_duration": order.delivery_duration or None,
+                    "delivery_distance_miles": order.delivery_distance_miles,
+                },
+                message="Delivery fee retrieved successfully",
+            ),
+            status=status.HTTP_200_OK,
+        )
 
 # ----------------------
 # OrderItem endpoints

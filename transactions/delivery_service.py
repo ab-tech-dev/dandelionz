@@ -42,6 +42,25 @@ class DeliveryFeeCalculator:
             Dictionary with fee, distance, duration, and success status
         """
         try:
+            if not self._is_valid_coordinate(origin_lat, origin_lng):
+                return {
+                    'success': False,
+                    'error': 'Invalid origin coordinates',
+                    'fee': None,
+                    'distance': None,
+                    'duration': None,
+                    'cached': False
+                }
+            if not self._is_valid_coordinate(dest_lat, dest_lng):
+                return {
+                    'success': False,
+                    'error': 'Invalid destination coordinates',
+                    'fee': None,
+                    'distance': None,
+                    'duration': None,
+                    'cached': False
+                }
+
             cache_key = self._create_cache_key(origin_lat, origin_lng, dest_lat, dest_lng)
             cached_result = cache.get(cache_key)
             if cached_result:
@@ -116,6 +135,18 @@ class DeliveryFeeCalculator:
         results = []
 
         for idx, (lat, lng) in enumerate(destinations):
+            if not self._is_valid_coordinate(lat, lng):
+                results.append({
+                    'destination_index': idx,
+                    'success': False,
+                    'fee': None,
+                    'distance': None,
+                    'duration': None,
+                    'distance_miles': None,
+                    'error': 'Invalid destination coordinates'
+                })
+                continue
+
             distance_km = self._haversine_km(origin_lat, origin_lng, lat, lng)
             distance_miles = distance_km * 0.621371
 
@@ -127,7 +158,11 @@ class DeliveryFeeCalculator:
                 raw_fee = min(raw_fee, self.max_fee_ngn)
             fee = raw_fee.quantize(Decimal('0.01'))
 
-            within_radius = (not self.max_distance_miles) or (distance_miles <= self.max_distance_miles)
+            within_radius = (
+                (not self.enforce_max_distance)
+                or (not self.max_distance_miles)
+                or (distance_miles <= self.max_distance_miles)
+            )
 
             results.append({
                 'destination_index': idx,
@@ -140,6 +175,15 @@ class DeliveryFeeCalculator:
             })
 
         return results
+
+    def _is_valid_coordinate(self, lat: float, lng: float) -> bool:
+        """Validate coordinate ranges to avoid invalid-distance calculations."""
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+        except (TypeError, ValueError):
+            return False
+        return -90.0 <= lat_f <= 90.0 and -180.0 <= lng_f <= 180.0
 
     def _haversine_km(
         self,

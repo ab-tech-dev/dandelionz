@@ -144,3 +144,49 @@ class CheckoutShippingFeeTests(TestCase):
         self.assertEqual(order.total_price, Decimal("15000.00"))
         self.assertEqual(mock_geocode.call_count, 0)
         mock_notify_checkout.assert_called_once()
+
+
+class OrderDeliveryFeeEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        User = get_user_model()
+
+        self.customer_user = User.objects.create_user(
+            email="customer_fee@test.com",
+            password="pass12345",
+            role="CUSTOMER",
+        )
+        self.other_customer_user = User.objects.create_user(
+            email="other_customer_fee@test.com",
+            password="pass12345",
+            role="CUSTOMER",
+        )
+
+        self.order = Order.objects.create(
+            customer=self.customer_user,
+            delivery_fee=Decimal("3200.00"),
+            delivery_distance="12.00 km",
+            delivery_duration="25 mins",
+            delivery_distance_miles=7.46,
+        )
+
+    def test_customer_can_fetch_own_order_delivery_fee(self):
+        self.client.force_authenticate(user=self.customer_user)
+
+        response = self.client.get(f"/transactions/orders/{self.order.order_id}/delivery-fee/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["data"]["order_id"], str(self.order.order_id))
+        self.assertEqual(response.data["data"]["delivery_fee"], 3200.0)
+        self.assertEqual(response.data["data"]["delivery_distance"], "12.00 km")
+        self.assertEqual(response.data["data"]["delivery_duration"], "25 mins")
+        self.assertEqual(response.data["data"]["delivery_distance_miles"], 7.46)
+        self.assertTrue(response.data["data"]["delivery_applied"])
+
+    def test_customer_cannot_fetch_another_customers_order_delivery_fee(self):
+        self.client.force_authenticate(user=self.other_customer_user)
+
+        response = self.client.get(f"/transactions/orders/{self.order.order_id}/delivery-fee/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
