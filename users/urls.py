@@ -42,6 +42,7 @@ customer_profile = CustomerProfileViewSet.as_view({
 })
 customer_change_password = CustomerProfileViewSet.as_view({"post": "change_password"})
 customer_close_account = CustomerProfileViewSet.as_view({"delete": "close_account"})
+customer_upload_photo = CustomerProfileViewSet.as_view({"post": "upload_photo"})
 
 # =========================
 # VENDOR
@@ -53,6 +54,7 @@ vendor_profile = VendorViewSet.as_view({
 })
 vendor_change_password = VendorViewSet.as_view({"post": "change_password"})
 vendor_close_account = VendorViewSet.as_view({"delete": "close_account"})
+vendor_upload_photo = VendorViewSet.as_view({"post": "upload_photo"})
 
 # =========================
 # ADMIN
@@ -112,6 +114,7 @@ urlpatterns = [
     path("customer/profile/", customer_profile, name="customer-profile"),
     path("customer/change-password/", customer_change_password, name="customer-change-password"),
     path("customer/account/", customer_close_account, name="customer-close-account"),
+    path("customer/account/photo/", customer_upload_photo, name="customer-account-photo"),
     
     # CUSTOMER WALLET & PAYMENT
     path("customer/wallet/", CustomerProfileViewSet.as_view({"get": "wallet_balance"}), name="customer-wallet-balance"),
@@ -125,6 +128,7 @@ urlpatterns = [
     path("vendor/profile/", vendor_profile, name="vendor-profile"),
     path("vendor/change-password/", vendor_change_password, name="vendor-change-password"),
     path("vendor/account/", vendor_close_account, name="vendor-close-account"),
+    path("vendor/account/photo/", vendor_upload_photo, name="vendor-account-photo"),
     path("vendor/products/add/", VendorViewSet.as_view({"post": "add_product"}), name="vendor-add-product"),
     path("vendor/products/", VendorViewSet.as_view({"get": "list_products"}), name="vendor-list-products"),
     path(

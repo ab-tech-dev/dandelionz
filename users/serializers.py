@@ -249,6 +249,12 @@ class VendorProfileUpdateSerializer(serializers.ModelSerializer):
             'recipient_code',
         ]
 
+
+class ProfilePhotoUploadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['profile_picture']
+
 # Example of serializer for vendor payout request (you need a model for this)
 class VendorPayoutRequestSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)

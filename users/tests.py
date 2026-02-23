@@ -150,3 +150,38 @@ class AdminCustomerActivationTests(TestCase):
 
         self.vendor_user.refresh_from_db()
         self.assertFalse(self.vendor_user.is_active)
+
+
+class ProfilePhotoUploadEndpointTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.client = APIClient()
+        self.customer_user = User.objects.create_user(
+            email="photo_customer@test.com",
+            password="pass12345",
+            role=User.Role.CUSTOMER,
+        )
+        self.vendor_user = User.objects.create_user(
+            email="photo_vendor@test.com",
+            password="pass12345",
+            role=User.Role.VENDOR,
+        )
+
+    def test_customer_can_call_customer_photo_endpoint(self):
+        self.client.force_authenticate(user=self.customer_user)
+        response = self.client.post("/user/customer/account/photo/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["message"], "Profile photo updated successfully")
+
+    def test_vendor_can_call_vendor_photo_endpoint(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        response = self.client.post("/user/vendor/account/photo/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["success"])
+        self.assertEqual(response.data["message"], "Profile photo updated successfully")
+
+    def test_customer_cannot_call_vendor_photo_endpoint(self):
+        self.client.force_authenticate(user=self.customer_user)
+        response = self.client.post("/user/vendor/account/photo/", {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

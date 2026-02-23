@@ -63,7 +63,8 @@ from users.serializers import (
     AdminPaymentSettingsSerializer,
     AdminWithdrawalSerializer,
     AdminWalletBalanceSerializer,
-    AdminPaymentPINSerializer
+    AdminPaymentPINSerializer,
+    ProfilePhotoUploadSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from users.services.profile_resolver import ProfileResolver
@@ -195,6 +196,49 @@ class CustomerProfileViewSet(viewsets.ViewSet):
 
         return Response(
             CustomerProfileSerializer(customer).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="customer_upload_profile_photo",
+        operation_summary="Upload Customer Profile Photo",
+        operation_description="Upload or update the authenticated customer's profile picture.",
+        tags=["Customer Profile"],
+        request_body=ProfilePhotoUploadSerializer,
+        responses={
+            200: openapi.Response(
+                "Profile photo updated successfully",
+                CustomerProfileSerializer()
+            ),
+            400: openapi.Response("Invalid image upload"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def upload_photo(self, request):
+        customer = self.get_customer(request)
+
+        if not customer:
+            return Response(
+                {"detail": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = ProfilePhotoUploadSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Profile photo updated successfully",
+                "data": CustomerProfileSerializer(customer).data,
+            },
             status=status.HTTP_200_OK,
         )
 
@@ -729,6 +773,53 @@ class VendorViewSet(viewsets.ViewSet):
         )
 
         return Response(data, status=code)
+
+    @swagger_auto_schema(
+        operation_id="vendor_upload_profile_photo",
+        operation_summary="Upload Vendor Profile Photo",
+        operation_description="Upload or update the authenticated vendor's profile picture.",
+        tags=["Vendor Profile"],
+        request_body=ProfilePhotoUploadSerializer,
+        responses={
+            200: openapi.Response(
+                "Profile photo updated successfully",
+                VendorProfileSerializer()
+            ),
+            400: openapi.Response("Invalid image upload"),
+            403: openapi.Response("Vendor access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def upload_photo(self, request):
+        vendor = self.get_vendor(request)
+
+        if not vendor:
+            return Response(
+                {"success": False, "message": "Vendor access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = ProfilePhotoUploadSerializer(
+            request.user,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        data = ProfileService.get_profile(
+            user=request.user,
+            request=request,
+        )
+        return Response(
+            {
+                "success": True,
+                "message": "Profile photo updated successfully",
+                "data": data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @swagger_auto_schema(
         method="post",
