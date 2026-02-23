@@ -5318,6 +5318,8 @@ class AdminSettlementsViewSet(AdminBaseViewSet):
         
         # Paginate
         paginator = LimitOffsetPagination()
+        paginator.default_limit = 20
+        paginator.max_limit = 100
         paginated = paginator.paginate_queryset(settlements, request)
         
         data = []
@@ -5423,6 +5425,8 @@ class AdminSettlementsViewSet(AdminBaseViewSet):
         data.sort(key=lambda x: x['created_at'], reverse=True)
 
         paginator = LimitOffsetPagination()
+        paginator.default_limit = 20
+        paginator.max_limit = 100
         paginated = paginator.paginate_queryset(data, request)
 
         response_data = []
