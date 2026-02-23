@@ -16,6 +16,8 @@ class DeliveryFeeCalculator:
         self.fuel_price = Decimal(str(settings.DELIVERY_FUEL_PRICE_PER_LITER_NGN))
         self.fuel_consumption_per_km = Decimal(str(settings.DELIVERY_FUEL_CONSUMPTION_L_PER_KM))
         self.avg_weight_fee_per_km = Decimal(str(settings.DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN))
+        self.min_fee_ngn = Decimal(str(getattr(settings, "DELIVERY_MIN_FEE_NGN", 0)))
+        self.max_fee_ngn = Decimal(str(getattr(settings, "DELIVERY_MAX_FEE_NGN", 0)))
         self.max_distance_miles = settings.DELIVERY_MAX_DISTANCE_MILES
         self.enforce_max_distance = getattr(settings, "DELIVERY_ENFORCE_MAX_DISTANCE", False)
         self.avg_speed_kmph = Decimal(str(settings.DELIVERY_AVG_SPEED_KMPH))
@@ -66,7 +68,15 @@ class DeliveryFeeCalculator:
                 return result
 
             cost_per_km = (self.fuel_consumption_per_km * self.fuel_price) + self.avg_weight_fee_per_km
-            fee = (Decimal(str(distance_km)) * cost_per_km).quantize(Decimal('0.01'))
+            raw_fee = Decimal(str(distance_km)) * cost_per_km
+
+            # Apply pricing guard rails to avoid extreme delivery charges.
+            if self.min_fee_ngn > 0:
+                raw_fee = max(raw_fee, self.min_fee_ngn)
+            if self.max_fee_ngn > 0:
+                raw_fee = min(raw_fee, self.max_fee_ngn)
+
+            fee = raw_fee.quantize(Decimal('0.01'))
 
             result = {
                 'success': True,
@@ -110,7 +120,12 @@ class DeliveryFeeCalculator:
             distance_miles = distance_km * 0.621371
 
             cost_per_km = (self.fuel_consumption_per_km * self.fuel_price) + self.avg_weight_fee_per_km
-            fee = (Decimal(str(distance_km)) * cost_per_km).quantize(Decimal('0.01'))
+            raw_fee = Decimal(str(distance_km)) * cost_per_km
+            if self.min_fee_ngn > 0:
+                raw_fee = max(raw_fee, self.min_fee_ngn)
+            if self.max_fee_ngn > 0:
+                raw_fee = min(raw_fee, self.max_fee_ngn)
+            fee = raw_fee.quantize(Decimal('0.01'))
 
             within_radius = (not self.max_distance_miles) or (distance_miles <= self.max_distance_miles)
 
@@ -163,5 +178,9 @@ class DeliveryFeeCalculator:
 
     def _create_cache_key(self, origin_lat, origin_lng, dest_lat, dest_lng):
         """Create a unique cache key for the route"""
-        key_string = f"delivery_fee_{origin_lat}_{origin_lng}_{dest_lat}_{dest_lng}"
+        key_string = (
+            f"delivery_fee_v2_{origin_lat}_{origin_lng}_{dest_lat}_{dest_lng}_"
+            f"{self.fuel_price}_{self.fuel_consumption_per_km}_{self.avg_weight_fee_per_km}_"
+            f"{self.min_fee_ngn}_{self.max_fee_ngn}_{self.max_distance_miles}_{self.enforce_max_distance}"
+        )
         return hashlib.md5(key_string.encode()).hexdigest()

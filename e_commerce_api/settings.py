@@ -375,6 +375,9 @@ DELIVERY_FUEL_PRICE_PER_LITER_NGN = float(os.getenv('DELIVERY_FUEL_PRICE_PER_LIT
 DELIVERY_FUEL_CONSUMPTION_L_PER_KM = float(os.getenv('DELIVERY_FUEL_CONSUMPTION_L_PER_KM', '0.02'))
 # Average weight/handling component per km
 DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN = float(os.getenv('DELIVERY_AVG_WEIGHT_FEE_PER_KM_NGN', '10'))
+# Guard rails to keep fees customer-friendly.
+DELIVERY_MIN_FEE_NGN = float(os.getenv('DELIVERY_MIN_FEE_NGN', '1000'))
+DELIVERY_MAX_FEE_NGN = float(os.getenv('DELIVERY_MAX_FEE_NGN', '5000'))
 # Minimum order total to apply delivery (in NGN)
 DELIVERY_MIN_ORDER_TOTAL_NGN = float(os.getenv('DELIVERY_MIN_ORDER_TOTAL_NGN', '15000'))
 # Optional max delivery radius (miles) for validation
