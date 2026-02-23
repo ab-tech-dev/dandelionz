@@ -426,6 +426,42 @@ class CreateProductSerializer(CloudinarySerializer):
         if video_data and "video_data" not in mutable:
             mutable["video_data"] = video_data
 
+        # Support multipart variants keys like:
+        # variants[colors][0]=red
+        # variants[sizes][]=M
+        variants = {}
+        for key in keys:
+            match = re.match(r"^variants\[([a-zA-Z0-9_]+)\](?:\[(\d*)\])?$", key)
+            if not match:
+                continue
+            variant_key = match.group(1)
+            index = match.group(2)
+            value = data.get(key)
+
+            if index is None:
+                variants[variant_key] = value
+                continue
+
+            bucket = variants.setdefault(variant_key, [])
+            if not isinstance(bucket, list):
+                bucket = [bucket]
+                variants[variant_key] = bucket
+
+            if index == "":
+                bucket.append(value)
+            else:
+                target_index = int(index)
+                while len(bucket) <= target_index:
+                    bucket.append(None)
+                bucket[target_index] = value
+
+        if variants and "variants" not in mutable:
+            # Remove sparse placeholders
+            for key, value in variants.items():
+                if isinstance(value, list):
+                    variants[key] = [v for v in value if v is not None]
+            mutable["variants"] = variants
+
     def _normalize_images_payload(self, mutable):
         images_data = mutable.get("images_data")
         if not isinstance(images_data, list):
@@ -433,9 +469,31 @@ class CreateProductSerializer(CloudinarySerializer):
 
         normalized = []
         for item in images_data:
+            # Flatten nested one-item lists that often come from multipart builders.
+            if isinstance(item, list) and len(item) == 1:
+                item = item[0]
+
+            # Accept JSON-string rows.
+            if isinstance(item, str):
+                try:
+                    item = json.loads(item)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    try:
+                        item = ast.literal_eval(item)
+                    except (ValueError, SyntaxError):
+                        item = {"image": item}
+
             if not isinstance(item, dict):
-                normalized.append(item)
-                continue
+                # Try to convert list of key/value pairs into a dict.
+                if isinstance(item, list):
+                    try:
+                        item = dict(item)
+                    except Exception:
+                        normalized.append(item)
+                        continue
+                else:
+                    normalized.append(item)
+                    continue
 
             row = dict(item)
             if "is_main" not in row and "isMain" in row:
@@ -450,6 +508,47 @@ class CreateProductSerializer(CloudinarySerializer):
             normalized.append(row)
 
         mutable["images_data"] = normalized
+
+    def _normalize_variants_payload(self, mutable):
+        variants = mutable.get("variants")
+        if variants is None:
+            return
+
+        if isinstance(variants, list):
+            if len(variants) == 1:
+                variants = variants[0]
+            else:
+                mutable["variants"] = None
+                return
+
+        if isinstance(variants, str):
+            raw = variants.strip()
+            if not raw or raw.lower() in {"undefined", "null", "[object object]"}:
+                mutable["variants"] = None
+                return
+            try:
+                variants = json.loads(raw)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                try:
+                    variants = ast.literal_eval(raw)
+                except (ValueError, SyntaxError):
+                    mutable["variants"] = None
+                    return
+
+        if not isinstance(variants, dict):
+            mutable["variants"] = None
+            return
+
+        # Ensure each variant value is a list
+        normalized = {}
+        for key, value in variants.items():
+            if value is None:
+                normalized[key] = []
+            elif isinstance(value, list):
+                normalized[key] = value
+            else:
+                normalized[key] = [value]
+        mutable["variants"] = normalized
 
     def to_internal_value(self, data):
         """
@@ -488,6 +587,7 @@ class CreateProductSerializer(CloudinarySerializer):
                             })
 
         self._normalize_images_payload(mutable)
+        self._normalize_variants_payload(mutable)
         return super().to_internal_value(mutable)
 
     def validate(self, data):
