@@ -348,7 +348,8 @@ class AdminOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
     def update(self, request, *args, **kwargs):
         order = self.get_object()
 
-        if order.status != Order.Status.PAID:
+        # Gate updates by payment state, not current fulfillment state.
+        if str(order.payment_status).upper() != "PAID":
             return Response(
                 standardized_response(success=False, error="Only paid orders can be updated"),
                 status=status.HTTP_400_BAD_REQUEST
