@@ -112,7 +112,6 @@ def _notify_checkout(
     user,
     cart_items,
     payment_reference=None,
-    payment_action_url=None,
     is_installment=False,
     installment_plan=None,
 ):
@@ -141,14 +140,13 @@ def _notify_checkout(
 
     # Payment initialization notification (customer)
     if payment_reference:
-        payment_url = payment_action_url or f"/orders/{order.order_id}"
         send_payment_notification(
             user,
             "Payment Initialized",
             f"Payment has been initialized for order {order.order_id}. Complete payment to confirm your order.",
             transaction_id=payment_reference,
             amount=total_amount,
-            action_url=payment_url,
+            action_url=f"/orders/{order.order_id}",
             order_id=str(order.order_id),
         )
 
@@ -787,7 +785,6 @@ class CheckoutView(APIView):
                     user=user,
                     cart_items=cart_items,
                     payment_reference=payment.reference,
-                    payment_action_url=response.get("data", {}).get("authorization_url"),
                     is_installment=False,
                 )
 
@@ -1023,7 +1020,6 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                     user=user,
                     cart_items=cart_items,
                     payment_reference=first_installment.reference,
-                    payment_action_url=response.get("data", {}).get("authorization_url"),
                     is_installment=True,
                     installment_plan=installment_plan,
                 )
