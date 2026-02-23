@@ -322,10 +322,10 @@ class AdminOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
             properties={
                 "status": openapi.Schema(
                     type=openapi.TYPE_STRING,
-                    enum=[choice[0] for choice in Order.Status.choices]
+                    enum=[choice[0] for choice in Order.Status.choices] + ["PROCESSING"]
                 )
             },
-            example={"status": "SHIPPED"}
+            example={"status": "PROCESSING"}
         ),
         responses={
             200: openapi.Response(

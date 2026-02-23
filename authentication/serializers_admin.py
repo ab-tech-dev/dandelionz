@@ -163,7 +163,26 @@ class AdminDashboardOrderCancelSerializer(serializers.Serializer):
 
 class AdminDashboardOrderStatusUpdateSerializer(serializers.Serializer):
     """Serializer for updating order status (admin)"""
-    status = serializers.ChoiceField(choices=Order.Status.choices)
+    status = serializers.CharField()
+
+    def validate_status(self, value):
+        """
+        Accept frontend alias PROCESSING and map it to SHIPPED.
+        Also allow case-insensitive status values.
+        """
+        status_value = str(value or "").strip().upper()
+        alias_map = {
+            "PROCESSING": Order.Status.SHIPPED,
+        }
+        normalized = alias_map.get(status_value, status_value)
+        valid_statuses = {choice[0] for choice in Order.Status.choices}
+
+        if normalized not in valid_statuses:
+            raise serializers.ValidationError(
+                f"Invalid status '{value}'. Valid values: {', '.join(sorted(valid_statuses | {'PROCESSING'}))}"
+            )
+
+        return normalized
 
 
 # =====================================================
