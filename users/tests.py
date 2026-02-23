@@ -83,3 +83,70 @@ class AdminVendorApprovalTests(TestCase):
         self.vendor_profile.refresh_from_db()
         self.assertFalse(self.vendor_profile.is_verified_vendor)
         self.assertEqual(mock_send_user_notification.call_count, 2)
+
+
+class AdminCustomerActivationTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.client = APIClient()
+
+        self.admin_user = User.objects.create_user(
+            email="admin2@test.com",
+            password="pass12345",
+            role=User.Role.BUSINESS_ADMIN,
+            is_staff=True,
+        )
+        BusinessAdmin.objects.get_or_create(user=self.admin_user)
+        self.client.force_authenticate(user=self.admin_user)
+
+        self.customer_user = User.objects.create_user(
+            email="customer_inactive@test.com",
+            password="pass12345",
+            role=User.Role.CUSTOMER,
+            is_active=False,
+        )
+
+        self.vendor_user = User.objects.create_user(
+            email="vendor_active@test.com",
+            password="pass12345",
+            role=User.Role.VENDOR,
+            is_active=False,
+        )
+        Vendor.objects.create(
+            user=self.vendor_user,
+            store_name="Vendor Store",
+            is_verified_vendor=False,
+            vendor_status="pending",
+        )
+
+    @patch("users.views.send_user_notification")
+    def test_activate_customer_endpoint_activates_only_customers(self, mock_send_user_notification):
+        response = self.client.post(
+            "/user/admin/customers/activate/",
+            {"user_uuid": str(self.customer_user.uuid)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["success"])
+        self.assertTrue(response.data["approved"])
+
+        self.customer_user.refresh_from_db()
+        self.assertTrue(self.customer_user.is_active)
+        mock_send_user_notification.assert_called_once()
+
+    def test_activate_customer_endpoint_rejects_vendor_user(self):
+        response = self.client.post(
+            "/user/admin/customers/activate/",
+            {"user_uuid": str(self.vendor_user.uuid)},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            response.data["message"],
+            "Only customers can be activated with this endpoint",
+        )
+
+        self.vendor_user.refresh_from_db()
+        self.assertFalse(self.vendor_user.is_active)

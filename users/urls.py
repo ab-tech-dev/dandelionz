@@ -64,6 +64,7 @@ admin_list_vendors = AdminVendorViewSet.as_view({"get": "list_vendors"})
 admin_vendor_details = AdminVendorViewSet.as_view({"get": "get_vendor_details"})
 admin_approve_vendor = AdminVendorViewSet.as_view({"post": "approve_vendor", "put": "approve_vendor"})
 admin_suspend_user = AdminVendorViewSet.as_view({"post": "suspend_user", "put": "suspend_user"})
+admin_activate_customer = AdminVendorViewSet.as_view({"post": "activate_customer", "put": "activate_customer"})
 admin_verify_kyc = AdminVendorViewSet.as_view({"post": "verify_kyc", "put": "verify_kyc"})
 
 admin_list_products = AdminMarketplaceViewSet.as_view({"get": "list_products"})
@@ -169,6 +170,8 @@ urlpatterns = [
     path("admin/vendors/<uuid:vendor_uuid>/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc-by-uuid"),
     path("admin/vendors/<uuid:vendor_uuid>/suspend/", admin_suspend_user, name="admin-vendor-suspend"),
     path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
+    path("admin/customers/activate/", admin_activate_customer, name="admin-activate-customer"),
+    path("admin/customers/<uuid:customer_uuid>/activate/", admin_activate_customer, name="admin-activate-customer-by-uuid"),
     re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
 
     # ADMIN MARKETPLACE

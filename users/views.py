@@ -30,6 +30,7 @@ from users.serializers import (
     AdminVendorApprovalSerializer,
     AdminVendorActionResponseSerializer,
     AdminVendorSuspendSerializer,
+    AdminCustomerActivationSerializer,
     AdminVendorKYCSerializer,
     AdminProfileResponseSerializer,
     NotificationSerializer,
@@ -2176,6 +2177,120 @@ class AdminVendorViewSet(AdminBaseViewSet):
         )
 
         response_serializer = AdminVendorActionResponseSerializer({"success": True, "suspended": suspend})
+        return Response(response_serializer.data)
+
+    @swagger_auto_schema(
+        method="post",
+        operation_id="admin_activate_customer",
+        operation_summary="Activate Customer Account",
+        operation_description="Activate a customer account by UUID. This endpoint only supports customer accounts and rejects vendors/admins.",
+        tags=["Customer Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                "Customer activated",
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {
+                        "success": True,
+                        "approved": True,
+                        "message": "Customer account activated successfully",
+                    }
+                }
+            ),
+            400: openapi.Response("Only customers can be activated with this endpoint"),
+            404: openapi.Response("Customer not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @swagger_auto_schema(
+        method="put",
+        operation_id="admin_activate_customer",
+        operation_summary="Activate Customer Account",
+        operation_description="Activate a customer account by UUID. This endpoint only supports customer accounts and rejects vendors/admins.",
+        tags=["Customer Management"],
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=["user_uuid"],
+            properties={
+                "user_uuid": openapi.Schema(type=openapi.TYPE_STRING, format=openapi.FORMAT_UUID),
+            },
+            example={
+                "user_uuid": "31371b24-d533-42ba-a664-26ddce48a9d5",
+            }
+        ),
+        responses={
+            200: openapi.Response(
+                "Customer activated",
+                AdminVendorActionResponseSerializer(),
+                examples={
+                    "application/json": {
+                        "success": True,
+                        "approved": True,
+                        "message": "Customer account activated successfully",
+                    }
+                }
+            ),
+            400: openapi.Response("Only customers can be activated with this endpoint"),
+            404: openapi.Response("Customer not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post", "put"])
+    def activate_customer(self, request, customer_uuid=None):
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if customer_uuid and not data.get("user_uuid"):
+            data["user_uuid"] = str(customer_uuid)
+
+        serializer = AdminCustomerActivationSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+
+        user = self.get_user_by_uuid(serializer.validated_data["user_uuid"])
+        if not user:
+            return Response({"message": "Customer not found"}, status=404)
+
+        if user.role != CustomUser.Role.CUSTOMER:
+            return Response(
+                {"message": "Only customers can be activated with this endpoint"},
+                status=400,
+            )
+
+        already_active = user.is_active
+        if not already_active:
+            user.is_active = True
+            user.save(update_fields=["is_active"])
+
+        from users.notification_helpers import send_user_notification
+        send_user_notification(
+            user,
+            "Account Activated",
+            "Your customer account has been activated. You can now access the platform.",
+            approved=True,
+        )
+
+        message = (
+            "Customer account is already active"
+            if already_active
+            else "Customer account activated successfully"
+        )
+        response_serializer = AdminVendorActionResponseSerializer(
+            {"success": True, "approved": True, "message": message}
+        )
         return Response(response_serializer.data)
 
     @swagger_auto_schema(

@@ -850,6 +850,9 @@ class AdminVendorSuspendSerializer(serializers.Serializer):
     user_uuid = serializers.UUIDField()
     suspend = serializers.BooleanField()
 
+class AdminCustomerActivationSerializer(serializers.Serializer):
+    user_uuid = serializers.UUIDField()
+
 class AdminVendorKYCSerializer(serializers.Serializer):
     user_uuid = serializers.UUIDField()
     approve = serializers.BooleanField(required=False, default=True)
