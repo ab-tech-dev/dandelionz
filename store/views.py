@@ -272,7 +272,14 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
         Returns 201 Created on success.
         """
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.warning(
+                "CreateProductView validation failed for user=%s content_type=%s errors=%s",
+                getattr(request.user, "uuid", None) or getattr(request.user, "id", "anonymous"),
+                request.content_type,
+                serializer.errors,
+            )
+            raise serializers.ValidationError(serializer.errors)
         self.perform_create(serializer)
         
         # Return the complete product with images and videos

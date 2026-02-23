@@ -1,4 +1,6 @@
 import json
+import re
+import ast
 from rest_framework import serializers
 from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
 from authentication.models import CustomUser
@@ -333,7 +335,10 @@ class CreateProductSerializer(CloudinarySerializer):
             raise serializers.ValidationError("At least one image is required")
         
         # Check if at least one image is marked as main
-        has_main = any(img.get('is_main', False) for img in value)
+        has_main = any(
+            self._to_bool(img.get('is_main', img.get('isMain', False)))
+            for img in value
+        )
         if not has_main:
             raise serializers.ValidationError("At least one image must be marked as main (is_main: true)")
         
@@ -354,24 +359,135 @@ class CreateProductSerializer(CloudinarySerializer):
         
         return value
 
+    @staticmethod
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def _parse_multipart_nested_fields(self, data, mutable):
+        """
+        Support multipart keys like:
+        - images_data[0][image]
+        - images_data[0][is_main]
+        - images_data[0][alt_text]
+        - video_data[video], video_data[title], video_data[description]
+        """
+        keys = list(getattr(data, "keys", lambda: [])())
+        if not keys:
+            return
+
+        image_rows = {}
+        has_image_row_keys = False
+
+        for key in keys:
+            match = re.match(r"^images_data\[(\d+)\]\[([a-zA-Z0-9_]+)\]$", key)
+            if not match:
+                continue
+            has_image_row_keys = True
+            idx = int(match.group(1))
+            field = match.group(2)
+            field_map = {
+                "isMain": "is_main",
+                "altText": "alt_text",
+                "variantAssociation": "variant_association",
+            }
+            field = field_map.get(field, field)
+            row = image_rows.setdefault(idx, {})
+            value = data.get(key)
+
+            if field == "is_main":
+                row[field] = self._to_bool(value)
+            elif field == "variant_association" and isinstance(value, str):
+                value = value.strip()
+                if value:
+                    try:
+                        row[field] = json.loads(value)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        row[field] = value
+                else:
+                    row[field] = None
+            else:
+                row[field] = value
+
+        if has_image_row_keys and "images_data" not in mutable:
+            mutable["images_data"] = [image_rows[i] for i in sorted(image_rows.keys())]
+
+        video_data = {}
+        for key in keys:
+            match = re.match(r"^video_data\[([a-zA-Z0-9_]+)\]$", key)
+            if not match:
+                continue
+            field = match.group(1)
+            video_data[field] = data.get(key)
+
+        if video_data and "video_data" not in mutable:
+            mutable["video_data"] = video_data
+
+    def _normalize_images_payload(self, mutable):
+        images_data = mutable.get("images_data")
+        if not isinstance(images_data, list):
+            return
+
+        normalized = []
+        for item in images_data:
+            if not isinstance(item, dict):
+                normalized.append(item)
+                continue
+
+            row = dict(item)
+            if "is_main" not in row and "isMain" in row:
+                row["is_main"] = row.pop("isMain")
+            if "alt_text" not in row and "altText" in row:
+                row["alt_text"] = row.pop("altText")
+            if "variant_association" not in row and "variantAssociation" in row:
+                row["variant_association"] = row.pop("variantAssociation")
+            if "is_main" in row:
+                row["is_main"] = self._to_bool(row["is_main"])
+
+            normalized.append(row)
+
+        mutable["images_data"] = normalized
+
     def to_internal_value(self, data):
         """
         Accept stringified JSON for multipart/form-data payloads.
         Frontends commonly send variants/images_data/video_data as strings.
         """
         mutable = data.copy() if hasattr(data, "copy") else dict(data)
+        self._parse_multipart_nested_fields(data, mutable)
 
         for field in ("variants", "images_data", "video_data"):
             raw_value = mutable.get(field)
             if isinstance(raw_value, str):
                 raw_value = raw_value.strip()
-                if raw_value:
+                if not raw_value:
+                    if field == "variants":
+                        mutable[field] = None
+                    continue
+
+                if field == "variants" and raw_value.lower() in {"undefined", "null", "[object object]"}:
+                    mutable[field] = None
+                    continue
+
+                try:
+                    mutable[field] = json.loads(raw_value)
+                except (json.JSONDecodeError, TypeError, ValueError):
                     try:
-                        mutable[field] = json.loads(raw_value)
-                    except (json.JSONDecodeError, TypeError, ValueError):
-                        raise serializers.ValidationError({
-                            field: "Invalid JSON format."
-                        })
+                        # Accept Python-like dict strings sent by some clients.
+                        mutable[field] = ast.literal_eval(raw_value)
+                    except (ValueError, SyntaxError):
+                        if field == "variants":
+                            # Variants are optional; avoid blocking create on malformed variants payload.
+                            mutable[field] = None
+                        else:
+                            raise serializers.ValidationError({
+                                field: "Invalid JSON format."
+                            })
+
+        self._normalize_images_payload(mutable)
         return super().to_internal_value(mutable)
 
     def validate(self, data):
