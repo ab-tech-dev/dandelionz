@@ -1,3 +1,4 @@
+import json
 from rest_framework import serializers
 from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
 from authentication.models import CustomUser
@@ -293,7 +294,12 @@ class CreateProductSerializer(CloudinarySerializer):
     videos = ProductVideoSerializer(many=True, read_only=True)
     
     # Nested serializers for creating related objects
-    images_data = ProductImageCreateSerializer(many=True, write_only=True, required=False, help_text="List of images for the product. At least one image is required.")
+    images_data = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        required=False,
+        help_text="List of images for the product. At least one image is required."
+    )
     video_data = ProductVideoCreateSerializer(write_only=True, required=False, allow_null=True, help_text="Optional video for the product (max 5MB)")
     
     category = serializers.SlugRelatedField(
@@ -348,11 +354,31 @@ class CreateProductSerializer(CloudinarySerializer):
         
         return value
 
+    def to_internal_value(self, data):
+        """
+        Accept stringified JSON for multipart/form-data payloads.
+        Frontends commonly send variants/images_data/video_data as strings.
+        """
+        mutable = data.copy() if hasattr(data, "copy") else dict(data)
+
+        for field in ("variants", "images_data", "video_data"):
+            raw_value = mutable.get(field)
+            if isinstance(raw_value, str):
+                raw_value = raw_value.strip()
+                if raw_value:
+                    try:
+                        mutable[field] = json.loads(raw_value)
+                    except (json.JSONDecodeError, TypeError, ValueError):
+                        raise serializers.ValidationError({
+                            field: "Invalid JSON format."
+                        })
+        return super().to_internal_value(mutable)
+
     def validate(self, data):
         """Cross-field validation"""
         # Validate variant associations if variants exist
         if data.get('variants'):
-            images_data = self.initial_data.get('images_data', [])
+            images_data = data.get('images_data', [])
             from .models import validate_variant_association
             
             for img in images_data:
@@ -363,6 +389,15 @@ class CreateProductSerializer(CloudinarySerializer):
                         raise serializers.ValidationError({"images_data": error_msg})
         
         return data
+
+    def create(self, validated_data):
+        """
+        Product media is handled in the view after product creation.
+        Remove non-model payload keys before creating Product.
+        """
+        validated_data.pop('images_data', None)
+        validated_data.pop('video_data', None)
+        return Product.objects.create(**validated_data)
 
 
 # ---------------------------

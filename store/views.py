@@ -200,15 +200,16 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
                        "Please go to your vendor profile and set your store location."
             )
 
+        images_data = serializer.validated_data.get('images_data', [])
+        video_data = serializer.validated_data.get('video_data')
+
         # Save the product as draft
         product = serializer.save(store=vendor, publish_status='draft')
         
         # Handle images
-        images_data = self.request.data.get('images_data', [])
         self._create_product_images(product, images_data, serializer.validated_data.get('variants'))
         
         # Handle video
-        video_data = self.request.data.get('video_data')
         if video_data:
             self._create_product_video(product, video_data)
 
@@ -279,6 +280,11 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
         response_serializer = self.get_serializer(product)
         
         headers = self.get_success_headers(response_serializer.data)
+        logger.info(
+            "Product created successfully via /store/products/create/ by user=%s product_slug=%s",
+            getattr(request.user, "uuid", None) or getattr(request.user, "id", "anonymous"),
+            getattr(product, "slug", None),
+        )
         return Response(
             standardized_response(data=response_serializer.data, message="Product created successfully as draft with media"),
             status=status.HTTP_201_CREATED,

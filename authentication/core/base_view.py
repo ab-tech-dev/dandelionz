@@ -1,5 +1,5 @@
-import traceback
 import logging
+import traceback
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -29,6 +29,12 @@ class BaseAPIView(APIView):
 
     def handle_exception(self, exc):
         """Standardized exception handling for all API views"""
+        request = getattr(self, "request", None)
+        method = getattr(request, "method", "UNKNOWN")
+        path = getattr(request, "path", "UNKNOWN")
+        user = getattr(request, "user", None)
+        user_id = getattr(user, "uuid", None) or getattr(user, "id", None) or "anonymous"
+
         if isinstance(exc, AuthenticationFailed):
                 return Response(standardized_response(
                     success=False,
@@ -56,6 +62,13 @@ class BaseAPIView(APIView):
             )
 
         if isinstance(exc, ValidationError):
+            logger.warning(
+                "Validation error on %s %s (user=%s): %s",
+                method,
+                path,
+                user_id,
+                exc.detail,
+            )
             return Response(
                 standardized_response(
                     success=False,
@@ -65,15 +78,32 @@ class BaseAPIView(APIView):
             )
 
         if isinstance(exc, APIException):
+            error_code = None
+            if hasattr(exc, "get_codes"):
+                try:
+                    error_code = exc.get_codes()
+                except Exception:
+                    error_code = None
+
+            logger.warning(
+                "API exception on %s %s (user=%s, status=%s, code=%s): %s",
+                method,
+                path,
+                user_id,
+                getattr(exc, "status_code", "unknown"),
+                error_code,
+                exc.detail,
+            )
             return Response(
                 standardized_response(
                     success=False,
-                    error=self._extract_error_message(exc.detail)
+                    error=self._extract_error_message(exc.detail),
+                    error_code=error_code,
                 ),
                 status=exc.status_code
             )
 
-        logger.error(f"Unexpected error: {str(exc)}")
+        logger.error("Unexpected error on %s %s (user=%s): %s", method, path, user_id, str(exc))
         logger.error(traceback.format_exc())
 
         return Response(
