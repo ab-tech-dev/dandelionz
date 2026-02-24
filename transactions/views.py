@@ -10,6 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.utils import timezone
 from django.db import transaction
+from django.contrib.auth import get_user_model
 
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
@@ -106,6 +107,22 @@ def _is_platform_admin(user):
             or user.is_superuser
         )
     )
+
+
+def _get_business_admin_wallet_user():
+    """Resolve a single wallet owner for platform commission credits."""
+    UserModel = get_user_model()
+    business_admin = UserModel.objects.filter(
+        role=UserModel.Role.BUSINESS_ADMIN,
+        is_active=True,
+    ).order_by("created_at").first()
+    if business_admin:
+        return business_admin
+    return UserModel.objects.filter(
+        is_superuser=True,
+        is_active=True,
+    ).order_by("created_at").first()
+
 
 def _notify_checkout(
     order,
@@ -257,31 +274,64 @@ def credit_vendors_for_order(order, source_prefix="Order"):
     """
     Credit all vendors for an order based on their items' subtotals.
     Deducts platform commission (10%) from vendor share.
-    
+
     Args:
         order: Order instance
         source_prefix: Prefix for the wallet transaction source (default: "Order")
     """
     import logging
     logger = logging.getLogger(__name__)
-    
+    platform_admin_user = _get_business_admin_wallet_user()
+    platform_wallet = None
+
+    if platform_admin_user:
+        platform_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=platform_admin_user)
+    else:
+        logger.warning("No business admin user found; commission credit skipped.")
+
+    # Credit delivery fee to platform wallet once per delivered order.
+    if platform_wallet and (order.delivery_fee or Decimal("0.00")) > Decimal("0.00"):
+        platform_wallet.credit(
+            order.delivery_fee,
+            source=f"{source_prefix} Delivery Fee {order.order_id}",
+        )
+        TransactionLog.objects.create(
+            order=order,
+            action=TransactionLog.Action.COMMISSION_DEDUCTED,
+            level=TransactionLog.Level.SUCCESS,
+            message=f"Platform delivery fee credited NGN {order.delivery_fee} for order {order.order_id}",
+            related_user=platform_admin_user,
+            amount=order.delivery_fee,
+            metadata={
+                "admin_email": platform_admin_user.email,
+                "delivery_fee": str(order.delivery_fee),
+                "order_id": str(order.order_id),
+            }
+        )
+
     for item in order.order_items.all():
         vendor = item.product.store
         if not vendor or not getattr(vendor, "user", None):
             continue
+
         vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
         commission_amount = item.item_subtotal * PLATFORM_COMMISSION
-        
+
         vendor_user = vendor.user
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
         wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
-        
-        # Log the transaction for audit trail
+
+        if platform_wallet:
+            platform_wallet.credit(
+                commission_amount,
+                source=f"{source_prefix} Commission {order.order_id}",
+            )
+
         TransactionLog.objects.create(
             order=order,
             action=TransactionLog.Action.VENDOR_CREDITED,
             level=TransactionLog.Level.SUCCESS,
-            message=f"Vendor {vendor_user.email} credited ₦{vendor_share} for delivery (Item: {item.product.name})",
+            message=f"Vendor {vendor_user.email} credited NGN {vendor_share} for delivery (Item: {item.product.name})",
             related_user=vendor_user,
             amount=vendor_share,
             metadata={
@@ -294,10 +344,28 @@ def credit_vendors_for_order(order, source_prefix="Order"):
                 "commission_amount": str(commission_amount),
             }
         )
-        
+
+        if platform_admin_user:
+            TransactionLog.objects.create(
+                order=order,
+                action=TransactionLog.Action.COMMISSION_DEDUCTED,
+                level=TransactionLog.Level.SUCCESS,
+                message=f"Platform commission credited NGN {commission_amount} for order {order.order_id}",
+                related_user=platform_admin_user,
+                amount=commission_amount,
+                metadata={
+                    "admin_email": platform_admin_user.email,
+                    "vendor_id": vendor.id,
+                    "vendor_email": vendor_user.email,
+                    "item_id": item.id,
+                    "item_subtotal": str(item.item_subtotal),
+                    "commission_rate": "10%",
+                }
+            )
+
         logger.info(
-            f"Vendor credited: {vendor_user.email} | Amount: ₦{vendor_share} | "
-            f"Commission: ₦{commission_amount} | Order: {order.order_id}"
+            f"Vendor credited: {vendor_user.email} | Amount: NGN {vendor_share} | "
+            f"Commission: NGN {commission_amount} | Order: {order.order_id}"
         )
 
 # ----------------------
@@ -1820,11 +1888,15 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                             commission_amount = item.item_subtotal * PLATFORM_COMMISSION
                             commission_reversal_amount += commission_amount
                             
-                            # Debit vendor wallet (reverse the credit they received)
-                            vendor_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
+                            # Debit platform wallet to reverse previously credited commission
+                            platform_admin_user = _get_business_admin_wallet_user()
+                            if not platform_admin_user:
+                                continue
+                            platform_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=platform_admin_user)
                             try:
-                                vendor_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
+                                platform_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
                                 vendors_affected.append({
+                                    "admin_email": platform_admin_user.email,
                                     "vendor_id": vendor.id,
                                     "vendor_email": vendor_user.email,
                                     "commission_reversed": str(commission_amount)
@@ -1836,11 +1908,12 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                     action=TransactionLog.Action.COMMISSION_DEDUCTED,
                                     level=TransactionLog.Level.SUCCESS,
                                     message=f"Commission reversed for vendor {vendor_user.email}: ₦{commission_amount} (Order refunded)",
-                                    related_user=vendor_user,
+                                    related_user=platform_admin_user,
                                     amount=-commission_amount,
                                     metadata={
                                         "vendor_id": vendor.id,
                                         "vendor_email": vendor_user.email,
+                                        "admin_email": platform_admin_user.email,
                                         "commission_amount": str(commission_amount),
                                         "reason": "Refund Approval",
                                         "refund_id": refund.id
@@ -1853,7 +1926,7 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                 )
                                 
                             except ValueError as e:
-                                logger.error(f"Failed to debit vendor {vendor_user.email}: {str(e)}")
+                                logger.error(f"Failed to debit admin wallet for vendor {vendor_user.email}: {str(e)}")
                                 # Continue with other vendors if one fails
                                 pass
                     
@@ -2278,5 +2351,6 @@ __all__ = [
     'InstallmentPaymentListView', 'InitializeInstallmentPaymentView', 'VerifyInstallmentPaymentView', 'InstallmentWebhookView',
     'CommissionAnalyticsView'
 ]
+
 
 

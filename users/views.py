@@ -4842,6 +4842,56 @@ class AdminWalletViewSet(AdminBaseViewSet):
     """
     permission_classes = [IsAuthenticated]
 
+    def _get_wallet_owner_user(self, request, admin_profile):
+        """
+        Resolve the user that owns platform wallet balances.
+        Prefer BUSINESS_ADMIN owner, fallback to current admin profile user.
+        """
+        UserModel = get_user_model()
+        business_admin_owner = UserModel.objects.filter(
+            role=UserModel.Role.BUSINESS_ADMIN,
+            is_active=True,
+        ).order_by("created_at").first()
+        if business_admin_owner:
+            return business_admin_owner
+        return getattr(admin_profile, "user", request.user)
+
+    def _backfill_missing_platform_commissions(self, wallet):
+        """
+        Backfill historical delivered-order commissions and delivery fees into admin wallet.
+        """
+        from decimal import Decimal
+        from transactions.models import Order, WalletTransaction
+
+        delivered_orders = Order.objects.filter(
+            status=Order.Status.DELIVERED,
+            vendors_credited=True,
+        ).prefetch_related('order_items')
+
+        for order in delivered_orders:
+            existing_order_credit = WalletTransaction.objects.filter(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                source__icontains=f"Commission {order.order_id}",
+            ).exists()
+            if existing_order_credit:
+                continue
+
+            commission_amount = Decimal('0.00')
+            for item in order.order_items.all():
+                commission_amount += item.item_subtotal * Decimal('0.10')
+
+            if commission_amount > 0:
+                wallet.credit(commission_amount, source=f"Delivery Commission {order.order_id}")
+
+            existing_delivery_fee_credit = WalletTransaction.objects.filter(
+                wallet=wallet,
+                transaction_type='CREDIT',
+                source__icontains=f"Delivery Fee {order.order_id}",
+            ).exists()
+            if not existing_delivery_fee_credit and (order.delivery_fee or Decimal('0.00')) > Decimal('0.00'):
+                wallet.credit(order.delivery_fee, source=f"Delivery Delivery Fee {order.order_id}")
+
     @swagger_auto_schema(
         operation_id="admin_wallet_balance",
         operation_summary="Get Admin Wallet Balance",
@@ -4870,7 +4920,9 @@ class AdminWalletViewSet(AdminBaseViewSet):
         from django.db.models import Sum
         from django.utils import timezone
         
-        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        wallet_owner = self._get_wallet_owner_user(request, admin)
+        wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
+        self._backfill_missing_platform_commissions(wallet)
         
         # Total earnings and withdrawals
         total_credits = WalletTransaction.objects.filter(
@@ -4895,7 +4947,7 @@ class AdminWalletViewSet(AdminBaseViewSet):
         # Count total withdrawals
         from users.models import PayoutRequest
         total_withdrawals = PayoutRequest.objects.filter(
-            user=request.user,
+            user=wallet_owner,
             status='successful'
         ).count()
         
@@ -4940,10 +4992,13 @@ class AdminWalletViewSet(AdminBaseViewSet):
         from transactions.models import Wallet, WalletTransaction
         from rest_framework.pagination import LimitOffsetPagination
         
-        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        wallet_owner = self._get_wallet_owner_user(request, admin)
+        wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
         transactions = WalletTransaction.objects.filter(wallet=wallet).order_by('-created_at')
         
         paginator = LimitOffsetPagination()
+        paginator.default_limit = 20
+        paginator.max_limit = 100
         paginated_txns = paginator.paginate_queryset(transactions, request)
         
         data = []
@@ -5002,8 +5057,9 @@ class AdminWalletViewSet(AdminBaseViewSet):
             )
         
         # Check balance
+        wallet_owner = self._get_wallet_owner_user(request, admin)
         from transactions.models import Wallet
-        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
         amount = serializer.validated_data['amount']
         
         if wallet.balance < amount:
@@ -5032,7 +5088,7 @@ class AdminWalletViewSet(AdminBaseViewSet):
         import uuid as uuid_lib
         
         payout = PayoutRequest.objects.create(
-            user=request.user,
+            user=wallet_owner,
             amount=amount,
             bank_name=payout_profile.bank_name,
             account_number=payout_profile.account_number,
