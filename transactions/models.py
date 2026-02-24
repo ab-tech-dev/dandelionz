@@ -15,7 +15,8 @@ class Wallet(models.Model):
 
     def credit(self, amount, source=None):
         """Add funds to the wallet"""
-        self.balance += Decimal(amount)
+        amount = Decimal(amount).quantize(Decimal('0.01'))
+        self.balance = (Decimal(self.balance) + amount).quantize(Decimal('0.01'))
         self.save(update_fields=['balance', 'updated_at'])
         WalletTransaction.objects.create(
             wallet=self,
@@ -26,9 +27,10 @@ class Wallet(models.Model):
 
     def debit(self, amount, source=None):
         """Subtract funds from the wallet"""
-        if self.balance < Decimal(amount):
+        amount = Decimal(amount).quantize(Decimal('0.01'))
+        if Decimal(self.balance) < amount:
             raise ValueError("Insufficient wallet balance")
-        self.balance -= Decimal(amount)
+        self.balance = (Decimal(self.balance) - amount).quantize(Decimal('0.01'))
         self.save(update_fields=['balance', 'updated_at'])
         WalletTransaction.objects.create(
             wallet=self,

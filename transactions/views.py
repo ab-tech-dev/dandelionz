@@ -814,7 +814,7 @@ class CheckoutView(APIView):
                                 raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                         else:
                             logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
-                            raise ValueError("Shipping coordinates are required to calculate delivery fee.")
+                            raise ValueError("Please add shipping address.")
                     except Exception as e:
                         logger.warning(f"Delivery setup failed for order {order.order_id}: {str(e)}")
                         raise
@@ -1028,7 +1028,7 @@ Duration options: 1_month, 3_months, 6_months, 1_year""",
                                 raise ValueError("Unable to calculate shipping fee. Please verify shipping/vendor address and try again.")
                         else:
                             logger.warning(f"Incomplete coordinates for order {order.order_id}. Vendor: ({order.restaurant_lat}, {order.restaurant_lng}), Customer: ({order.customer_lat}, {order.customer_lng})")
-                            raise ValueError("Shipping coordinates are required to calculate delivery fee.")
+                            raise ValueError("Please add shipping address.")
                     except Exception as e:
                         logger.warning(f"Delivery setup failed for order {order.order_id}: {str(e)}")
                         raise

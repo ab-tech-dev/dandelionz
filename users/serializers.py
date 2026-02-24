@@ -438,7 +438,7 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
     is_draft = serializers.BooleanField(required=False, default=False)
     scheduled_for = serializers.DateTimeField(required=False, allow_null=True)
     send_websocket = serializers.BooleanField(required=False, default=True)
-    send_email = serializers.BooleanField(required=False, default=False)
+    send_email = serializers.BooleanField(required=False, default=True)
     send_push = serializers.BooleanField(required=False, default=False)
 
     class Meta:

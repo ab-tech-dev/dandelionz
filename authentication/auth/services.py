@@ -11,6 +11,7 @@ from authentication.serializers import UserBaseSerializer
 from authentication.core.jwt_utils import TokenManager
 from authentication.core.ip_utils import get_client_ip
 from authentication.models import CustomUser
+from authentication.core.task_dispatch import dispatch_task
 from rest_framework_simplejwt.tokens import RefreshToken
 from authentication.verification.tasks import send_verification_email_task
 
@@ -73,8 +74,10 @@ class AuthenticationService:
             if user.email and settings.REQUIRE_EMAIL_VERIFICATION:
                 try:
                     # Convert UUID to string for Celery JSON serialization
-                    send_verification_email_task.delay(str(user.uuid))
-                    logger.info(f"Queued verification email for new user: {user.email}")
+                    if dispatch_task(send_verification_email_task, str(user.uuid)):
+                        logger.info(f"Queued verification email for new user: {user.email}")
+                    else:
+                        logger.error(f"Failed to queue/execute verification email for user {user.email}")
                 except Exception as e:
                     logger.error(f"Failed to queue verification email task for user {user.pk}: {str(e)}")
 

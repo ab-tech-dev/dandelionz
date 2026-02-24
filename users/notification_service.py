@@ -17,6 +17,7 @@ from .notification_models import (
 )
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from authentication.core.task_dispatch import dispatch_task
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -185,7 +186,8 @@ class NotificationService:
             from users.notification_tasks import send_notification_email
             
             # Queue async task
-            send_notification_email.delay(str(notification.id))
+            if not dispatch_task(send_notification_email, str(notification.id)):
+                return False
             
             notification.was_sent_email = True
             notification.save(update_fields=['was_sent_email'])

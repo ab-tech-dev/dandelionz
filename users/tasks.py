@@ -49,8 +49,9 @@ def send_scheduled_notification(self, notification_id: int):
                 "notification_id": notification_id,
             }
 
-        # Send notification via WebSocket (and log)
+        # Send notification via WebSocket and Email (and log)
         NotificationService.send_websocket_notification(notification)
+        NotificationService.send_email_notification(notification)
 
         return {
             "status": "success",

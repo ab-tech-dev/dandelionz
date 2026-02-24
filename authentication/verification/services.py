@@ -7,7 +7,9 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from authentication.verification.tokens import TokenVerifier
+from authentication.verification.emails import EmailService
 from authentication.core.jwt_utils import TokenManager
+from authentication.core.task_dispatch import dispatch_task
 from authentication.verification.tasks import send_verification_email_task, send_password_reset_email_task
 
 
@@ -127,7 +129,12 @@ class EmailVerificationService:
                 }, 429
 
             # ✅ FIXED: Pass user.uuid as string for JSON serialization, not user object
-            send_verification_email_task.delay(str(user.uuid))
+            if not dispatch_task(send_verification_email_task, str(user.uuid)):
+                logger.warning(
+                    "Verification task dispatch failed for %s, falling back to direct send.",
+                    user.email,
+                )
+                EmailService.send_verification_email(user)
 
             cache.set(rate_key, True, timeout=300)
             logger.info(f"Verification email task queued for {user.email}")
@@ -166,7 +173,7 @@ class PasswordResetService:
 
             try:
                 user = User.objects.get(email=email)
-                send_password_reset_email_task.delay(str(user.uuid))
+                dispatch_task(send_password_reset_email_task, str(user.uuid))
                 logger.info(f"Password reset email task queued for {user.email}")
             except User.DoesNotExist:
                 # Security best practice: don't reveal existence of email

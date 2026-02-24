@@ -36,6 +36,7 @@ from authentication.serializers_admin import (
     AdminDashboardAuditLogSerializer,
 )
 from transactions.models import Order, OrderStatusHistory
+from users.notification_helpers import send_user_notification
 
 CustomUser = get_user_model()
 
@@ -177,6 +178,15 @@ class AdminUserSuspendView(generics.GenericAPIView):
             )
             
             message = f"User {user.email} has been suspended"
+            send_user_notification(
+                user,
+                "Account Suspended",
+                "Your account has been suspended by an administrator. Please contact support for details.",
+                send_email=True,
+                send_websocket=True,
+                reason=reason,
+                action="suspend",
+            )
         
         elif action == 'reinstate':
             if user.status == CustomUser.UserStatus.ACTIVE:
@@ -206,6 +216,15 @@ class AdminUserSuspendView(generics.GenericAPIView):
             )
             
             message = f"User {user.email} has been reinstated"
+            send_user_notification(
+                user,
+                "Account Reactivated",
+                "Your account has been reactivated. You can now access the platform again.",
+                send_email=True,
+                send_websocket=True,
+                reason=reason,
+                action="reinstate",
+            )
 
         return Response(
             standardized_response(

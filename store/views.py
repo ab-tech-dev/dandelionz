@@ -34,6 +34,7 @@ from authentication.core.base_view import BaseAPIView
 from authentication.core.response import standardized_response
 from authentication.core.permissions import IsAdminOrVendor, IsAdmin, IsVendor
 from authentication.core.exceptions import PurchaseRequiredException
+from authentication.core.task_dispatch import dispatch_task
 
 # ---------------------------
 # Products FilterSet
@@ -178,15 +179,13 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
 
         # Check if vendor exists
         if vendor is None:
-            raise serializers.ValidationError({
-                "detail": "You are not registered as a vendor."
-            })
+            raise serializers.ValidationError("You are not registered as a vendor.")
 
         # Check vendor verification status
         if not vendor.is_verified_vendor:
-            raise serializers.ValidationError({
-                "detail": "Your vendor account is not verified. Please complete verification before adding products."
-            })
+            raise serializers.ValidationError(
+                "Your vendor account is not verified. Please complete verification before adding products."
+            )
 
         # Check vendor has address with coordinates
         # Return 400 Bad Request with error code MISSING_ADDRESS
@@ -1042,7 +1041,7 @@ class ApproveProductView(BaseAPIView):
 
         # Send email notification to vendor
         from store.tasks import send_product_approval_email_task
-        send_product_approval_email_task.delay(product.id)
+        dispatch_task(send_product_approval_email_task, product.id)
         from users.notification_helpers import send_product_notification
         send_product_notification(
             product.store,
@@ -1108,7 +1107,7 @@ class RejectProductView(BaseAPIView):
 
         # Send email notification to vendor
         from store.tasks import send_product_rejection_email_task
-        send_product_rejection_email_task.delay(product.id, reason)
+        dispatch_task(send_product_rejection_email_task, product.id, reason)
         from users.notification_helpers import send_product_notification
         send_product_notification(
             product.store,
@@ -1903,7 +1902,7 @@ class ProductReviewView(BaseAPIView):
         from store.tasks import send_product_approval_email_task, send_product_rejection_email_task
     
         if status_action == 'approved':
-            send_product_approval_email_task.delay(product.id)
+            dispatch_task(send_product_approval_email_task, product.id)
             from users.notification_helpers import send_product_notification
             send_product_notification(
                 product.store,
@@ -1914,7 +1913,7 @@ class ProductReviewView(BaseAPIView):
                 action_url=f"/vendor/products/{product.slug}",
             )
         else:
-            send_product_rejection_email_task.delay(product.id, reason)
+            dispatch_task(send_product_rejection_email_task, product.id, reason)
             from users.notification_helpers import send_product_notification
             send_product_notification(
                 product.store,

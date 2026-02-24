@@ -2154,6 +2154,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             approval_title,
             approval_message,
+            send_email=True,
+            send_websocket=True,
             vendor_uuid=str(user.uuid) if getattr(user, "vendor_profile", None) else None,
             approved=approve,
         )
@@ -2263,6 +2265,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             suspension_title,
             suspension_message,
+            send_email=True,
+            send_websocket=True,
             vendor_uuid=str(user.uuid) if getattr(user, "vendor_profile", None) else None,
             suspended=suspend,
         )
@@ -2371,6 +2375,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             "Account Activated",
             "Your customer account has been activated. You can now access the platform.",
+            send_email=True,
+            send_websocket=True,
             approved=True,
         )
 
@@ -2480,6 +2486,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
             user,
             title,
             message,
+            send_email=True,
+            send_websocket=True,
             vendor_uuid=str(user.uuid),
             kyc_verified=approve,
         )
@@ -4639,7 +4647,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         is_draft = data.get('is_draft', False)
         scheduled_for = data.get('scheduled_for')
         send_websocket = data.get('send_websocket', True)
-        send_email = data.get('send_email', False)
+        send_email = data.get('send_email', True)
         send_push = data.get('send_push', False)
 
         # Resolve user if user_uuid provided
@@ -4825,6 +4833,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             notification.save(update_fields=['is_draft', 'scheduled_for'])
 
         NotificationService.send_websocket_notification(notification)
+        NotificationService.send_email_notification(notification)
 
         return Response({
             "success": True,
@@ -4892,6 +4901,10 @@ class AdminWalletViewSet(AdminBaseViewSet):
             if not existing_delivery_fee_credit and (order.delivery_fee or Decimal('0.00')) > Decimal('0.00'):
                 wallet.credit(order.delivery_fee, source=f"Delivery Delivery Fee {order.order_id}")
 
+    def _money_str(self, value):
+        from decimal import Decimal
+        return f"{Decimal(value or 0).quantize(Decimal('0.01'))}"
+
     @swagger_auto_schema(
         operation_id="admin_wallet_balance",
         operation_summary="Get Admin Wallet Balance",
@@ -4952,11 +4965,11 @@ class AdminWalletViewSet(AdminBaseViewSet):
         ).count()
         
         data = {
-            'withdrawable_balance': str(wallet.balance),
-            'available_balance': str(wallet.balance),
-            'total_earnings': str(total_credits),
+            'withdrawable_balance': self._money_str(wallet.balance),
+            'available_balance': self._money_str(wallet.balance),
+            'total_earnings': self._money_str(total_credits),
             'total_withdrawals': total_withdrawals,
-            'this_month_earnings': str(this_month_earnings),
+            'this_month_earnings': self._money_str(this_month_earnings),
         }
         
         return Response(
