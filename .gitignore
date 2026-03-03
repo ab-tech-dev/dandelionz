@@ -12,6 +12,14 @@ env/
 .virtualenv/
 .ecomvenv
 
+#Migrations (if you want to ignore them, but usually they should be committed)
+# migrations/
+authentication/migrations/
+store/migrations/
+transactions/migrations/
+users/migrations/
+
+
 # Byte-compiled / packaged
 *.so
 *.dylib
