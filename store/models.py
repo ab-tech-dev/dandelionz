@@ -238,10 +238,30 @@ class CartItem(models.Model):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
+    selected_variants = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Selected variant values for this cart line (e.g., {'color': 'red', 'size': 'M'})"
+    )
+    variant_signature = models.CharField(
+        max_length=255,
+        default='',
+        blank=True,
+        db_index=True,
+        help_text="Normalized signature of selected variants for uniqueness"
+    )
 
     class Meta:
-        # Prevent duplicate products in same cart
-        unique_together = ('cart', 'product')
+        # Prevent duplicate lines with the same product + selected variants
+        unique_together = ('cart', 'product', 'variant_signature')
+
+    def save(self, *args, **kwargs):
+        variants = self.selected_variants or {}
+        if not isinstance(variants, dict):
+            variants = {}
+        self.selected_variants = variants
+        self.variant_signature = json.dumps(variants, sort_keys=True, separators=(',', ':'))
+        super().save(*args, **kwargs)
 
     @property
     def subtotal(self):

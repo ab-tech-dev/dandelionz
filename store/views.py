@@ -1,4 +1,5 @@
 import logging
+import json
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
@@ -171,33 +172,74 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
     permission_classes = [IsAuthenticated, IsAdminOrVendor]
     serializer_class = CreateProductSerializer
 
-    def perform_create(self, serializer):
-        # Extract vendor from authenticated user
+    def _resolve_store_for_creation(self):
+        """
+        Resolve the Vendor store that will own the new product.
+        - Vendors: use their vendor profile.
+        - Admins: allow creation even without vendor setup by creating/fetching
+          a lightweight vendor profile bound to the admin account.
+        """
+        from users.models import Vendor
         from users.services.profile_resolver import ProfileResolver
+
+        user = self.request.user
+        is_admin_user = bool(
+            user.is_admin
+            or user.is_business_admin
+            or user.is_staff
+            or user.is_superuser
+            or hasattr(user, 'business_admin_profile')
+        )
+
+        if is_admin_user:
+            vendor_profile = getattr(user, 'vendor_profile', None)
+            if vendor_profile:
+                return vendor_profile, True
+
+            default_store_name = (
+                user.full_name.strip()
+                if getattr(user, 'full_name', None) and user.full_name.strip()
+                else f"{user.email.split('@')[0]}'s Store"
+            )
+            vendor_profile, _ = Vendor.objects.get_or_create(
+                user=user,
+                defaults={
+                    "store_name": default_store_name,
+                    "is_verified_vendor": False,
+                }
+            )
+            return vendor_profile, True
+
+        return ProfileResolver.resolve_vendor(user), False
+
+    def perform_create(self, serializer):
+        # Extract store owner profile from authenticated user
         from authentication.core.exceptions import MissingAddressException
-        vendor = ProfileResolver.resolve_vendor(self.request.user)
+        vendor, is_admin_user = self._resolve_store_for_creation()
 
         # Check if vendor exists
         if vendor is None:
             raise serializers.ValidationError("You are not registered as a vendor.")
 
-        # Check vendor verification status
-        if not vendor.is_verified_vendor:
-            raise serializers.ValidationError(
-                "Your vendor account is not verified. Please complete verification before adding products."
-            )
+        # Only enforce vendor setup checks for non-admin users
+        if not is_admin_user:
+            # Check vendor verification status
+            if not vendor.is_verified_vendor:
+                raise serializers.ValidationError(
+                    "Your vendor account is not verified. Please complete verification before adding products."
+                )
 
-        # Check vendor has address with coordinates
-        # Return 400 Bad Request with error code MISSING_ADDRESS
-        if not vendor.store_latitude or not vendor.store_longitude:
-            logger.warning(
-                f"Product creation blocked: Vendor {vendor.user.email} missing store coordinates. "
-                f"Latitude: {vendor.store_latitude}, Longitude: {vendor.store_longitude}"
-            )
-            raise MissingAddressException(
-                detail="You must update your store address with coordinates before you can upload products. "
-                       "Please go to your vendor profile and set your store location."
-            )
+            # Check vendor has address with coordinates
+            # Return 400 Bad Request with error code MISSING_ADDRESS
+            if not vendor.store_latitude or not vendor.store_longitude:
+                logger.warning(
+                    f"Product creation blocked: Vendor {vendor.user.email} missing store coordinates. "
+                    f"Latitude: {vendor.store_latitude}, Longitude: {vendor.store_longitude}"
+                )
+                raise MissingAddressException(
+                    detail="You must update your store address with coordinates before you can upload products. "
+                           "Please go to your vendor profile and set your store location."
+                )
 
         images_data = serializer.validated_data.get('images_data', [])
         video_data = serializer.validated_data.get('video_data')
@@ -517,6 +559,46 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = CartItemSerializer
 
+    @staticmethod
+    def _parse_selected_variants(raw_value):
+        if raw_value in (None, "", {}):
+            return {}
+        if isinstance(raw_value, dict):
+            return raw_value
+        if isinstance(raw_value, str):
+            try:
+                parsed = json.loads(raw_value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                raise serializers.ValidationError("selected_variants must be valid JSON")
+            if not isinstance(parsed, dict):
+                raise serializers.ValidationError("selected_variants must be an object")
+            return parsed
+        raise serializers.ValidationError("selected_variants must be an object")
+
+    @staticmethod
+    def _validate_selected_variants(product, selected_variants):
+        product_variants = product.variants or {}
+        if not selected_variants:
+            return
+
+        if not isinstance(product_variants, dict) or not product_variants:
+            raise serializers.ValidationError("This product does not support variant selection")
+
+        for key, value in selected_variants.items():
+            if key not in product_variants:
+                raise serializers.ValidationError({key: "Invalid variant key for this product"})
+
+            allowed_values = product_variants.get(key) or []
+            if not isinstance(allowed_values, list):
+                allowed_values = [allowed_values]
+
+            if isinstance(value, list):
+                invalid = [v for v in value if v not in allowed_values]
+                if invalid:
+                    raise serializers.ValidationError({key: f"Invalid variant value(s): {invalid}"})
+            elif value not in allowed_values:
+                raise serializers.ValidationError({key: f"Invalid variant value: {value}"})
+
     def post(self, request):
         try:
             slug = request.data.get('slug')
@@ -532,9 +614,17 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
                 return Response(standardized_response(success=False, error="Quantity must be at least 1"), status=400)
             
             product = get_object_or_404(Product, slug=slug)
+            selected_variants = self._parse_selected_variants(request.data.get('selected_variants'))
+            self._validate_selected_variants(product, selected_variants)
 
             cart, _ = Cart.objects.get_or_create(customer=request.user)
-            cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product)
+            signature = json.dumps(selected_variants, sort_keys=True, separators=(',', ':'))
+            cart_item, created = CartItem.objects.get_or_create(
+                cart=cart,
+                product=product,
+                variant_signature=signature,
+                defaults={'selected_variants': selected_variants}
+            )
 
             if not created:
                 cart_item.quantity += quantity
@@ -581,8 +671,15 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
                 return Response(standardized_response(success=False, error="Quantity must be 0 or a positive integer"), status=400)
 
             product = get_object_or_404(Product, slug=slug)
+            selected_variants = self._parse_selected_variants(request.data.get('selected_variants'))
+            self._validate_selected_variants(product, selected_variants)
             cart, _ = Cart.objects.get_or_create(customer=request.user)
-            cart_item = CartItem.objects.filter(cart=cart, product=product).first()
+            signature = json.dumps(selected_variants, sort_keys=True, separators=(',', ':'))
+            cart_item = CartItem.objects.filter(
+                cart=cart,
+                product=product,
+                variant_signature=signature
+            ).first()
 
             # Remove item when quantity is zero
             if quantity == 0:
@@ -593,7 +690,12 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
 
             # Create or update item when quantity > 0
             if not cart_item:
-                cart_item = CartItem.objects.create(cart=cart, product=product, quantity=quantity)
+                cart_item = CartItem.objects.create(
+                    cart=cart,
+                    product=product,
+                    quantity=quantity,
+                    selected_variants=selected_variants
+                )
                 serializer = self.get_serializer(cart_item)
                 return Response(standardized_response(data=serializer.data, message="Item added to cart"), status=201)
 
@@ -622,8 +724,22 @@ class RemoveFromCartView(BaseAPIView):
     def delete(self, request, slug):
         cart = get_object_or_404(Cart, customer=request.user)
         product = get_object_or_404(Product, slug=slug)
-        item = get_object_or_404(CartItem, cart=cart, product=product)
-        item.delete()
+
+        raw_variants = request.query_params.get('selected_variants')
+        if raw_variants is None and hasattr(request, 'data'):
+            raw_variants = request.data.get('selected_variants')
+
+        if raw_variants is not None:
+            selected_variants = AddToCartView._parse_selected_variants(raw_variants)
+            signature = json.dumps(selected_variants, sort_keys=True, separators=(',', ':'))
+            item = get_object_or_404(CartItem, cart=cart, product=product, variant_signature=signature)
+            item.delete()
+        else:
+            # Backward-compatible behavior: remove all variant lines for the product
+            deleted, _ = CartItem.objects.filter(cart=cart, product=product).delete()
+            if deleted == 0:
+                return Response(standardized_response(success=False, error="Item not found in cart"), status=404)
+
         return Response(standardized_response(message="Item removed from cart"))
 
 

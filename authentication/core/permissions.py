@@ -66,7 +66,11 @@ class IsAdminOrVendor(BasePermission):
     Access allowed if user is ADMIN or VENDOR
     """
     def has_permission(self, request, view):
-        return request.user.is_authenticated and (request.user.is_admin or request.user.is_vendor)
+        return request.user.is_authenticated and (
+            request.user.is_admin
+            or request.user.is_business_admin
+            or request.user.is_vendor
+        )
 
 
 class IsAdminOrCustomer(BasePermission):

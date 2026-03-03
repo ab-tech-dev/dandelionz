@@ -110,6 +110,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
+    "https://localhost:3000"
 ]
 
 CORS_ALLOW_ALL_ORIGINS = False
@@ -130,6 +131,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
+    "https://localhost:3000"
 ]
 
 ROOT_URLCONF = 'e_commerce_api.urls'
