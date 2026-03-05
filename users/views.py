@@ -3728,8 +3728,31 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
     @swagger_auto_schema(
         operation_id="admin_analytics_overview",
         operation_summary="Admin Analytics Overview",
-        operation_description="Get platform-wide analytics including total users, vendors, orders, and products.",
+        operation_description="Get platform-wide analytics including revenue, orders, and vendors. Supports period filters: weekly, monthly, annual, or custom date range.",
         tags=["Analytics"],
+        manual_parameters=[
+            openapi.Parameter(
+                'period',
+                openapi.IN_QUERY,
+                description='Analytics period: weekly, monthly, annual, custom',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'start_date',
+                openapi.IN_QUERY,
+                description='Required when period=custom. Format: YYYY-MM-DD',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'end_date',
+                openapi.IN_QUERY,
+                description='Required when period=custom. Format: YYYY-MM-DD',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+        ],
         responses={
             200: openapi.Response(
                 "Analytics data retrieved successfully",
@@ -3745,26 +3768,38 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        from authentication.models import CustomUser
         from users.models import Vendor
         from decimal import Decimal
+        from django.db.models import Q
+        
+        date_filter, error_response = self._resolve_date_filter(request)
+        if error_response:
+            return error_response
+        
+        filtered_orders = self._filter_orders_by_date(Order.objects.all(), date_filter)
         
         # Count total vendors
         total_vendors = Vendor.objects.count()
         
         # Count total orders
-        total_orders = Order.objects.count()
+        total_orders = filtered_orders.count()
         
         # Count pending orders (not delivered or canceled)
-        pending_orders = Order.objects.exclude(
+        pending_orders = filtered_orders.exclude(
             status__in=[Order.Status.DELIVERED, Order.Status.CANCELED, Order.Status.RETURNED]
         ).count()
         
-        # Calculate total revenue from delivered and paid orders
-        delivered_paid_orders = Order.objects.filter(
+        # Calculate total revenue from delivered and paid orders in selected period.
+        delivered_paid_orders = filtered_orders.filter(
             status=Order.Status.DELIVERED,
             payment_status='PAID'
         )
+        if date_filter:
+            delivered_paid_orders = delivered_paid_orders.filter(
+                Q(delivered_at__range=[date_filter["start"], date_filter["end"]]) |
+                Q(delivered_at__isnull=True, ordered_at__range=[date_filter["start"], date_filter["end"]])
+            )
+
         total_revenue = Decimal('0.00')
         for order in delivered_paid_orders:
             total_revenue += order.total_price
@@ -3782,13 +3817,34 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
     @swagger_auto_schema(
         operation_id="admin_analytics_detailed",
         operation_summary="Admin Detailed Analytics",
-        operation_description="Get detailed admin analytics including sales chart data and order status breakdown.",
+        operation_description="Get detailed admin analytics including sales chart data and order status breakdown. Supports period filters: weekly, monthly, annual, or custom date range.",
         tags=["Analytics"],
         manual_parameters=[
             openapi.Parameter(
                 'sales_period',
                 openapi.IN_QUERY,
-                description='Sales period: daily, weekly, or annually (default: annually)',
+                description='Legacy sales period: daily, weekly, annually (maps to weekly/annual)',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'period',
+                openapi.IN_QUERY,
+                description='Analytics period: weekly, monthly, annual, custom',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'start_date',
+                openapi.IN_QUERY,
+                description='Required when period=custom. Format: YYYY-MM-DD',
+                type=openapi.TYPE_STRING,
+                required=False,
+            ),
+            openapi.Parameter(
+                'end_date',
+                openapi.IN_QUERY,
+                description='Required when period=custom. Format: YYYY-MM-DD',
                 type=openapi.TYPE_STRING,
                 required=False,
             )
@@ -3812,37 +3868,45 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         from authentication.models import CustomUser
         from users.models import Vendor
         from decimal import Decimal
-        from django.db.models import Sum, Q
-        from django.utils import timezone
-        from datetime import timedelta
+        from django.db.models import Q
         
-        sales_period = request.query_params.get('sales_period', 'annually')
+        date_filter, error_response = self._resolve_date_filter(request)
+        if error_response:
+            return error_response
+
+        filtered_orders = self._filter_orders_by_date(Order.objects.all(), date_filter)
         
         # Get total counts
         total_users = CustomUser.objects.filter(role='CUSTOMER').count()
         total_vendors = Vendor.objects.count()
-        total_orders = Order.objects.count()
+        total_orders = filtered_orders.count()
         
-        # Calculate total sales from delivered and paid orders
-        delivered_paid_orders = Order.objects.filter(
+        # Calculate total sales from delivered and paid orders in selected period.
+        delivered_paid_orders = filtered_orders.filter(
             status=Order.Status.DELIVERED,
             payment_status='PAID'
         )
+        if date_filter:
+            delivered_paid_orders = delivered_paid_orders.filter(
+                Q(delivered_at__range=[date_filter["start"], date_filter["end"]]) |
+                Q(delivered_at__isnull=True, ordered_at__range=[date_filter["start"], date_filter["end"]])
+            )
+
         total_sales = Decimal('0.00')
         for order in delivered_paid_orders:
             total_sales += order.total_price
         
-        # Generate sales chart data based on sales_period
-        sales_chart_data = self._generate_sales_chart(sales_period)
+        # Generate sales chart data based on selected period.
+        sales_chart_data = self._generate_sales_chart(date_filter)
         
         # Get order status breakdown
         order_stats = {
-            "completed": Order.objects.filter(status=Order.Status.DELIVERED).count(),
-            "pending": Order.objects.exclude(
+            "completed": filtered_orders.filter(status=Order.Status.DELIVERED).count(),
+            "pending": filtered_orders.exclude(
                 status__in=[Order.Status.DELIVERED, Order.Status.CANCELED, Order.Status.RETURNED]
             ).count(),
-            "cancelled": Order.objects.filter(status=Order.Status.CANCELED).count(),
-            "returned": Order.objects.filter(status=Order.Status.RETURNED).count(),
+            "cancelled": filtered_orders.filter(status=Order.Status.CANCELED).count(),
+            "returned": filtered_orders.filter(status=Order.Status.RETURNED).count(),
         }
         
         data = {
@@ -3857,8 +3921,97 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         serializer = AdminDetailedAnalyticsSerializer(data)
         return Response({"success": True, "data": serializer.data})
 
-    def _generate_sales_chart(self, period):
-        """Generate sales chart data based on the specified period"""
+    def _resolve_date_filter(self, request):
+        """
+        Resolve and validate analytics period/date range.
+        Supported periods: weekly, monthly, annual, custom.
+        """
+        from datetime import datetime, timedelta
+        from django.utils import timezone
+
+        legacy_period = request.query_params.get('sales_period', '').strip().lower()
+        period = request.query_params.get('period', '').strip().lower()
+
+        if not period:
+            if legacy_period == 'annually':
+                period = 'annual'
+            elif legacy_period == 'daily':
+                period = 'weekly'
+            elif legacy_period in {'weekly', 'monthly', 'annual', 'custom'}:
+                period = legacy_period
+            else:
+                period = 'annual'
+
+        if period == 'annually' or period == 'anually':
+            period = 'annual'
+
+        if period not in {'weekly', 'monthly', 'annual', 'custom'}:
+            return None, Response(
+                {
+                    "message": "Invalid period. Use weekly, monthly, annual, or custom."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        now = timezone.now()
+
+        if period == 'weekly':
+            start = now - timedelta(days=7)
+            return {"period": period, "start": start, "end": now}, None
+
+        if period == 'monthly':
+            start = now - timedelta(days=30)
+            return {"period": period, "start": start, "end": now}, None
+
+        if period == 'annual':
+            start = now - timedelta(days=365)
+            return {"period": period, "start": start, "end": now}, None
+
+        start_date_raw = request.query_params.get('start_date')
+        end_date_raw = request.query_params.get('end_date')
+
+        if not start_date_raw or not end_date_raw:
+            return None, Response(
+                {
+                    "message": "start_date and end_date are required when period=custom (format: YYYY-MM-DD)."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            start_date = datetime.strptime(start_date_raw, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_raw, "%Y-%m-%d")
+        except ValueError:
+            return None, Response(
+                {
+                    "message": "Invalid date format. Use YYYY-MM-DD for start_date and end_date."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if start_date > end_date:
+            return None, Response(
+                {
+                    "message": "start_date cannot be later than end_date."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        start = timezone.make_aware(start_date.replace(hour=0, minute=0, second=0, microsecond=0))
+        end = timezone.make_aware(end_date.replace(hour=23, minute=59, second=59, microsecond=999999))
+
+        return {"period": period, "start": start, "end": end}, None
+
+    def _filter_orders_by_date(self, queryset, date_filter):
+        """Filter orders by ordered_at within the selected date range."""
+        if not date_filter:
+            return queryset
+        return queryset.filter(
+            ordered_at__range=[date_filter["start"], date_filter["end"]]
+        )
+
+    def _generate_sales_chart(self, date_filter):
+        """Generate sales chart data for the selected period/date range."""
         from decimal import Decimal
         from django.utils import timezone
         from datetime import timedelta
@@ -3866,9 +4019,12 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
         
         now = timezone.now()
         chart_data = []
-        
-        if period == 'daily':
-            # Last 7 days
+        period = date_filter["period"] if date_filter else "annual"
+        start_date = date_filter["start"] if date_filter else now - timedelta(days=365)
+        end_date = date_filter["end"] if date_filter else now
+
+        if period == 'weekly':
+            # Last 7 days (daily buckets).
             for i in range(6, -1, -1):
                 day = now - timedelta(days=i)
                 start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3885,39 +4041,74 @@ class AdminAnalyticsViewSet(AdminBaseViewSet):
                     "sales": sales
                 })
         
-        elif period == 'weekly':
-            # Last 12 weeks
-            for i in range(11, -1, -1):
-                week_start = now - timedelta(weeks=i+1)
-                week_end = week_start + timedelta(weeks=1)
+        elif period == 'monthly':
+            # Last 30 days (daily buckets).
+            for i in range(29, -1, -1):
+                day = now - timedelta(days=i)
+                start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_of_day = day.replace(hour=23, minute=59, second=59, microsecond=999999)
                 
                 sales = Order.objects.filter(
                     status=Order.Status.DELIVERED,
                     payment_status='PAID',
-                    delivered_at__range=[week_start, week_end]
+                    delivered_at__range=[start_of_day, end_of_day]
                 ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
                 
-                # Format as "Week 1" or date range
                 chart_data.append({
-                    "period": f"Week of {week_start.strftime('%Y-%m-%d')}",
+                    "period": day.strftime('%Y-%m-%d'),
                     "sales": sales
                 })
-        
-        else:  # annually (default)
-            # Last 3 years
-            for i in range(2, -1, -1):
-                year = now.year - i
-                year_start = timezone.make_aware(timezone.datetime(year, 1, 1))
-                year_end = timezone.make_aware(timezone.datetime(year, 12, 31, 23, 59, 59))
+
+        elif period == 'custom':
+            # Custom range (daily buckets).
+            day_count = (end_date.date() - start_date.date()).days
+            for i in range(day_count + 1):
+                day = start_date + timedelta(days=i)
+                start_of_day = day.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_of_day = day.replace(hour=23, minute=59, second=59, microsecond=999999)
                 
                 sales = Order.objects.filter(
                     status=Order.Status.DELIVERED,
                     payment_status='PAID',
-                    delivered_at__range=[year_start, year_end]
+                    delivered_at__range=[start_of_day, end_of_day]
                 ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
                 
                 chart_data.append({
-                    "period": str(year),
+                    "period": day.strftime('%Y-%m-%d'),
+                    "sales": sales
+                })
+
+        else:  # annual
+            # Last 12 months (monthly buckets).
+            for i in range(11, -1, -1):
+                month = now.month - i
+                year = now.year
+                while month <= 0:
+                    month += 12
+                    year -= 1
+                month_start = now.replace(
+                    year=year,
+                    month=month,
+                    day=1,
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+                if month_start.month == 12:
+                    next_month = month_start.replace(year=month_start.year + 1, month=1, day=1)
+                else:
+                    next_month = month_start.replace(month=month_start.month + 1, day=1)
+                month_end = next_month - timedelta(microseconds=1)
+
+                sales = Order.objects.filter(
+                    status=Order.Status.DELIVERED,
+                    payment_status='PAID',
+                    delivered_at__range=[month_start, month_end]
+                ).aggregate(Sum('total_price'))['total_price__sum'] or Decimal('0.00')
+
+                chart_data.append({
+                    "period": month_start.strftime('%Y-%m'),
                     "sales": sales
                 })
         
