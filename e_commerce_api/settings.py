@@ -110,7 +110,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
-    "https://localhost:3000",
+    "http://localhost:3000",
     "https://dandelionz.vercel.app"
 ]
 
@@ -132,7 +132,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://dandelionz.com.ng",
     "https://app.dandelionz.com.ng",
     "https://api.dandelionz.com.ng",
-    "https://localhost:3000",
+    "http://localhost:3000",
     "https://dandelionz.vercel.app"
 ]
 
