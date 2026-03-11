@@ -603,7 +603,8 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
             return
 
         if not isinstance(product_variants, dict) or not product_variants:
-            raise serializers.ValidationError("This product does not support variant selection")
+            # Ignore variants for products that don't define them
+            return
 
         for key, value in selected_variants.items():
             if key not in product_variants:
