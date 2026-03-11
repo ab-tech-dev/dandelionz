@@ -40,7 +40,8 @@ def _send_notification_safely(recipient, title, message):
         logger.warning("Cannot create notification: recipient is None")
         return
     
-    if not hasattr(recipient, 'id') or not recipient.id:
+    recipient_pk = getattr(recipient, "pk", None)
+    if not recipient_pk:
         logger.warning("Cannot create notification: recipient is not saved to database")
         return
     
@@ -88,7 +89,57 @@ def product_approval_notification(sender, instance, created, **kwargs):
         
         if created:
             # NEW PRODUCT CREATED
-            logger.info(f"New product '{instance.name}' created by vendor {instance.store.user} - Status: pending")
+            if instance.approval_status == 'approved':
+                logger.info(
+                    f"New product '{instance.name}' created by vendor {instance.store.user} - Status: approved"
+                )
+                try:
+                    vendor = instance.store
+                    if not vendor or not vendor.pk:
+                        logger.error(f"Invalid vendor for product {instance.name}")
+                        return
+
+                    vendor_user = vendor.user
+                    if not vendor_user:
+                        logger.error(f"Vendor {vendor.store_name} has no associated user")
+                        return
+
+                    vendor_user.refresh_from_db()
+
+                    _send_notification_safely(
+                        vendor_user,
+                        "Product Approved",
+                        f"Great news! Your product '{instance.name}' has been approved and is now "
+                        f"visible to customers."
+                    )
+                    logger.info(f"Notification sent to vendor {vendor_user.email}: Product approved")
+                except AttributeError as e:
+                    logger.error(f"Missing required product/vendor attributes: {str(e)}")
+                except Exception as e:
+                    logger.error(f"Error sending approval notification: {str(e)}", exc_info=True)
+                return
+
+            if instance.publish_status != 'submitted':
+                logger.info(
+                    f"New product '{instance.name}' created as draft by vendor {instance.store.user}"
+                )
+                return
+
+            # Only notify for vendor-submitted products (not admin-created).
+            vendor_user = instance.store.user
+            is_admin_creator = bool(
+                getattr(vendor_user, "is_admin", False)
+                or getattr(vendor_user, "is_business_admin", False)
+                or getattr(vendor_user, "is_staff", False)
+                or getattr(vendor_user, "is_superuser", False)
+            )
+            if is_admin_creator:
+                logger.info(
+                    f"New product '{instance.name}' created by admin {vendor_user} - Skipping pending notifications"
+                )
+                return
+
+            logger.info(f"New product '{instance.name}' created by vendor {vendor_user} - Status: pending")
             
             try:
                 # Refresh vendor from database to ensure related user is properly loaded

@@ -243,9 +243,30 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
 
         images_data = serializer.validated_data.get('images_data', [])
         video_data = serializer.validated_data.get('video_data')
+        publish_status = serializer.validated_data.get('publish_status') or 'draft'
 
-        # Save the product as draft
-        product = serializer.save(store=vendor, publish_status='draft')
+        # If the product is submitted on create, enforce required fields
+        if publish_status == 'submitted':
+            required_fields = ['name', 'description', 'category', 'price', 'stock']
+            missing_fields = []
+            for field in required_fields:
+                value = serializer.validated_data.get(field)
+                if value is None or value == '':
+                    missing_fields.append(field)
+            if missing_fields:
+                raise serializers.ValidationError(
+                    f"Cannot submit product. Missing required fields: {', '.join(missing_fields)}"
+                )
+
+        # Save the product as draft or submitted based on payload.
+        approval_kwargs = {}
+        if is_admin_user and publish_status == 'submitted':
+            approval_kwargs = {
+                "approval_status": "approved",
+                "approved_by": self.request.user,
+                "approval_date": timezone.now(),
+            }
+        product = serializer.save(store=vendor, publish_status=publish_status, **approval_kwargs)
         
         # Handle images
         self._create_product_images(product, images_data, serializer.validated_data.get('variants'))
@@ -1363,7 +1384,7 @@ class SubmitDraftProductView(BaseAPIView):
     Changes publish_status from 'draft' to 'submitted'.
     Only the vendor who created the product can submit it.
     """
-    permission_classes = [IsAuthenticated, IsVendor]
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
 
     def post(self, request, slug):
         try:
@@ -1374,15 +1395,23 @@ class SubmitDraftProductView(BaseAPIView):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check if user is the vendor who owns this product
+        # Check if user is the vendor who owns this product (admins can bypass)
         from users.services.profile_resolver import ProfileResolver
-        vendor = ProfileResolver.resolve_vendor(request.user)
-        
-        if vendor is None or product.store != vendor:
-            return Response(
-                standardized_response(success=False, error="You don't have permission to submit this product"),
-                status=status.HTTP_403_FORBIDDEN
-            )
+        user = request.user
+        is_admin_user = bool(
+            user.is_admin
+            or user.is_business_admin
+            or user.is_staff
+            or user.is_superuser
+            or hasattr(user, 'business_admin_profile')
+        )
+        if not is_admin_user:
+            vendor = ProfileResolver.resolve_vendor(user)
+            if vendor is None or product.store != vendor:
+                return Response(
+                    standardized_response(success=False, error="You don't have permission to submit this product"),
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         # Check if product is in draft status
         if product.publish_status != 'draft':
@@ -1414,7 +1443,12 @@ class SubmitDraftProductView(BaseAPIView):
 
         # Submit the product
         product.publish_status = 'submitted'
-        product.approval_status = 'pending'  # Reset to pending if it was rejected before
+        if is_admin_user:
+            product.approval_status = 'approved'
+            product.approved_by = user
+            product.approval_date = timezone.now()
+        else:
+            product.approval_status = 'pending'  # Reset to pending if it was rejected before
         product.save()
 
         serializer = ProductSerializer(product)
