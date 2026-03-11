@@ -89,6 +89,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
 
+    'e_commerce_api.middleware.BlockSuspiciousRequestsMiddleware',
+
     'corsheaders.middleware.CorsMiddleware',
 
     'whitenoise.middleware.WhiteNoiseMiddleware',
@@ -395,6 +397,51 @@ LOGGING = {
         },
     },
 }
+
+# Block common probing paths at the app layer (override in env-specific settings if needed).
+BLOCKED_PATH_PREFIXES = [
+    "/.env",
+    "/.git",
+    "/.hg",
+    "/.svn",
+    "/vendor/phpunit",
+    "/phpunit",
+    "/lib/phpunit",
+    "/laravel/vendor/phpunit",
+    "/www/vendor/phpunit",
+    "/yii/vendor/phpunit",
+    "/zend/vendor/phpunit",
+    "/tests/vendor/phpunit",
+    "/test/vendor/phpunit",
+    "/testing/vendor/phpunit",
+    "/api/vendor/phpunit",
+    "/demo/vendor/phpunit",
+    "/cms/vendor/phpunit",
+    "/crm/vendor/phpunit",
+    "/backup/vendor/phpunit",
+    "/blog/vendor/phpunit",
+    "/workspace/drupal/vendor/phpunit",
+    "/panel/vendor/phpunit",
+    "/public/vendor/phpunit",
+    "/apps/vendor/phpunit",
+    "/app/vendor/phpunit",
+    "/containers/json",
+    "/actuator",
+    "/developmentserver",
+    "/owa",
+    "/guacamole",
+]
+
+BLOCKED_PATH_REGEXES = [
+    r"/phpunit/.*/eval-stdin\.php$",
+    r"/vendor/.*phpunit.*/eval-stdin\.php$",
+    r"/lib/.*phpunit.*/eval-stdin\.php$",
+    r"/.*phpunit.*/eval-stdin\.php$",
+    r"/\.env(\.|$)",
+    r"/\.git/.*",
+]
+
+BLOCKED_METHODS = ["TRACE", "TRACK", "CONNECT"]
 
 # Paystack
 PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
