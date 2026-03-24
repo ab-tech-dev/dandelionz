@@ -495,50 +495,50 @@ class ProductDeleteView(generics.DestroyAPIView):
     lookup_field = "slug"
     permission_classes = [IsAuthenticated, IsAdminOrVendor]
 
+    def _is_admin_user(self, user):
+        return (
+            user.is_authenticated and (
+                user.is_superuser
+                or user.is_staff
+                or user.is_admin
+                or user.is_business_admin
+                or hasattr(user, 'business_admin_profile')
+            )
+        )
+
+    def _is_vendor_owner(self, user, instance):
+        if not user.is_authenticated or not user.is_vendor:
+            return False
+
+        vendor_profile = getattr(user, 'vendor_profile', None)
+        return vendor_profile is not None and instance.store == vendor_profile
+
+    def get_object(self):
+        instance = super().get_object()
+
+        if self._is_admin_user(self.request.user):
+            return instance
+
+        if self._is_vendor_owner(self.request.user, instance):
+            return instance
+
+        raise PermissionDenied("You are not allowed to delete this product.")
+
     def delete(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        # Serialize before deletion
+        # Keep data for response after deletion
         serialized = ProductSerializer(instance).data
 
-        # Perform vendor/admin validation + deletion
-        response = self.perform_destroy(instance)
+        instance.delete()
 
-        # If perform_destroy returned an error Response, return it directly
-        if isinstance(response, Response):
-            return response
-
-        # Successful deletion
         return Response(
-            {
-                "status": "success",
-                "message": "Product deleted successfully.",
-                "data": serialized,
-            },
+            standardized_response(
+                data=serialized,
+                message="Product deleted successfully"
+            ),
             status=status.HTTP_200_OK
         )
-
-    def perform_destroy(self, instance):
-        user = self.request.user
-
-        # Admin can delete anything
-        if user.is_staff or user.is_superuser:
-            instance.delete()
-            return
-
-        # Vendor must own the product — return serialized error response
-        if instance.vendor != user:
-            return Response(
-                {
-                    "status": "error",
-                    "message": "You are not allowed to delete this product.",
-                    "data": None,
-                },
-                status=status.HTTP_403_FORBIDDEN
-            )
-
-        # Vendor-owner can delete
-        instance.delete()
 
 
 # ======================================================

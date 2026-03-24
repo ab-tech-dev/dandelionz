@@ -359,6 +359,12 @@ class CreateProductSerializer(CloudinarySerializer):
         
         return value
 
+    def validate_discount(self, value):
+        """Ensure discount is between 0 and 100"""
+        if value is not None and (value < 0 or value > 100):
+            raise serializers.ValidationError("Discount must be between 0 and 100")
+        return value
+
     @staticmethod
     def _to_bool(value):
         if isinstance(value, bool):
