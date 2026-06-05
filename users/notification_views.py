@@ -75,6 +75,68 @@ class NotificationViewSet(viewsets.ModelViewSet):
             return NotificationMarkAsReadSerializer
         return NotificationDetailSerializer
 
+    @action(detail=False, methods=['post'], url_path='register-token')
+    def register_token(self, request):
+        """Register a push device token for the current user"""
+        try:
+            serializer = PushDeviceTokenSerializer(data=request.data)
+            if serializer.is_valid():
+                token = serializer.validated_data['token']
+                platform = serializer.validated_data['platform']
+                device_name = serializer.validated_data.get('device_name', '')
+
+                # Update or create token
+                PushDeviceToken.objects.update_or_create(
+                    token=token,
+                    defaults={
+                        'user': request.user,
+                        'platform': platform,
+                        'device_name': device_name,
+                        'is_active': True
+                    }
+                )
+                
+                # Also ensure push is enabled in preferences if they just registered a token
+                pref = NotificationService.get_or_create_preference(request.user)
+                if not pref.push_enabled:
+                    pref.push_enabled = True
+                    pref.save(update_fields=['push_enabled'])
+
+                return Response({
+                    'success': True,
+                    'message': 'Token registered successfully'
+                })
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error registering token: {str(e)}")
+            return Response(
+                {'error': 'Failed to register token'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['post'], url_path='unregister-token')
+    def unregister_token(self, request):
+        """Unregister a push device token"""
+        try:
+            token = request.data.get('token')
+            if not token:
+                return Response(
+                    {'error': 'token is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            PushDeviceToken.objects.filter(token=token, user=request.user).update(is_active=False)
+            return Response({
+                'success': True,
+                'message': 'Token unregistered successfully'
+            })
+        except Exception as e:
+            logger.error(f"Error unregistering token: {str(e)}")
+            return Response(
+                {'error': 'Failed to unregister token'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
     @action(detail=False, methods=['get'])
     def unread_count(self, request):
         """Get unread notification count"""

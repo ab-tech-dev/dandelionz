@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
-from .notification_models import Notification, NotificationType, NotificationPreference, NotificationLog
+from .notification_models import Notification, NotificationType, NotificationPreference, NotificationLog, PushDeviceToken
 
 User = get_user_model()
 
@@ -10,6 +10,16 @@ class NotificationTypeSerializer(serializers.ModelSerializer):
         model = NotificationType
         fields = ['id', 'name', 'display_name', 'description', 'icon', 'color', 'is_active']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class PushDeviceTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PushDeviceToken
+        fields = ['token', 'platform', 'device_name']
+        extra_kwargs = {
+            'token': {'required': True},
+            'platform': {'required': True}
+        }
 
 
 class NotificationListSerializer(serializers.ModelSerializer):

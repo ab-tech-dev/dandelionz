@@ -275,6 +275,22 @@ class NotificationPreferenceAdmin(admin.ModelAdmin):
     dnd_status.short_description = 'Do Not Disturb'
 
 
+@admin.register(PushDeviceToken)
+class PushDeviceTokenAdmin(admin.ModelAdmin):
+    list_display = ['user_email', 'token_short', 'platform', 'device_name', 'is_active', 'created_at']
+    list_filter = ['platform', 'is_active', 'created_at']
+    search_fields = ['user__email', 'token', 'device_name']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = 'User'
+    
+    def token_short(self, obj):
+        return obj.token[:30] + '...' if len(obj.token) > 30 else obj.token
+    token_short.short_description = 'Token'
+
+
 @admin.register(NotificationLog)
 class NotificationLogAdmin(admin.ModelAdmin):
     list_display = ['notification_title', 'event_type_badge', 'channel_badge', 'status_badge', 'created_at_short']
