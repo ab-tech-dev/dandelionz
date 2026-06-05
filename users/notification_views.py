@@ -9,13 +9,14 @@ from rest_framework.pagination import PageNumberPagination
 import logging
 
 from .notification_models import (
-    Notification, NotificationType, NotificationPreference
+    Notification, NotificationType, NotificationPreference, PushDeviceToken
 )
 from .notification_serializers import (
     NotificationListSerializer, NotificationDetailSerializer,
     NotificationCreateSerializer, NotificationBulkCreateSerializer,
     NotificationMarkAsReadSerializer, NotificationPreferenceSerializer,
-    NotificationStatsSerializer, NotificationTypeSerializer
+    NotificationStatsSerializer, NotificationTypeSerializer,
+    PushDeviceTokenSerializer
 )
 from .notification_service import NotificationService, BulkNotificationService
 
