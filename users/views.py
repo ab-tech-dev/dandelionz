@@ -4835,11 +4835,22 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         user = data.get('user')
         user_uuid = data.get('user_uuid')
         recipient_group = data.get('recipient_group')
+        recipient_type = data.get('recipient_type')
         is_draft = data.get('is_draft', False)
         scheduled_for = data.get('scheduled_for')
         send_websocket = data.get('send_websocket', True)
         send_email = data.get('send_email', True)
         send_push = data.get('send_push', False)
+
+        # Map recipient_type to recipient_group for compatibility
+        if not recipient_group and recipient_type:
+            mapping = {
+                'USERS': 'customer',
+                'VENDORS': 'vendor',
+                'ADMIN': 'admin',
+                'ALL': 'all'
+            }
+            recipient_group = mapping.get(recipient_type)
 
         # Resolve user if user_uuid provided
         if user is None and user_uuid:
@@ -5345,16 +5356,19 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
                 'bank_name': profile.bank_name or '',
                 'account_number': profile.account_number or '',
                 'account_name': profile.account_name or '',
+                'user': request.user,
             }
         except AdminPayoutProfile.DoesNotExist:
             data = {
                 'bank_name': '',
                 'account_number': '',
                 'account_name': '',
+                'user': request.user,
             }
-        
+
+        serializer = AdminPaymentSettingsSerializer(data)
         return Response(
-            {"success": True, "data": data},
+            {"success": True, "data": serializer.data},
             status=status.HTTP_200_OK,
         )
 
