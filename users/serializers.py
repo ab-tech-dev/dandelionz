@@ -448,6 +448,7 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
             'user',
             'user_uuid',
             'recipient_group',
+            'recipient_type',
             'notification_type',
             'title',
             'message',
@@ -1160,6 +1161,21 @@ class AdminPaymentSettingsSerializer(serializers.Serializer):
     bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
     account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    has_pin = serializers.SerializerMethodField(read_only=True)
+
+    def get_has_pin(self, obj):
+        try:
+            user = None
+            if isinstance(obj, dict) and 'user' in obj:
+                user = obj['user']
+            elif hasattr(obj, 'user'):
+                user = obj.user
+            
+            if user and hasattr(user, "payment_pin"):
+                return user.payment_pin is not None
+        except Exception:
+            pass
+        return False
 
 
 class AdminWithdrawalSerializer(serializers.Serializer):
@@ -1250,5 +1266,8 @@ class AccountClosureResponseSerializer(serializers.Serializer):
 
 class AccountClosureErrorSerializer(serializers.Serializer):
     """Response serializer for account closure errors"""
+    success = serializers.BooleanField()
+    error = serializers.CharField()
+ponse serializer for account closure errors"""
     success = serializers.BooleanField()
     error = serializers.CharField()
