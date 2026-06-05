@@ -11,6 +11,7 @@ ENV/
 env/
 .virtualenv/
 .ecomvenv
+.ecommvenv
 
 #Migrations (if you want to ignore them, but usually they should be committed)
 # migrations/

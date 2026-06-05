@@ -1268,6 +1268,4 @@ class AccountClosureErrorSerializer(serializers.Serializer):
     """Response serializer for account closure errors"""
     success = serializers.BooleanField()
     error = serializers.CharField()
-ponse serializer for account closure errors"""
-    success = serializers.BooleanField()
-    error = serializers.CharField()
+

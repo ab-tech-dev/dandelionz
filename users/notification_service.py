@@ -201,14 +201,106 @@ class NotificationService:
 
     @staticmethod
     def send_push_notification(notification: Notification) -> bool:
-        """Send notification via push (placeholder for FCM/APNs integration)"""
+        """Send notification via push using Expo Push API"""
         try:
-            # TODO: Implement push notification via FCM or APNs
-            # This is a placeholder for future implementation
-            logger.debug(f"Push notification {notification.id} would be sent here")
-            return False
+            if notification.is_draft:
+                return False
+
+            # Get user preferences
+            pref = NotificationService.get_or_create_preference(notification.user)
+            if not pref.push_enabled or not pref.is_notification_allowed(notification.category):
+                logger.debug(f"Push disabled or not allowed for user {notification.user.pk}")
+                return False
+
+            # Get active tokens for user
+            tokens = PushDeviceToken.objects.filter(
+                user=notification.user,
+                is_active=True
+            ).values_list('token', flat=True)
+
+            if not tokens:
+                logger.debug(f"No active push tokens found for user {notification.user.pk}")
+                return False
+
+            # Prepare Expo Push Payload
+            # We send notifications in batches to Expo (though here we do one by one for simplicity
+            # or could collect all tokens for this user)
+            expo_url = "https://exp.host/--/api/v2/push/send"
+            
+            # Map action_url to dandelionz:// scheme for mobile deep linking
+            deep_link_url = notification.action_url
+            if deep_link_url and not deep_link_url.startswith('dandelionz://'):
+                # Convert relative path /orders/123 to dandelionz://orders/123
+                path = deep_link_url.lstrip('/')
+                deep_link_url = f"dandelionz://{path}"
+
+            payload = []
+            for token in tokens:
+                payload.append({
+                    "to": token,
+                    "title": notification.title,
+                    "body": notification.message,
+                    "data": {
+                        "url": deep_link_url,
+                        "notification_id": str(notification.id),
+                        "category": notification.category
+                    },
+                    "sound": "default",
+                    "priority": notification.priority if notification.priority != 'urgent' else 'high',
+                    "badge": NotificationService.get_unread_count(notification.user)
+                })
+
+            if not payload:
+                return False
+
+            response = requests.post(
+                expo_url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    # Add Expo Access Token if configured in settings
+                    # "Authorization": f"Bearer {getattr(settings, 'EXPO_ACCESS_TOKEN', '')}"
+                },
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                # Update flags
+                notification.was_sent_push = True
+                notification.save(update_fields=['was_sent_push'])
+
+                # Log success
+                NotificationLog.objects.create(
+                    notification=notification,
+                    event_type='sent',
+                    channel='push',
+                    status='success',
+                    metadata={'response': response.json()}
+                )
+                
+                logger.info(f"Push notification {notification.id} sent to {len(tokens)} devices")
+                return True
+            else:
+                logger.error(f"Expo Push API error: {response.status_code} - {response.text}")
+                NotificationLog.objects.create(
+                    notification=notification,
+                    event_type='sent',
+                    channel='push',
+                    status='failed',
+                    error_message=f"Expo API error: {response.status_code}"
+                )
+                return False
+
         except Exception as e:
             logger.error(f"Error sending push notification: {str(e)}", exc_info=True)
+            NotificationLog.objects.create(
+                notification=notification,
+                event_type='sent',
+                channel='push',
+                status='failed',
+                error_message=str(e)
+            )
             return False
 
     @staticmethod

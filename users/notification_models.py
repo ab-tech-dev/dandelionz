@@ -227,7 +227,7 @@ class NotificationPreference(models.Model):
     # Channel preferences
     websocket_enabled = models.BooleanField(default=True, help_text="Real-time WebSocket notifications")
     email_enabled = models.BooleanField(default=True, help_text="Email notifications")
-    push_enabled = models.BooleanField(default=False, help_text="Push notifications")
+    push_enabled = models.BooleanField(default=True, help_text="Push notifications")
     
     # Frequency preferences
     email_frequency = models.CharField(
@@ -290,6 +290,40 @@ class NotificationPreference(models.Model):
                 return False
         
         return True
+
+
+class PushDeviceToken(models.Model):
+    """
+    Store Expo Push Tokens for mobile devices.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='push_tokens'
+    )
+    token = models.CharField(max_length=255, unique=True, help_text="ExponentPushToken[xxx]")
+    platform = models.CharField(
+        max_length=20,
+        choices=[('android', 'Android'), ('ios', 'iOS'), ('web', 'Web')],
+        default='android'
+    )
+    device_name = models.CharField(max_length=255, blank=True, null=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'push_device_tokens'
+        verbose_name = 'Push Device Token'
+        verbose_name_plural = 'Push Device Tokens'
+        indexes = [
+            models.Index(fields=['user', 'is_active']),
+            models.Index(fields=['token']),
+        ]
+
+    def __str__(self):
+        return f"{self.platform} token for {self.user.email}"
 
 
 class NotificationLog(models.Model):
