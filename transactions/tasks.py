@@ -339,7 +339,8 @@ def notify_stakeholders_order_paid(self, order_id):
                 order.customer,
                 "Payment Confirmed",
                 f"Your payment for order {order.order_id} was successful. Your order is now being prepared.",
-                order_id=order.order_id
+                order_id=order.order_id,
+                action_url=f"/receipt?id={order.order_id}"
             )
         except Exception as e:
             logger.error(

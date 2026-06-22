@@ -128,43 +128,59 @@ class Order(models.Model):
         return self.status == self.Status.DELIVERED
 
     def calculate_and_save_delivery_fee(self):
-        """Calculate and save delivery fee for this order"""
-        from .delivery_service import DeliveryFeeCalculator
-        from django.conf import settings
+        """
+        Calculate and save delivery fee for this order.
+        UPDATED: Delivery is currently set to FREE for all orders.
+        Distance-based calculation logic is commented out below.
+        """
+        # Set all orders to free delivery
+        self.delivery_fee = Decimal('0.00')
+        self.delivery_distance = '0.00 km'
+        self.delivery_duration = '0 mins'
+        self.delivery_distance_miles = 0.0
+        self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+        return True
 
-        def has_coords(lat, lng):
-            return lat is not None and lng is not None
-        
-        min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
-        if self.subtotal <= min_total:
-            self.delivery_fee = Decimal('0.00')
-            self.delivery_distance = ''
-            self.delivery_duration = ''
-            self.delivery_distance_miles = None
-            self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
-            return False
+        # =========================================================================
+        # COMMENTED OUT: Original distance-based calculation logic
+        # To restore, remove the 'return True' above and uncomment this block.
+        # =========================================================================
+        # from .delivery_service import DeliveryFeeCalculator
+        # from django.conf import settings
 
-        # Validate required coordinates
-        if not (has_coords(self.restaurant_lat, self.restaurant_lng) and has_coords(self.customer_lat, self.customer_lng)):
-            raise ValueError("All coordinate fields are required for delivery fee calculation")
+        # def has_coords(lat, lng):
+        #     return lat is not None and lng is not None
         
-        calculator = DeliveryFeeCalculator()
-        result = calculator.calculate_fee(
-            origin_lat=self.restaurant_lat,
-            origin_lng=self.restaurant_lng,
-            dest_lat=self.customer_lat,
-            dest_lng=self.customer_lng
-        )
+        # min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+        # if self.subtotal <= min_total:
+        #     self.delivery_fee = Decimal('0.00')
+        #     self.delivery_distance = ''
+        #     self.delivery_duration = ''
+        #     self.delivery_distance_miles = None
+        #     self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+        #     return False
+
+        # # Validate required coordinates
+        # if not (has_coords(self.restaurant_lat, self.restaurant_lng) and has_coords(self.customer_lat, self.customer_lng)):
+        #     raise ValueError("All coordinate fields are required for delivery fee calculation")
         
-        if result['success']:
-            self.delivery_fee = Decimal(str(result['fee']))
-            self.delivery_distance = result['distance']
-            self.delivery_duration = result['duration']
-            self.delivery_distance_miles = result['distance_miles']
-            self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
-            return True
-        else:
-            raise ValueError(f"Delivery fee calculation failed: {result.get('error')}")
+        # calculator = DeliveryFeeCalculator()
+        # result = calculator.calculate_fee(
+        #     origin_lat=self.restaurant_lat,
+        #     origin_lng=self.restaurant_lng,
+        #     dest_lat=self.customer_lat,
+        #     dest_lng=self.customer_lng
+        # )
+        
+        # if result['success']:
+        #     self.delivery_fee = Decimal(str(result['fee']))
+        #     self.delivery_distance = result['distance']
+        #     self.delivery_duration = result['duration']
+        #     self.delivery_distance_miles = result['distance_miles']
+        #     self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+        #     return True
+        # else:
+        #     raise ValueError(f"Delivery fee calculation failed: {result.get('error')}")
 
     def is_within_delivery_radius(self):
         """Check if order is within delivery radius"""

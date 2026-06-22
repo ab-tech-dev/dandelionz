@@ -1247,6 +1247,21 @@ class DisputeResolutionSerializer(serializers.Serializer):
 
 
 # =====================================================
+# PAYMENT UTILITY SERIALIZERS
+# =====================================================
+class BankVerificationSerializer(serializers.Serializer):
+    """Serializer for bank account verification request"""
+    account_number = serializers.CharField(max_length=10, min_length=10)
+    bank_code = serializers.CharField(max_length=10)
+
+class BankListSerializer(serializers.Serializer):
+    """Serializer for individual bank in the bank list"""
+    name = serializers.CharField()
+    code = serializers.CharField()
+    active = serializers.BooleanField()
+
+
+# =====================================================
 # ACCOUNT CLOSURE SERIALIZERS
 # =====================================================
 class CloseAccountSerializer(serializers.Serializer):

@@ -1,0 +1,593 @@
+﻿diff --git a/transactions/models.py b/transactions/models.py
+index fe6ad86..0169432 100644
+--- a/transactions/models.py
++++ b/transactions/models.py
+@@ -128,43 +128,59 @@ class Order(models.Model):
+         return self.status == self.Status.DELIVERED
+ 
+     def calculate_and_save_delivery_fee(self):
+-        """Calculate and save delivery fee for this order"""
+-        from .delivery_service import DeliveryFeeCalculator
+-        from django.conf import settings
+-
+-        def has_coords(lat, lng):
+-            return lat is not None and lng is not None
++        """
++        Calculate and save delivery fee for this order.
++        UPDATED: Delivery is currently set to FREE for all orders.
++        Distance-based calculation logic is commented out below.
++        """
++        # Set all orders to free delivery
++        self.delivery_fee = Decimal('0.00')
++        self.delivery_distance = '0.00 km'
++        self.delivery_duration = '0 mins'
++        self.delivery_distance_miles = 0.0
++        self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
++        return True
++
++        # =========================================================================
++        # COMMENTED OUT: Original distance-based calculation logic
++        # To restore, remove the 'return True' above and uncomment this block.
++        # =========================================================================
++        # from .delivery_service import DeliveryFeeCalculator
++        # from django.conf import settings
++
++        # def has_coords(lat, lng):
++        #     return lat is not None and lng is not None
+         
+-        min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
+-        if self.subtotal <= min_total:
+-            self.delivery_fee = Decimal('0.00')
+-            self.delivery_distance = ''
+-            self.delivery_duration = ''
+-            self.delivery_distance_miles = None
+-            self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+-            return False
+-
+-        # Validate required coordinates
+-        if not (has_coords(self.restaurant_lat, self.restaurant_lng) and has_coords(self.customer_lat, self.customer_lng)):
+-            raise ValueError("All coordinate fields are required for delivery fee calculation")
++        # min_total = Decimal(str(getattr(settings, 'DELIVERY_MIN_ORDER_TOTAL_NGN', 15000)))
++        # if self.subtotal <= min_total:
++        #     self.delivery_fee = Decimal('0.00')
++        #     self.delivery_distance = ''
++        #     self.delivery_duration = ''
++        #     self.delivery_distance_miles = None
++        #     self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
++        #     return False
++
++        # # Validate required coordinates
++        # if not (has_coords(self.restaurant_lat, self.restaurant_lng) and has_coords(self.customer_lat, self.customer_lng)):
++        #     raise ValueError("All coordinate fields are required for delivery fee calculation")
+         
+-        calculator = DeliveryFeeCalculator()
+-        result = calculator.calculate_fee(
+-            origin_lat=self.restaurant_lat,
+-            origin_lng=self.restaurant_lng,
+-            dest_lat=self.customer_lat,
+-            dest_lng=self.customer_lng
+-        )
++        # calculator = DeliveryFeeCalculator()
++        # result = calculator.calculate_fee(
++        #     origin_lat=self.restaurant_lat,
++        #     origin_lng=self.restaurant_lng,
++        #     dest_lat=self.customer_lat,
++        #     dest_lng=self.customer_lng
++        # )
+         
+-        if result['success']:
+-            self.delivery_fee = Decimal(str(result['fee']))
+-            self.delivery_distance = result['distance']
+-            self.delivery_duration = result['duration']
+-            self.delivery_distance_miles = result['distance_miles']
+-            self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
+-            return True
+-        else:
+-            raise ValueError(f"Delivery fee calculation failed: {result.get('error')}")
++        # if result['success']:
++        #     self.delivery_fee = Decimal(str(result['fee']))
++        #     self.delivery_distance = result['distance']
++        #     self.delivery_duration = result['duration']
++        #     self.delivery_distance_miles = result['distance_miles']
++        #     self.save(update_fields=['delivery_fee', 'delivery_distance', 'delivery_duration', 'delivery_distance_miles'])
++        #     return True
++        # else:
++        #     raise ValueError(f"Delivery fee calculation failed: {result.get('error')}")
+ 
+     def is_within_delivery_radius(self):
+         """Check if order is within delivery radius"""
+diff --git a/transactions/paystack.py b/transactions/paystack.py
+index 7bef363..1a6d369 100644
+--- a/transactions/paystack.py
++++ b/transactions/paystack.py
+@@ -28,3 +28,49 @@ class Paystack:
+                             headers=self.headers, timeout=10)
+         resp.raise_for_status()
+         return resp.json()
++
++    def resolve_account(self, account_number, bank_code):
++        """Verify bank account number and return account name."""
++        params = {
++            "account_number": account_number,
++            "bank_code": bank_code,
++        }
++        resp = requests.get(f"{self.base_url}/bank/resolve",
++                            params=params, headers=self.headers, timeout=10)
++        resp.raise_for_status()
++        return resp.json()
++
++    def create_transfer_recipient(self, name, account_number, bank_code, currency="NGN"):
++        """Register a transfer recipient on Paystack."""
++        payload = {
++            "type": "nuban",
++            "name": name,
++            "account_number": account_number,
++            "bank_code": bank_code,
++            "currency": currency,
++        }
++        resp = requests.post(f"{self.base_url}/transferrecipient",
++                             json=payload, headers=self.headers, timeout=10)
++        resp.raise_for_status()
++        return resp.json()
++
++    def initiate_transfer(self, amount, recipient_code, reference, reason=""):
++        """Initiate a transfer to a recipient."""
++        payload = {
++            "source": "balance",
++            "amount": int(amount * 100),  # kobo
++            "recipient": recipient_code,
++            "reference": reference,
++            "reason": reason,
++        }
++        resp = requests.post(f"{self.base_url}/transfer",
++                             json=payload, headers=self.headers, timeout=10)
++        resp.raise_for_status()
++        return resp.json()
++
++    def list_banks(self):
++        """Fetch list of banks from Paystack."""
++        resp = requests.get(f"{self.base_url}/bank",
++                            headers=self.headers, timeout=10)
++        resp.raise_for_status()
++        return resp.json()
+diff --git a/transactions/serializers.py b/transactions/serializers.py
+index bc3c8fc..845bcfd 100644
+--- a/transactions/serializers.py
++++ b/transactions/serializers.py
+@@ -34,12 +34,13 @@ class OrderItemSerializer(serializers.ModelSerializer):
+     product_id = serializers.PrimaryKeyRelatedField(
+         queryset=Product.objects.all(), source='product', write_only=True
+     )
++    product_name = serializers.CharField(source='product.name', read_only=True)
+     item_subtotal = serializers.SerializerMethodField()
+ 
+     class Meta:
+         model = OrderItem
+-        fields = ['id', 'order', 'product', 'product_id', 'quantity', 'price_at_purchase', 'item_subtotal']
+-        read_only_fields = ['id', 'product', 'item_subtotal', 'price_at_purchase']
++        fields = ['id', 'order', 'product', 'product_id', 'product_name', 'quantity', 'price_at_purchase', 'item_subtotal']
++        read_only_fields = ['id', 'product', 'product_name', 'item_subtotal', 'price_at_purchase']
+ 
+     def get_item_subtotal(self, obj):
+         try:
+@@ -311,12 +312,11 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
+     Includes all granular financial details needed for receipt display.
+     """
+     customer_email = serializers.EmailField(source='customer.email', read_only=True)
+-    order_items = OrderItemSerializer(many=True, read_only=True)
++    items = OrderItemSerializer(many=True, read_only=True, source='order_items')
+     shipping_address = ShippingAddressSerializer(read_only=True)
+     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+     total_with_delivery = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+-    payment_method = serializers.SerializerMethodField()
+-    transaction_reference = serializers.SerializerMethodField()
++    payment = serializers.SerializerMethodField()
+ 
+     class Meta:
+         model = Order
+@@ -329,24 +329,23 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
+             'delivery_fee',
+             'discount',
+             'total_price',
+-            'payment_method',
+-            'transaction_reference',
++            'payment',
+             # Related data
+-            'order_items',
++            'items',
+             'shipping_address',
+         ]
+         read_only_fields = fields
+ 
+-    def get_payment_method(self, obj):
+-        """Get payment method from associated Payment record"""
+-        if hasattr(obj, 'payment') and obj.payment:
+-            return obj.payment.gateway  # e.g., "Paystack", "Card", "Bank Transfer"
+-        return None
+-
+-    def get_transaction_reference(self, obj):
+-        """Get transaction reference from associated Payment record"""
++    def get_payment(self, obj):
++        """Get payment details in nested format"""
+         if hasattr(obj, 'payment') and obj.payment:
+-            return obj.payment.reference
++            return {
++                "gateway": obj.payment.gateway,
++                "reference": obj.payment.reference,
++                "paid_at": obj.payment.paid_at,
++                "verified": obj.payment.verified,
++                "amount": obj.payment.amount
++            }
+         return None
+ 
+ 
+diff --git a/transactions/tasks.py b/transactions/tasks.py
+index 1934e72..3f94fd7 100644
+--- a/transactions/tasks.py
++++ b/transactions/tasks.py
+@@ -339,7 +339,8 @@ def notify_stakeholders_order_paid(self, order_id):
+                 order.customer,
+                 "Payment Confirmed",
+                 f"Your payment for order {order.order_id} was successful. Your order is now being prepared.",
+-                order_id=order.order_id
++                order_id=order.order_id,
++                action_url=f"/receipt?id={order.order_id}"
+             )
+         except Exception as e:
+             logger.error(
+diff --git a/users/models.py b/users/models.py
+index f577432..6fed243 100644
+--- a/users/models.py
++++ b/users/models.py
+@@ -20,6 +20,7 @@ class Vendor(models.Model):
+     store_latitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant latitude for delivery calculations")
+     store_longitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant longitude for delivery calculations")
+     bank_name = models.CharField(max_length=100, blank=True)
++    bank_code = models.CharField(max_length=10, blank=True)
+     account_number = models.CharField(max_length=20, blank=True)
+     account_name = models.CharField(max_length=200, blank=True, null=True, help_text="Name on the bank account")
+     recipient_code = models.CharField(max_length=100, blank=True)
+@@ -176,6 +177,7 @@ class PayoutRequest(models.Model):
+         help_text="Status of the payout request"
+     )
+     bank_name = models.CharField(max_length=100)
++    bank_code = models.CharField(max_length=10, blank=True)
+     account_number = models.CharField(max_length=20)
+     account_name = models.CharField(max_length=200)
+     recipient_code = models.CharField(max_length=100, blank=True, null=True)
+@@ -205,6 +207,7 @@ class AdminPayoutProfile(models.Model):
+     """
+     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_payout_profile')
+     bank_name = models.CharField(max_length=100, blank=True)
++    bank_code = models.CharField(max_length=10, blank=True)
+     account_number = models.CharField(max_length=20, blank=True)
+     account_name = models.CharField(max_length=200, blank=True, help_text="Name on the bank account")
+     recipient_code = models.CharField(max_length=100, blank=True)
+diff --git a/users/serializers.py b/users/serializers.py
+index 643a808..542983f 100644
+--- a/users/serializers.py
++++ b/users/serializers.py
+@@ -1246,6 +1246,21 @@ class DisputeResolutionSerializer(serializers.Serializer):
+         return value
+ 
+ 
++# =====================================================
++# PAYMENT UTILITY SERIALIZERS
++# =====================================================
++class BankVerificationSerializer(serializers.Serializer):
++    """Serializer for bank account verification request"""
++    account_number = serializers.CharField(max_length=10, min_length=10)
++    bank_code = serializers.CharField(max_length=10)
++
++class BankListSerializer(serializers.Serializer):
++    """Serializer for individual bank in the bank list"""
++    name = serializers.CharField()
++    code = serializers.CharField()
++    active = serializers.BooleanField()
++
++
+ # =====================================================
+ # ACCOUNT CLOSURE SERIALIZERS
+ # =====================================================
+diff --git a/users/services/payout_service.py b/users/services/payout_service.py
+index a1a112e..2f9af77 100644
+--- a/users/services/payout_service.py
++++ b/users/services/payout_service.py
+@@ -4,6 +4,7 @@ from django.utils import timezone
+ from users.models import Vendor, Customer, PayoutRequest, BusinessAdmin
+ from transactions.models import Wallet, TransactionLog, Order
+ from transactions.models import Payment
++from transactions.paystack import Paystack
+ import uuid as uuid_lib
+ import logging
+ 
+@@ -269,3 +270,80 @@ class PayoutService:
+             return False, "Withdrawal amount exceeds verified earnings."
+ 
+         return True, None
++
++    @staticmethod
++    def get_or_create_paystack_recipient(profile):
++        """
++        Ensures a Paystack recipient_code exists for the vendor or admin profile.
++        Profile can be a Vendor instance or AdminPayoutProfile instance.
++        """
++        if profile.recipient_code:
++            return profile.recipient_code
++
++        if not profile.bank_code or not profile.account_number:
++            return None
++
++        try:
++            paystack = Paystack()
++            resp = paystack.create_transfer_recipient(
++                name=profile.account_name or "User Payout",
++                account_number=profile.account_number,
++                bank_code=profile.bank_code
++            )
++            if resp.get("status"):
++                recipient_code = resp["data"]["recipient_code"]
++                profile.recipient_code = recipient_code
++                profile.save(update_fields=["recipient_code"])
++                return recipient_code
++        except Exception as e:
++            logger.error(f"Error creating Paystack recipient for {profile}: {str(e)}")
++        
++        return None
++
++    @staticmethod
++    def process_external_transfer(payout_request):
++        """
++        Initiates the actual bank transfer via Paystack.
++        Returns: (success, message/reference)
++        """
++        if payout_request.status != "processing":
++            return False, f"Cannot process payout in {payout_request.status} state"
++
++        recipient_code = payout_request.recipient_code
++        
++        # If no recipient code on request, try to get it from profile
++        if not recipient_code:
++            if payout_request.vendor:
++                recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.vendor)
++            elif payout_request.user and hasattr(payout_request.user, "admin_payout_profile"):
++                recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.user.admin_payout_profile)
++        
++        if not recipient_code:
++            return False, "No transfer recipient code available. Verify bank details."
++
++        try:
++            paystack = Paystack()
++            resp = paystack.initiate_transfer(
++                amount=payout_request.amount,
++                recipient_code=recipient_code,
++                reference=payout_request.reference,
++                reason=f"Payout {payout_request.reference}"
++            )
++            
++            if resp.get("status"):
++                # Transfer initiated successfully (often status is 'success' or 'pending' in Paystack)
++                # Paystack transfer status: 'success', 'pending', 'processing', 'failed', 'reversed'
++                transfer_data = resp["data"]
++                payout_request.status = "successful" if transfer_data["status"] == "success" else "processing"
++                payout_request.processed_at = timezone.now()
++                payout_request.save()
++                return True, payout_request.reference
++            else:
++                payout_request.status = "failed"
++                payout_request.failure_reason = resp.get("message", "Unknown Paystack error")
++                payout_request.save()
++                return False, payout_request.failure_reason
++
++        except Exception as e:
++            logger.error(f"Paystack Transfer Exception for {payout_request.reference}: {str(e)}")
++            return False, str(e)
+diff --git a/users/urls.py b/users/urls.py
+index 015aa6d..09da4c5 100644
+--- a/users/urls.py
++++ b/users/urls.py
+@@ -17,6 +17,7 @@ from .views import (
+     AdminWalletViewSet,
+     AdminPaymentSettingsViewSet,
+     AdminSettlementsViewSet,
++    PaymentUtilityViewSet,
+ )
+ from authentication.views_admin import (
+     AdminUserListView,
+@@ -110,7 +111,17 @@ admin_create_agent = AdminDeliveryAgentViewSet.as_view({"post": "create_agent"})
+ admin_update_agent = AdminDeliveryAgentViewSet.as_view({"patch": "update_agent_status"})
+ admin_agent_details = AdminDeliveryAgentViewSet.as_view({"get": "get_agent_details"})
+ 
++# =========================
++# UTILITIES
++# =========================
++payment_utility_banks = PaymentUtilityViewSet.as_view({"get": "banks"})
++payment_utility_verify = PaymentUtilityViewSet.as_view({"post": "verify_account"})
++
+ urlpatterns = [
++    # UTILITIES
++    path("utility/banks/", payment_utility_banks, name="utility-banks"),
++    path("utility/verify-account/", payment_utility_verify, name="utility-verify-account"),
++
+     # CUSTOMER
+     path("customer/profile/", customer_profile, name="customer-profile"),
+     path("customer/change-password/", customer_change_password, name="customer-change-password"),
+diff --git a/users/views.py b/users/views.py
+index 5f2dc22..a20ba35 100644
+--- a/users/views.py
++++ b/users/views.py
+@@ -65,8 +65,11 @@ from users.serializers import (
+     AdminWalletBalanceSerializer,
+     AdminPaymentPINSerializer,
+     ProfilePhotoUploadSerializer,
++    BankVerificationSerializer,
++    BankListSerializer,
+ )
+ from transactions.serializers import PaymentSerializer
++from transactions.paystack import Paystack
+ from users.services.profile_resolver import ProfileResolver
+ from transactions.models import PayoutRecord, Order, Payment, OrderStatusHistory
+ from users.notification_models import Notification
+@@ -3144,9 +3147,54 @@ class AdminFinanceViewSet(AdminBaseViewSet):
+         if total_payable <= 0:
+             return Response({"message": "Nothing to payout"}, status=400)
+ 
+-        PayoutService.execute_payout(user, total_payable)
++        # Get user's payout profile for bank details
++        bank_name = ""
++        bank_code = ""
++        account_number = ""
++        account_name = ""
++        vendor = None
+ 
+-        return Response({"success": True, "amount": total_payable})
++        if hasattr(user, "vendor_profile"):
++            vendor = user.vendor_profile
++            bank_name = vendor.bank_name
++            bank_code = vendor.bank_code
++            account_number = vendor.account_number
++            account_name = vendor.account_name
++        elif hasattr(user, "admin_payout_profile"):
++            profile = user.admin_payout_profile
++            bank_name = profile.bank_name
++            bank_code = profile.bank_code
++            account_number = profile.account_number
++            account_name = profile.account_name
++        
++        if not account_number:
++            return Response({"message": "User has no bank account configured"}, status=400)
++
++        # Create withdrawal request (auto-approved since it's admin triggered)
++        payout, error = PayoutService.create_withdrawal_request(
++            user=user,
++            amount=total_payable,
++            bank_name=bank_name,
++            account_number=account_number,
++            account_name=account_name,
++            vendor=vendor,
++            auto_process=True
++        )
++        
++        if error:
++            return Response({"message": error}, status=400)
++
++        # Ensure bank_code is saved on payout request for Paystack
++        payout.bank_code = bank_code
++        payout.save(update_fields=["bank_code"])
++
++        # Execute actual external transfer
++        success, message = PayoutService.process_external_transfer(payout)
++        
++        if not success:
++            return Response({"message": f"Transfer failed: {message}"}, status=400)
++
++        return Response({"success": True, "amount": total_payable, "reference": payout.reference})
+ 
+     @swagger_auto_schema(
+         operation_id="admin_finance_summary",
+@@ -3569,9 +3617,16 @@ class AdminFinanceViewSet(AdminBaseViewSet):
+             w.processed_at = timezone.now()
+             w.save()
+             
+-            # TODO: Integrate with payment provider (Paystack, etc.) to process actual transfer
+-            # For now, we'll mark as successful
+-            # In production, this should be done via a task queue (Celery)
++            # Execute actual external transfer via Paystack
++            from users.services.payout_service import PayoutService
++            success, message = PayoutService.process_external_transfer(w)
++            
++            if not success:
++                # If external transfer fails, we keep it as 'failed' in the service
++                return Response(
++                    {"message": f"Transfer failed: {message}"},
++                    status=400
++                )
+             
+             # Notify the requestor
+             from users.notification_service import NotificationService
+@@ -3720,6 +3775,77 @@ class AdminFinanceViewSet(AdminBaseViewSet):
+             )
+ 
+ 
++class PaymentUtilityViewSet(viewsets.ViewSet):
++    """
++    ViewSet for utility financial operations like bank listing and account verification.
++    Accessible by authenticated users (Admins, Vendors, etc.)
++    """
++    permission_classes = [IsAuthenticated]
++
++    @swagger_auto_schema(
++        operation_id="list_banks",
++        operation_summary="List All Banks",
++        operation_description="Retrieve a list of supported banks and their codes from Paystack.",
++        tags=["Payment Utility"],
++        responses={200: BankListSerializer(many=True)},
++        security=[{"Bearer": []}],
++    )
++    @action(detail=False, methods=["get"])
++    def banks(self, request):
++        """Fetch list of banks from Paystack"""
++        try:
++            paystack = Paystack()
++            response = paystack.list_banks()
++            if response.get("status"):
++                # Simplify the response to what we need
++                banks = [
++                    {"name": b["name"], "code": b["code"], "active": b["active"]}
++                    for b in response["data"]
++                ]
++                return Response({"success": True, "data": banks})
++            return Response({"success": False, "message": "Failed to fetch banks"}, status=400)
++        except Exception as e:
++            return Response({"success": False, "message": str(e)}, status=400)
++
++    @swagger_auto_schema(
++        operation_id="verify_bank_account",
++        operation_summary="Verify Bank Account",
++        operation_description="Verify a bank account number and bank code to retrieve the account name.",
++        tags=["Payment Utility"],
++        request_body=BankVerificationSerializer,
++        responses={200: openapi.Response("Account verified successfully")},
++        security=[{"Bearer": []}],
++    )
++    @action(detail=False, methods=["post"])
++    def verify_account(self, request):
++        """Verify bank account details"""
++        serializer = BankVerificationSerializer(data=request.data)
++        serializer.is_valid(raise_exception=True)
++
++        account_number = serializer.validated_data["account_number"]
++        bank_code = serializer.validated_data["bank_code"]
++
++        try:
++            paystack = Paystack()
++            response = paystack.resolve_account(account_number, bank_code)
++            if response.get("status"):
++                return Response({
++                    "success": True, 
++                    "data": {
++                        "account_name": response["data"]["account_name"],
++                        "account_number": response["data"]["account_number"],
++                        "bank_id": response["data"]["bank_id"]
++                    }
++                })
++            return Response({"success": False, "message": "Could not verify account"}, status=400)
++        except Exception as e:
++            # Paystack returns 422 if account is not found
++            return Response({
++                "success": False, 
++                "message": "Account verification failed. Please check the details and try again."
++            }, status=400)
++
++
+ class AdminAnalyticsViewSet(AdminBaseViewSet):
+     """
+     ViewSet for admin analytics and reporting on platform performance.
+@@ -5137,7 +5263,6 @@ class AdminWalletViewSet(AdminBaseViewSet):
+         
+         wallet_owner = self._get_wallet_owner_user(request, admin)
+         wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
+-        self._backfill_missing_platform_commissions(wallet)
+         
+         # Total earnings and withdrawals
+         total_credits = WalletTransaction.objects.filter(
