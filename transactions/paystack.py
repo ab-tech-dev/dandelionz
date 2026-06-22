@@ -28,3 +28,49 @@ class Paystack:
                             headers=self.headers, timeout=10)
         resp.raise_for_status()
         return resp.json()
+
+    def resolve_account(self, account_number, bank_code):
+        """Verify bank account number and return account name."""
+        params = {
+            "account_number": account_number,
+            "bank_code": bank_code,
+        }
+        resp = requests.get(f"{self.base_url}/bank/resolve",
+                            params=params, headers=self.headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def create_transfer_recipient(self, name, account_number, bank_code, currency="NGN"):
+        """Register a transfer recipient on Paystack."""
+        payload = {
+            "type": "nuban",
+            "name": name,
+            "account_number": account_number,
+            "bank_code": bank_code,
+            "currency": currency,
+        }
+        resp = requests.post(f"{self.base_url}/transferrecipient",
+                             json=payload, headers=self.headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def initiate_transfer(self, amount, recipient_code, reference, reason=""):
+        """Initiate a transfer to a recipient."""
+        payload = {
+            "source": "balance",
+            "amount": int(amount * 100),  # kobo
+            "recipient": recipient_code,
+            "reference": reference,
+            "reason": reason,
+        }
+        resp = requests.post(f"{self.base_url}/transfer",
+                             json=payload, headers=self.headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def list_banks(self):
+        """Fetch list of banks from Paystack."""
+        resp = requests.get(f"{self.base_url}/bank",
+                            headers=self.headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()

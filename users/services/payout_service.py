@@ -4,6 +4,7 @@ from django.utils import timezone
 from users.models import Vendor, Customer, PayoutRequest, BusinessAdmin
 from transactions.models import Wallet, TransactionLog, Order
 from transactions.models import Payment
+from transactions.paystack import Paystack
 import uuid as uuid_lib
 import logging
 
@@ -269,3 +270,80 @@ class PayoutService:
             return False, "Withdrawal amount exceeds verified earnings."
 
         return True, None
+
+    @staticmethod
+    def get_or_create_paystack_recipient(profile):
+        """
+        Ensures a Paystack recipient_code exists for the vendor or admin profile.
+        Profile can be a Vendor instance or AdminPayoutProfile instance.
+        """
+        if profile.recipient_code:
+            return profile.recipient_code
+
+        if not profile.bank_code or not profile.account_number:
+            return None
+
+        try:
+            paystack = Paystack()
+            resp = paystack.create_transfer_recipient(
+                name=profile.account_name or "User Payout",
+                account_number=profile.account_number,
+                bank_code=profile.bank_code
+            )
+            if resp.get("status"):
+                recipient_code = resp["data"]["recipient_code"]
+                profile.recipient_code = recipient_code
+                profile.save(update_fields=["recipient_code"])
+                return recipient_code
+        except Exception as e:
+            logger.error(f"Error creating Paystack recipient for {profile}: {str(e)}")
+        
+        return None
+
+    @staticmethod
+    def process_external_transfer(payout_request):
+        """
+        Initiates the actual bank transfer via Paystack.
+        Returns: (success, message/reference)
+        """
+        if payout_request.status != "processing":
+            return False, f"Cannot process payout in {payout_request.status} state"
+
+        recipient_code = payout_request.recipient_code
+        
+        # If no recipient code on request, try to get it from profile
+        if not recipient_code:
+            if payout_request.vendor:
+                recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.vendor)
+            elif payout_request.user and hasattr(payout_request.user, "admin_payout_profile"):
+                recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.user.admin_payout_profile)
+        
+        if not recipient_code:
+            return False, "No transfer recipient code available. Verify bank details."
+
+        try:
+            paystack = Paystack()
+            resp = paystack.initiate_transfer(
+                amount=payout_request.amount,
+                recipient_code=recipient_code,
+                reference=payout_request.reference,
+                reason=f"Payout {payout_request.reference}"
+            )
+            
+            if resp.get("status"):
+                # Transfer initiated successfully (often status is 'success' or 'pending' in Paystack)
+                # Paystack transfer status: 'success', 'pending', 'processing', 'failed', 'reversed'
+                transfer_data = resp["data"]
+                payout_request.status = "successful" if transfer_data["status"] == "success" else "processing"
+                payout_request.processed_at = timezone.now()
+                payout_request.save()
+                return True, payout_request.reference
+            else:
+                payout_request.status = "failed"
+                payout_request.failure_reason = resp.get("message", "Unknown Paystack error")
+                payout_request.save()
+                return False, payout_request.failure_reason
+
+        except Exception as e:
+            logger.error(f"Paystack Transfer Exception for {payout_request.reference}: {str(e)}")
+            return False, str(e)

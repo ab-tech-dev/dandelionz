@@ -65,8 +65,11 @@ from users.serializers import (
     AdminWalletBalanceSerializer,
     AdminPaymentPINSerializer,
     ProfilePhotoUploadSerializer,
+    BankVerificationSerializer,
+    BankListSerializer,
 )
 from transactions.serializers import PaymentSerializer
+from transactions.paystack import Paystack
 from users.services.profile_resolver import ProfileResolver
 from transactions.models import PayoutRecord, Order, Payment, OrderStatusHistory
 from users.notification_models import Notification
@@ -3144,9 +3147,54 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         if total_payable <= 0:
             return Response({"message": "Nothing to payout"}, status=400)
 
-        PayoutService.execute_payout(user, total_payable)
+        # Get user's payout profile for bank details
+        bank_name = ""
+        bank_code = ""
+        account_number = ""
+        account_name = ""
+        vendor = None
 
-        return Response({"success": True, "amount": total_payable})
+        if hasattr(user, "vendor_profile"):
+            vendor = user.vendor_profile
+            bank_name = vendor.bank_name
+            bank_code = vendor.bank_code
+            account_number = vendor.account_number
+            account_name = vendor.account_name
+        elif hasattr(user, "admin_payout_profile"):
+            profile = user.admin_payout_profile
+            bank_name = profile.bank_name
+            bank_code = profile.bank_code
+            account_number = profile.account_number
+            account_name = profile.account_name
+        
+        if not account_number:
+            return Response({"message": "User has no bank account configured"}, status=400)
+
+        # Create withdrawal request (auto-approved since it's admin triggered)
+        payout, error = PayoutService.create_withdrawal_request(
+            user=user,
+            amount=total_payable,
+            bank_name=bank_name,
+            account_number=account_number,
+            account_name=account_name,
+            vendor=vendor,
+            auto_process=True
+        )
+        
+        if error:
+            return Response({"message": error}, status=400)
+
+        # Ensure bank_code is saved on payout request for Paystack
+        payout.bank_code = bank_code
+        payout.save(update_fields=["bank_code"])
+
+        # Execute actual external transfer
+        success, message = PayoutService.process_external_transfer(payout)
+        
+        if not success:
+            return Response({"message": f"Transfer failed: {message}"}, status=400)
+
+        return Response({"success": True, "amount": total_payable, "reference": payout.reference})
 
     @swagger_auto_schema(
         operation_id="admin_finance_summary",
@@ -3569,9 +3617,16 @@ class AdminFinanceViewSet(AdminBaseViewSet):
             w.processed_at = timezone.now()
             w.save()
             
-            # TODO: Integrate with payment provider (Paystack, etc.) to process actual transfer
-            # For now, we'll mark as successful
-            # In production, this should be done via a task queue (Celery)
+            # Execute actual external transfer via Paystack
+            from users.services.payout_service import PayoutService
+            success, message = PayoutService.process_external_transfer(w)
+            
+            if not success:
+                # If external transfer fails, we keep it as 'failed' in the service
+                return Response(
+                    {"message": f"Transfer failed: {message}"},
+                    status=400
+                )
             
             # Notify the requestor
             from users.notification_service import NotificationService
@@ -3718,6 +3773,77 @@ class AdminFinanceViewSet(AdminBaseViewSet):
                 {"message": f"Error rejecting withdrawal: {str(e)}"},
                 status=400
             )
+
+
+class PaymentUtilityViewSet(viewsets.ViewSet):
+    """
+    ViewSet for utility financial operations like bank listing and account verification.
+    Accessible by authenticated users (Admins, Vendors, etc.)
+    """
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="list_banks",
+        operation_summary="List All Banks",
+        operation_description="Retrieve a list of supported banks and their codes from Paystack.",
+        tags=["Payment Utility"],
+        responses={200: BankListSerializer(many=True)},
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def banks(self, request):
+        """Fetch list of banks from Paystack"""
+        try:
+            paystack = Paystack()
+            response = paystack.list_banks()
+            if response.get("status"):
+                # Simplify the response to what we need
+                banks = [
+                    {"name": b["name"], "code": b["code"], "active": b["active"]}
+                    for b in response["data"]
+                ]
+                return Response({"success": True, "data": banks})
+            return Response({"success": False, "message": "Failed to fetch banks"}, status=400)
+        except Exception as e:
+            return Response({"success": False, "message": str(e)}, status=400)
+
+    @swagger_auto_schema(
+        operation_id="verify_bank_account",
+        operation_summary="Verify Bank Account",
+        operation_description="Verify a bank account number and bank code to retrieve the account name.",
+        tags=["Payment Utility"],
+        request_body=BankVerificationSerializer,
+        responses={200: openapi.Response("Account verified successfully")},
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["post"])
+    def verify_account(self, request):
+        """Verify bank account details"""
+        serializer = BankVerificationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        account_number = serializer.validated_data["account_number"]
+        bank_code = serializer.validated_data["bank_code"]
+
+        try:
+            paystack = Paystack()
+            response = paystack.resolve_account(account_number, bank_code)
+            if response.get("status"):
+                return Response({
+                    "success": True, 
+                    "data": {
+                        "account_name": response["data"]["account_name"],
+                        "account_number": response["data"]["account_number"],
+                        "bank_id": response["data"]["bank_id"]
+                    }
+                })
+            return Response({"success": False, "message": "Could not verify account"}, status=400)
+        except Exception as e:
+            # Paystack returns 422 if account is not found
+            return Response({
+                "success": False, 
+                "message": "Account verification failed. Please check the details and try again."
+            }, status=400)
 
 
 class AdminAnalyticsViewSet(AdminBaseViewSet):
@@ -5137,7 +5263,6 @@ class AdminWalletViewSet(AdminBaseViewSet):
         
         wallet_owner = self._get_wallet_owner_user(request, admin)
         wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
-        self._backfill_missing_platform_commissions(wallet)
         
         # Total earnings and withdrawals
         total_credits = WalletTransaction.objects.filter(

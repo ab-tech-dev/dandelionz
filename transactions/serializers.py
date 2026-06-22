@@ -34,12 +34,13 @@ class OrderItemSerializer(serializers.ModelSerializer):
     product_id = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.all(), source='product', write_only=True
     )
+    product_name = serializers.CharField(source='product.name', read_only=True)
     item_subtotal = serializers.SerializerMethodField()
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'order', 'product', 'product_id', 'quantity', 'price_at_purchase', 'item_subtotal']
-        read_only_fields = ['id', 'product', 'item_subtotal', 'price_at_purchase']
+        fields = ['id', 'order', 'product', 'product_id', 'product_name', 'quantity', 'price_at_purchase', 'item_subtotal']
+        read_only_fields = ['id', 'product', 'product_name', 'item_subtotal', 'price_at_purchase']
 
     def get_item_subtotal(self, obj):
         try:
@@ -311,12 +312,11 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
     Includes all granular financial details needed for receipt display.
     """
     customer_email = serializers.EmailField(source='customer.email', read_only=True)
-    order_items = OrderItemSerializer(many=True, read_only=True)
+    items = OrderItemSerializer(many=True, read_only=True, source='order_items')
     shipping_address = ShippingAddressSerializer(read_only=True)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     total_with_delivery = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-    payment_method = serializers.SerializerMethodField()
-    transaction_reference = serializers.SerializerMethodField()
+    payment = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
@@ -329,24 +329,23 @@ class OrderReceiptSerializer(serializers.ModelSerializer):
             'delivery_fee',
             'discount',
             'total_price',
-            'payment_method',
-            'transaction_reference',
+            'payment',
             # Related data
-            'order_items',
+            'items',
             'shipping_address',
         ]
         read_only_fields = fields
 
-    def get_payment_method(self, obj):
-        """Get payment method from associated Payment record"""
+    def get_payment(self, obj):
+        """Get payment details in nested format"""
         if hasattr(obj, 'payment') and obj.payment:
-            return obj.payment.gateway  # e.g., "Paystack", "Card", "Bank Transfer"
-        return None
-
-    def get_transaction_reference(self, obj):
-        """Get transaction reference from associated Payment record"""
-        if hasattr(obj, 'payment') and obj.payment:
-            return obj.payment.reference
+            return {
+                "gateway": obj.payment.gateway,
+                "reference": obj.payment.reference,
+                "paid_at": obj.payment.paid_at,
+                "verified": obj.payment.verified,
+                "amount": obj.payment.amount
+            }
         return None
 
 

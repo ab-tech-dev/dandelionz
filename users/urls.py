@@ -17,6 +17,7 @@ from .views import (
     AdminWalletViewSet,
     AdminPaymentSettingsViewSet,
     AdminSettlementsViewSet,
+    PaymentUtilityViewSet,
 )
 from authentication.views_admin import (
     AdminUserListView,
@@ -110,7 +111,17 @@ admin_create_agent = AdminDeliveryAgentViewSet.as_view({"post": "create_agent"})
 admin_update_agent = AdminDeliveryAgentViewSet.as_view({"patch": "update_agent_status"})
 admin_agent_details = AdminDeliveryAgentViewSet.as_view({"get": "get_agent_details"})
 
+# =========================
+# UTILITIES
+# =========================
+payment_utility_banks = PaymentUtilityViewSet.as_view({"get": "banks"})
+payment_utility_verify = PaymentUtilityViewSet.as_view({"post": "verify_account"})
+
 urlpatterns = [
+    # UTILITIES
+    path("utility/banks/", payment_utility_banks, name="utility-banks"),
+    path("utility/verify-account/", payment_utility_verify, name="utility-verify-account"),
+
     # CUSTOMER
     path("customer/profile/", customer_profile, name="customer-profile"),
     path("customer/change-password/", customer_change_password, name="customer-change-password"),

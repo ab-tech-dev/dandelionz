@@ -20,6 +20,7 @@ class Vendor(models.Model):
     store_latitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant latitude for delivery calculations")
     store_longitude = models.FloatField(null=True, blank=True, help_text="Store/Restaurant longitude for delivery calculations")
     bank_name = models.CharField(max_length=100, blank=True)
+    bank_code = models.CharField(max_length=10, blank=True)
     account_number = models.CharField(max_length=20, blank=True)
     account_name = models.CharField(max_length=200, blank=True, null=True, help_text="Name on the bank account")
     recipient_code = models.CharField(max_length=100, blank=True)
@@ -176,6 +177,7 @@ class PayoutRequest(models.Model):
         help_text="Status of the payout request"
     )
     bank_name = models.CharField(max_length=100)
+    bank_code = models.CharField(max_length=10, blank=True)
     account_number = models.CharField(max_length=20)
     account_name = models.CharField(max_length=200)
     recipient_code = models.CharField(max_length=100, blank=True, null=True)
@@ -205,6 +207,7 @@ class AdminPayoutProfile(models.Model):
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='admin_payout_profile')
     bank_name = models.CharField(max_length=100, blank=True)
+    bank_code = models.CharField(max_length=10, blank=True)
     account_number = models.CharField(max_length=20, blank=True)
     account_name = models.CharField(max_length=200, blank=True, help_text="Name on the bank account")
     recipient_code = models.CharField(max_length=100, blank=True)
