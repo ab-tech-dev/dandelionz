@@ -84,12 +84,9 @@ class PayoutService:
         except PaymentPIN.DoesNotExist:
             return False, "Please set a secure payment PIN in Payment Settings before you can withdraw funds."
         
-        # Vendor-specific verification checks
-        if hasattr(user, "vendor_profile"):
-            vendor = user.vendor_profile
-            is_verified, error = PayoutService._validate_vendor_verified_earnings(vendor, amount)
-            if not is_verified:
-                return False, error
+        # REMOVED: _validate_vendor_verified_earnings — wallet.balance is the source of truth.
+        # Earnings are only credited to the wallet on delivery, so the balance already
+        # represents verified, withdrawable funds.
 
         return True, None
     

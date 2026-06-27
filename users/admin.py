@@ -167,6 +167,29 @@ class PayoutRequestAdmin(admin.ModelAdmin):
         }),
     )
 
+    actions = ['retry_payouts']
+
+    def retry_payouts(self, request, queryset):
+        from users.services.payout_service import PayoutService
+        success_count = 0
+        failed_count = 0
+        
+        for payout in queryset:
+            if payout.status in ['failed', 'processing']:
+                success, msg = PayoutService.process_external_transfer(payout)
+                if success:
+                    success_count += 1
+                else:
+                    failed_count += 1
+                    self.message_user(request, f"Payout {payout.reference} failed: {msg}", level='ERROR')
+            else:
+                self.message_user(request, f"Payout {payout.reference} is not in a failed/processing state.", level='WARNING')
+                
+        if success_count > 0:
+            self.message_user(request, f"Successfully retried {success_count} payout(s).", level='SUCCESS')
+            
+    retry_payouts.short_description = "Retry failed Paystack transfers"
+
 
 @admin.register(AdminPayoutProfile)
 class AdminPayoutProfileAdmin(admin.ModelAdmin):

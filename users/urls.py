@@ -87,6 +87,8 @@ admin_finance_withdrawals = AdminFinanceViewSet.as_view({"get": "list_withdrawal
 admin_finance_withdrawal_detail = AdminFinanceViewSet.as_view({"get": "withdrawal_detail"})
 admin_finance_withdrawal_approve = AdminFinanceViewSet.as_view({"post": "approve_withdrawal"})
 admin_finance_withdrawal_reject = AdminFinanceViewSet.as_view({"post": "reject_withdrawal"})
+admin_finance_list_refunds = AdminFinanceViewSet.as_view({"get": "list_refunds"})
+admin_finance_process_refund = AdminFinanceViewSet.as_view({"post": "process_refund"})
 
 admin_analytics = AdminAnalyticsViewSet.as_view({"get": "overview"})
 
@@ -210,6 +212,8 @@ urlpatterns = [
     path("admin/finance/withdrawals/detail/", admin_finance_withdrawal_detail, name="admin-finance-withdrawal-detail"),
     path("admin/finance/withdrawals/approve/", admin_finance_withdrawal_approve, name="admin-finance-withdrawal-approve"),
     path("admin/finance/withdrawals/reject/", admin_finance_withdrawal_reject, name="admin-finance-withdrawal-reject"),
+    path("admin/finance/refunds/", admin_finance_list_refunds, name="admin-finance-refunds"),
+    path("admin/finance/refunds/process/", admin_finance_process_refund, name="admin-finance-process-refund"),
 
     # ADMIN ANALYTICS
     path("admin/analytics/", admin_analytics, name="admin-analytics"),

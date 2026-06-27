@@ -890,13 +890,12 @@ class InstallmentCheckoutView(APIView):
     Creates order and installment plan, then initializes payment for first installment.
     """
     permission_classes = [permissions.IsAuthenticated]
-
     @swagger_auto_schema(
         operation_id="checkout_installment",
         operation_summary="Checkout with Installment Plan",
         operation_description="""Create an order with installment payment plan and initialize first payment via Paystack.
         
-Duration options: 1_month, 3_months, 6_months, 1_year""",
+Duration options: 1_month, 3_months, 6_months, 8_months""",
         tags=["Installments"],
         request_body=InstallmentCheckoutSerializer,
         responses={
@@ -1694,11 +1693,56 @@ No authentication required (webhook signature validation instead)""",
             return Response(status=403)
 
         data = request.data.get("data", {})
+        event = request.data.get("event")
         reference = data.get("reference")
 
         if not reference:
             logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
+            
+        # ---------------------------------------------------------
+        # Handle Transfer Webhooks (Payouts)
+        # ---------------------------------------------------------
+        if event in ["transfer.success", "transfer.failed", "transfer.reversed"]:
+            try:
+                from users.models import PayoutRequest
+                payout = PayoutRequest.objects.get(reference=reference)
+                
+                if event == "transfer.success":
+                    if payout.status != "successful":
+                        payout.status = "successful"
+                        payout.processed_at = timezone.now()
+                        payout.save(update_fields=["status", "processed_at"])
+                        logger.info(f"Payout {reference} successfully transferred via webhook.")
+                        
+                elif event in ["transfer.failed", "transfer.reversed"]:
+                    if payout.status != "failed":
+                        payout.status = "failed"
+                        payout.failure_reason = data.get("reason", "Bank transfer failed or was reversed.")
+                        payout.save(update_fields=["status", "failure_reason"])
+                        logger.info(f"Payout {reference} failed via webhook. Refunding wallet.")
+                        
+                        # Refund the wallet
+                        from transactions.models import Wallet
+                        if payout.vendor:
+                            wallet, _ = Wallet.objects.get_or_create(user=payout.vendor.user)
+                        elif payout.user:
+                            wallet, _ = Wallet.objects.get_or_create(user=payout.user)
+                        else:
+                            wallet = None
+                            
+                        if wallet:
+                            wallet.credit(payout.amount, source=f"Refund for failed withdrawal {payout.reference}")
+                
+                return Response({"status": "ok"})
+                
+            except PayoutRequest.DoesNotExist:
+                logger.warning(f"PayoutRequest not found for transfer webhook reference: {reference}")
+                return Response({"status": "ok"})
+
+        # ---------------------------------------------------------
+        # Handle Payment Webhooks (Customer Charges)
+        # ---------------------------------------------------------
 
         with transaction.atomic():
             try:
@@ -1959,6 +2003,23 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                     f"Commission Reversed: ₦{commission_reversal_amount}"
                 )
 
+                # Notify customer
+                from users.notification_helpers import send_user_notification
+                send_user_notification(
+                    customer,
+                    title="Refund Approved ✓",
+                    message=(
+                        f"Your refund of ₦{refund.refunded_amount:,.2f} for order "
+                        f"#{str(order.order_id)[:8]} has been approved and credited to your "
+                        f"in-app wallet. You can withdraw it to your bank from the wallet section."
+                    ),
+                    category='payment',
+                    action_url="/account/wallet",
+                    action_text="Go to Wallet",
+                    send_websocket=True,
+                    send_email=True,
+                )
+
                 return Response(standardized_response(
                     success=True,
                     message="Refund approved",
@@ -1993,6 +2054,21 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                 )
                 
                 logger.info(f"Refund rejected: Order {refund.payment.order.order_id} | Amount: ₦{refund.refunded_amount}")
+                
+                # Notify customer
+                from users.notification_helpers import send_user_notification
+                send_user_notification(
+                    refund.payment.order.customer,
+                    title="Refund Request Rejected",
+                    message=(
+                        f"Your refund request for order #{str(refund.payment.order.order_id)[:8]} "
+                        f"was not approved. Reason: {rejection_reason}. "
+                        f"Please contact support if you have questions."
+                    ),
+                    category='payment',
+                    send_websocket=True,
+                    send_email=True,
+                )
                 
                 return Response(standardized_response(
                     success=True,
@@ -2354,3 +2430,123 @@ __all__ = [
 
 
 
+class CustomerCancelOrderView(APIView):
+    """Customer cancels their own order. Creates a Refund record for paid orders."""
+    permission_classes = [permissions.IsAuthenticated]
+    CANCELLABLE_STATUSES = [Order.Status.PENDING, Order.Status.PAID]
+
+    def post(self, request, order_id):
+        try:
+            order = Order.objects.select_related(
+                'customer', 'payment'
+            ).prefetch_related(
+                'order_items__product__store__user'
+            ).get(order_id=order_id, customer=request.user)
+        except Order.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Order not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if order.status not in self.CANCELLABLE_STATUSES:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"This order cannot be cancelled (status: {order.status})."
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        previous_status = order.status
+
+        with transaction.atomic():
+            order.status = Order.Status.CANCELED
+            order.save(update_fields=['status'])
+
+            OrderStatusHistory.objects.create(
+                order=order,
+                status=Order.Status.CANCELED,
+                changed_by='CUSTOMER',
+                reason="Cancelled by customer"
+            )
+
+            # Create refund record only if order was paid
+            refund = None
+            needs_refund = (
+                previous_status == Order.Status.PAID
+                and hasattr(order, 'payment')
+                and order.payment.verified
+            )
+            if needs_refund:
+                refund = Refund.objects.create(
+                    payment=order.payment,
+                    reason="Customer cancelled order",
+                    refunded_amount=order.payment.amount,
+                    status=Refund.Status.PENDING,
+                )
+
+                TransactionLog.objects.create(
+                    order=order,
+                    action=TransactionLog.Action.OTHER,
+                    level=TransactionLog.Level.INFO,
+                    message=f"Refund request created for cancelled order {order.order_id}",
+                    related_user=request.user,
+                    amount=order.payment.amount,
+                )
+
+                # Notify all admins
+                from users.notification_helpers import send_user_notification
+                from authentication.models import CustomUser
+                admins = CustomUser.objects.filter(
+                    role__in=['BUSINESS_ADMIN', 'ADMIN'],
+                    is_active=True
+                )
+                for admin_user in admins:
+                    send_user_notification(
+                        admin_user,
+                        title="Refund Request Pending",
+                        message=(
+                            f"Customer {request.user.full_name or request.user.email} "
+                            f"cancelled order #{str(order.order_id)[:8]} and is requesting "
+                            f"a refund of ₦{order.payment.amount:,.2f}."
+                        ),
+                        category='payment',
+                        action_url=f"/admin/orders/{order.order_id}",
+                        action_text="Review Refund",
+                        send_websocket=True,
+                        send_email=False,
+                    )
+
+            # Notify vendors of cancellation
+            vendor_users = set(
+                item.product.store.user
+                for item in order.order_items.all()
+                if item.product.store and item.product.store.user
+            )
+            for vendor_user in vendor_users:
+                send_user_notification(
+                    vendor_user,
+                    title="Order Cancelled",
+                    message=f"Order #{str(order.order_id)[:8]} was cancelled by the customer.",
+                    category='order',
+                    send_websocket=True,
+                    send_email=False,
+                )
+
+        return Response(
+            standardized_response(
+                data={
+                    "order_id": str(order.order_id),
+                    "status": "CANCELED",
+                    "refund_created": refund is not None,
+                    "refund_id": refund.id if refund else None,
+                    "refund_amount": str(refund.refunded_amount) if refund else None,
+                },
+                message=(
+                    "Order cancelled. A refund of ₦{:,.2f} has been requested and will be processed within 1–3 business days.".format(order.payment.amount)
+                    if needs_refund
+                    else "Order cancelled successfully."
+                ),
+            ),
+            status=status.HTTP_200_OK
+        )
