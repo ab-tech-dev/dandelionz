@@ -255,7 +255,7 @@ class OrderSerializer(serializers.ModelSerializer):
     order_items = OrderItemSerializer(many=True, read_only=True)
     shipping_address = ShippingAddressSerializer(read_only=True)
     payment = PaymentSerializer(read_only=True)
-    installment_plan = InstallmentPlanSerializer(read_only=True)
+    installment_plan = serializers.SerializerMethodField()
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     total_with_delivery = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     is_paid = serializers.BooleanField(read_only=True)
@@ -302,6 +302,14 @@ class OrderSerializer(serializers.ModelSerializer):
             return OrderTimelineEventSerializer(timeline_data, many=True).data
         except Exception:
             return []
+
+    def get_installment_plan(self, obj):
+        try:
+            if hasattr(obj, 'installment_plan') and obj.installment_plan:
+                return InstallmentPlanSerializer(obj.installment_plan).data
+        except Exception:
+            pass
+        return None
 
 
 # ========================
