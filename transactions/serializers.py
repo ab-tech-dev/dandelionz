@@ -255,6 +255,7 @@ class OrderSerializer(serializers.ModelSerializer):
     order_items = OrderItemSerializer(many=True, read_only=True)
     shipping_address = ShippingAddressSerializer(read_only=True)
     payment = PaymentSerializer(read_only=True)
+    installment_plan = InstallmentPlanSerializer(read_only=True)
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     total_with_delivery = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     is_paid = serializers.BooleanField(read_only=True)
@@ -269,13 +270,13 @@ class OrderSerializer(serializers.ModelSerializer):
             'total_price', 'delivery_fee', 'discount', 'subtotal', 'total_with_delivery',
             'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at', 
             'updated_at', 'is_paid', 'is_delivered',
-            'order_items', 'shipping_address', 'payment', 'logs', 'timeline',
+            'order_items', 'shipping_address', 'payment', 'installment_plan', 'logs', 'timeline',
             'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng',
             'delivery_distance', 'delivery_duration', 'delivery_distance_miles'
         ]
         read_only_fields = [
             'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered', 
-            'ordered_at', 'updated_at', 'order_items', 'payment', 'logs', 'shipped_at', 
+            'ordered_at', 'updated_at', 'order_items', 'payment', 'installment_plan', 'logs', 'shipped_at', 
             'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration', 
             'delivery_distance_miles'
         ]
@@ -445,7 +446,7 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
             interval = timedelta(days=30)
         elif duration == '6_months':
             interval = timedelta(days=30)
-        elif duration == '1_year':
+        elif duration == '8_months':
             interval = timedelta(days=30)
         else:
             interval = timedelta(days=30)

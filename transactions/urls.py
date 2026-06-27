@@ -8,7 +8,8 @@ from .views import (
     RefundListView, RefundDetailView,
     CustomerWalletView, WalletTransactionListView, AdminWalletListView,
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
-    InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView
+    InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
+    CustomerCancelOrderView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -16,6 +17,7 @@ urlpatterns = [
     # Order endpoints
     path('orders/', OrderListCreateView.as_view(), name='order-list-create'),
     path('orders/<uuid:order_id>/', OrderDetailView.as_view(), name='order-detail'),
+    path('orders/<uuid:order_id>/cancel/', CustomerCancelOrderView.as_view(), name='cancel-order'),
     path('orders/<uuid:order_id>/delivery-fee/', OrderDeliveryFeeView.as_view(), name='order-delivery-fee'),
     path('orders/<uuid:order_id>/receipt/', OrderReceiptView.as_view(), name='order-receipt'),
     path('orders/<uuid:order_id>/items/', OrderItemListCreateView.as_view(), name='order-item-list-create'),

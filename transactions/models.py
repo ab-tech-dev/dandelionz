@@ -389,14 +389,14 @@ class InstallmentPlan(models.Model):
         ONE_MONTH = '1_month', '1 Month'
         THREE_MONTHS = '3_months', '3 Months'
         SIX_MONTHS = '6_months', '6 Months'
-        ONE_YEAR = '1_year', '1 Year'
+        EIGHT_MONTHS = '8_months', '8 Months'
 
     # Mapping of duration to number of installments
     DURATION_INSTALLMENTS = {
         '1_month': 1,
         '3_months': 3,
         '6_months': 6,
-        '1_year': 12,
+        '8_months': 8,
     }
 
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='installment_plan')

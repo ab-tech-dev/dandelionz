@@ -2255,7 +2255,8 @@ class AdminVendorViewSet(AdminBaseViewSet):
 
         suspend = serializer.validated_data["suspend"]
         user.is_active = not suspend
-        user.save(update_fields=["is_active"])
+        user.status = 'SUSPENDED' if suspend else 'ACTIVE'
+        user.save(update_fields=["is_active", "status"])
 
         from users.notification_helpers import send_user_notification
         suspension_title = "Account Suspended" if suspend else "Account Reactivated"
@@ -3088,6 +3089,84 @@ class AdminFinanceViewSet(AdminBaseViewSet):
     """
     ViewSet for admin financial management including payments and vendor payouts.
     """
+
+    @action(detail=False, methods=["get"])
+    def list_refunds(self, request):
+        """List all refund requests, optionally filtered by status."""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        from transactions.models import Refund
+        from transactions.serializers import RefundSerializer
+
+        refunds = Refund.objects.select_related(
+            'payment__order__customer'
+        ).order_by('-created_at')
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            refunds = refunds.filter(status=status_filter.upper())
+
+        data = []
+        for r in refunds:
+            order = r.payment.order
+            customer = order.customer
+            data.append({
+                "id": r.id,
+                "order_id": str(order.order_id),
+                "customer_name": customer.full_name or customer.email,
+                "customer_email": customer.email,
+                "amount": str(r.refunded_amount),
+                "status": r.status,
+                "reason": r.reason,
+                "created_at": r.created_at.isoformat(),
+                "processed_at": r.processed_at.isoformat() if r.processed_at else None,
+                "payment_reference": r.payment.reference,
+            })
+
+        return Response({
+            "success": True,
+            "data": data,
+            "count": len(data),
+            "pending_count": sum(1 for d in data if d["status"] == "PENDING"),
+        })
+
+    @action(detail=False, methods=["post"])
+    def process_refund(self, request):
+        """Approve or reject a refund request."""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        refund_id  = request.data.get("refund_id")
+        action_val = request.data.get("action", "").upper()  # APPROVE or REJECT
+        rejection_reason = request.data.get("rejection_reason", "Not provided")
+
+        if not refund_id or action_val not in ("APPROVE", "REJECT"):
+            return Response(
+                {"message": "refund_id and action (APPROVE or REJECT) are required"},
+                status=400
+            )
+
+        from transactions.models import Refund
+        try:
+            refund = Refund.objects.select_related(
+                'payment__order__customer'
+            ).get(id=refund_id)
+        except Refund.DoesNotExist:
+            return Response({"message": "Refund not found"}, status=404)
+
+        if refund.status != Refund.Status.PENDING:
+            return Response(
+                {"message": f"Refund is already {refund.status.lower()}"},
+                status=400
+            )
+
+        # Reuse the existing process_refund_action from RefundDetailView
+        from transactions.views import RefundDetailView
+        view = RefundDetailView()
+        return view.process_refund_action(refund, action_val, rejection_reason, request)
 
     @swagger_auto_schema(
         operation_id="admin_list_payments",
@@ -5426,7 +5505,6 @@ class AdminWalletViewSet(AdminBaseViewSet):
         # Create withdrawal request
         from users.models import PayoutRequest
         import uuid as uuid_lib
-        
         payout = PayoutRequest.objects.create(
             user=wallet_owner,
             amount=amount,
@@ -5435,11 +5513,30 @@ class AdminWalletViewSet(AdminBaseViewSet):
             account_name=payout_profile.account_name or '',
             recipient_code=payout_profile.recipient_code or '',
             reference=f"ADM-{uuid_lib.uuid4().hex[:12].upper()}",
+            status='processing',
+            processed_at=timezone.now()
         )
         
         # Debit wallet
         wallet.debit(amount, source=f"Withdrawal {payout.reference}")
         
+        # Trigger Paystack transfer directly for admins
+        from users.services.payout_service import PayoutService
+        success, msg_or_ref = PayoutService.process_external_transfer(payout)
+        
+        if not success:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Admin auto-withdraw Paystack transfer failed: {msg_or_ref}")
+            
+            # Immediately refund the wallet if Paystack rejects it synchronously
+            wallet.credit(amount, source=f"Refund for failed withdrawal {payout.reference}")
+            
+            return Response(
+                {"success": False, "message": f"Bank transfer failed: {msg_or_ref}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
         message = f"Withdrawal request of ₦{amount:,.2f} initiated successfully."
         return Response(
             {"success": True, "message": message},
