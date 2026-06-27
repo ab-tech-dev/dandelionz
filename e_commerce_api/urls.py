@@ -65,9 +65,9 @@ urlpatterns = [
     path('', api_root, name='api-root'),
     
     # Fake admin traps
-    path('admin/', include('django_admin_trap.urls')),
-    path('wp-admin/', include('django_admin_trap.urls')),
-    path('administrator/', include('django_admin_trap.urls')),
+    path('admin/', include('django_admin_trap.urls', namespace='admin_trap')),
+    path('wp-admin/', include('django_admin_trap.urls', namespace='admin_trap_wp')),
+    path('administrator/', include('django_admin_trap.urls', namespace='admin_trap_admin')),
 
     # Real admin (hidden)
     path('abtechdev/', admin.site.urls),
