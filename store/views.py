@@ -1324,10 +1324,9 @@ class ApprovalStatsView(BaseAPIView):
 )
 class VendorDraftProductsView(BaseAPIView, generics.ListAPIView):
     """
-    List all draft products created by the authenticated vendor.
-    Only vendors can access this endpoint.
+    Get all draft products for the authenticated vendor.
     """
-    permission_classes = [IsAuthenticated, IsVendor]
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
     serializer_class = ProductSerializer
     filter_backends = [OrderingFilter, SearchFilter]
     search_fields = ['name', 'description']
@@ -1488,7 +1487,7 @@ class UpdateDraftProductView(BaseAPIView):
     - Video upload
     - Same schema as live product updates for consistency
     """
-    permission_classes = [IsAuthenticated, IsVendor]
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
 
     def get_serializer_class(self):
         from .serializers import UpdateProductSerializer
@@ -1565,7 +1564,7 @@ class DeleteDraftProductView(BaseAPIView):
     Only available for products in draft status.
     Only the vendor who created the product can delete it.
     """
-    permission_classes = [IsAuthenticated, IsVendor]
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
 
     def delete(self, request, slug):
         try:
