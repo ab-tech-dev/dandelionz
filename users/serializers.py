@@ -763,8 +763,14 @@ class AdminProductListSerializer(serializers.Serializer):
     category = serializers.CharField(source='category.name', allow_null=True)
     approval_status = serializers.CharField()
     publish_status = serializers.CharField()
+    status = serializers.SerializerMethodField()
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+
+    def get_status(self, obj):
+        if getattr(obj, 'publish_status', '') == 'draft':
+            return 'DRAFT'
+        return getattr(obj, 'approval_status', 'pending').upper()
 
 class AdminProductDetailSerializer(serializers.Serializer):
     """
@@ -788,6 +794,7 @@ class AdminProductDetailSerializer(serializers.Serializer):
     category = serializers.CharField(source='category.name', allow_null=True)
     approval_status = serializers.CharField()
     publish_status = serializers.CharField()
+    status = serializers.SerializerMethodField()
     approved_by = serializers.CharField(source='approved_by.email', allow_null=True)
     approval_date = serializers.DateTimeField(allow_null=True)
     rejection_reason = serializers.CharField(allow_null=True)
@@ -795,6 +802,11 @@ class AdminProductDetailSerializer(serializers.Serializer):
     final_price = serializers.SerializerMethodField()
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+
+    def get_status(self, obj):
+        if getattr(obj, 'publish_status', '') == 'draft':
+            return 'DRAFT'
+        return getattr(obj, 'approval_status', 'pending').upper()
 
     def get_in_stock(self, obj):
         """Check if product is in stock"""
