@@ -792,6 +792,7 @@ class AdminProductDetailSerializer(serializers.Serializer):
     store_id = serializers.IntegerField(source='store.id')
     store_email = serializers.CharField(source='store.user.email')
     category = serializers.CharField(source='category.name', allow_null=True)
+    category_slug = serializers.CharField(source='category.slug', allow_null=True)
     approval_status = serializers.CharField()
     publish_status = serializers.CharField()
     status = serializers.SerializerMethodField()
