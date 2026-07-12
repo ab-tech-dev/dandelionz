@@ -1025,6 +1025,7 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
     """
     vendor = serializers.SerializerMethodField()
     category_name = serializers.CharField(source='category.name', read_only=True, allow_null=True)
+    category_slug = serializers.CharField(source='category.slug', read_only=True, allow_null=True)
     in_stock = serializers.BooleanField(read_only=True)
     image = serializers.SerializerMethodField()
     images = ProductImageSerializer(many=True, read_only=True)
@@ -1036,7 +1037,7 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'slug', 'name', 'description', 'price', 'category',
+            'id', 'slug', 'name', 'description', 'price', 'category', 'category_slug',
             'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status', 'rating'
         ]
         read_only_fields = fields
