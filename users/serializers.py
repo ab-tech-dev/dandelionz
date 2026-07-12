@@ -435,6 +435,11 @@ class AdminNotificationCreateSerializer(serializers.ModelSerializer):
         write_only=True,
         required=False
     )
+    recipient_type = serializers.ChoiceField(
+        choices=['USERS', 'VENDORS', 'ADMIN', 'ALL'],
+        write_only=True,
+        required=False
+    )
     is_draft = serializers.BooleanField(required=False, default=False)
     scheduled_for = serializers.DateTimeField(required=False, allow_null=True)
     send_websocket = serializers.BooleanField(required=False, default=True)
