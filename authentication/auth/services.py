@@ -169,6 +169,14 @@ class AuthenticationService:
                 logger.warning(f"Login attempt for disabled account: {email}")
                 return False, {"success": False, "error": "Account is disabled. Please contact support."}, 403
 
+            if user.status == user.UserStatus.SUSPENDED:
+                logger.warning(f"Login attempt for suspended account: {email}")
+                return False, {
+                    "success": False,
+                    "error": "Your account has been suspended. Please contact support.",
+                    "is_suspended": True
+                }, 403
+
             # Check if email is verified
             if not user.is_verified:
                 logger.warning(f"Login attempt with unverified email: {email}")

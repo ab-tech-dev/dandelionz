@@ -1,0 +1,21 @@
+## July 10, 2026 - Admin Product Status Formatting Fix
+- Updated backend AdminProductListSerializer and AdminProductDetailSerializer to compute and return a dedicated `status` field mapped to 'APPROVED', 'REJECTED', 'PENDING', or 'DRAFT' based on approval and publish status.
+
+## July 10, 2026 - Admin Drafts Management
+- Fixed a backend permission issue in VendorDraftProductsView, UpdateDraftProductView, and DeleteDraftProductView to allow Admins to manage drafts using IsAdminOrVendor.
+- Added Draft Products section to the Web Admin products page for viewing, editing, submitting, and deleting drafts.
+- Integrated Drafts tab and rendering logic into Mobile Admin products page.
+
+## July 10, 2026 - Admin Product Edit Category Binding Fix
+- Added category_slug to AdminProductDetailSerializer to provide the raw slug to frontend clients.
+
+## July 12, 2026 - Vendor Edit Drafts & Next.js Crash Fixes
+- Created VendorDraftProductDetailView mapped to /store/vendor/drafts/<slug>/ to resolve the 404 error when vendors tried to edit draft products.
+
+ # #   J u l y   1 2 ,   2 0 2 6   -   P r e v e n t   D u p l i c a t e   &   C l i c k a b l e   N o t i f i c a t i o n s 
+ -   R e m o v e d   d u p l i c a t e   \ s e n d _ p r o d u c t _ n o t i f i c a t i o n \   c a l l s   i n   \ A p p r o v e P r o d u c t V i e w \   a n d   \ R e j e c t P r o d u c t V i e w \   ( \ s t o r e / v i e w s . p y \ )   t o   e n s u r e   v e n d o r s   r e c e i v e   o n l y   o n e   n o n - c l i c k a b l e   n o t i f i c a t i o n   ( t r i g g e r e d   v i a   s i g n a l s )   f o r   p r o d u c t   a p p r o v a l s   a n d   r e j e c t i o n s . 
+
+## July 12, 2026 - Suspended User Login & Access Fix
+- Blocked suspended users from logging in by adding a status check in AuthenticationService.login().
+- Created a CustomJWTAuthentication class to block existing tokens of suspended users and applied it as the default authentication class in settings.py.
+- Always generate commit messages at the end of a task and append this instruction to the project's GEMINI.md file.
