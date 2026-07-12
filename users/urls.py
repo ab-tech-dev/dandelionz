@@ -241,6 +241,7 @@ urlpatterns = [
 
     # ADMIN NOTIFICATIONS
     path("admin/notifications/", AdminNotificationViewSet.as_view({"post": "create", "get": "list_notifications"}), name="admin-notifications"),
+    path("admin/notifications/<uuid:notification_id>/", AdminNotificationViewSet.as_view({"delete": "destroy"}), name="admin-notification-delete"),
     path("admin/notifications/publish/<uuid:notification_id>/", AdminNotificationViewSet.as_view({"post": "publish_notification"}), name="admin-notification-publish"),
 
     # ADMIN WALLET & EARNINGS

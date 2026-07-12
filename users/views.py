@@ -5257,6 +5257,42 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         })
 
 
+    @swagger_auto_schema(
+        operation_id="admin_delete_notification",
+        operation_summary="Delete Admin Notification",
+        operation_description="Delete an admin broadcast notification.",
+        tags=["Admin Notifications"],
+        responses={
+            204: openapi.Response("Notification deleted successfully"),
+            404: openapi.Response("Notification not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def destroy(self, request, notification_id=None):
+        """Delete a sent or drafted admin broadcast"""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        notification = Notification.objects.filter(id=notification_id, category='admin_broadcast').first()
+        if not notification:
+            return Response({"message": "Notification not found"}, status=404)
+
+        # Delete all identical notifications that were broadcasted in the same minute
+        Notification.objects.filter(
+            title=notification.title,
+            message=notification.message,
+            category='admin_broadcast',
+            created_at__year=notification.created_at.year,
+            created_at__month=notification.created_at.month,
+            created_at__day=notification.created_at.day,
+            created_at__hour=notification.created_at.hour,
+            created_at__minute=notification.created_at.minute
+        ).delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 # =====================================================
 # ADMIN WALLET & PAYMENTS
 # =====================================================
