@@ -1368,6 +1368,66 @@ class VendorDraftProductsView(BaseAPIView, generics.ListAPIView):
 
 @extend_schema(
     tags=["Products - Drafts"],
+    description="Get details of a specific draft product (vendor only)",
+    responses={
+        200: ProductSerializer,
+        404: {"description": "Product not found"},
+        403: {"description": "Permission denied"}
+    }
+)
+class VendorDraftProductDetailView(BaseAPIView):
+    """
+    Get detailed information about a specific draft product.
+    Only the vendor who created the draft or an admin can access it.
+    """
+    permission_classes = [IsAuthenticated, IsAdminOrVendor]
+
+    def get(self, request, slug):
+        try:
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Product not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        from users.services.profile_resolver import ProfileResolver
+        vendor = ProfileResolver.resolve_vendor(request.user)
+        
+        # Check permissions: must be the owner or an admin (handled by IsAdminOrVendor for role, but need to check owner if vendor)
+        is_admin_user = bool(
+            request.user.is_admin
+            or request.user.is_business_admin
+            or request.user.is_staff
+            or request.user.is_superuser
+            or hasattr(request.user, 'business_admin_profile')
+        )
+        if not is_admin_user and (vendor is None or product.store != vendor):
+            return Response(
+                standardized_response(success=False, error="You don't have permission to view this product"),
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if product.publish_status != 'draft':
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"This product is not a draft (status: {product.publish_status})"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ProductSerializer(product)
+        return Response(
+            standardized_response(
+                data=serializer.data,
+                message="Draft product details retrieved successfully"
+            )
+        )
+
+
+@extend_schema(
+    tags=["Products - Drafts"],
     description="Submit/publish a draft product for admin approval (vendor only)",
     parameters=[
         OpenApiParameter(name='slug', description='Product slug', required=True, type=str)

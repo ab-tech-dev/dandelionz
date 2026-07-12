@@ -5,7 +5,7 @@ from .views import (
     FavouriteListView, AddFavouriteView, RemoveFavouriteView,
     ProductReviewListView, AddReviewView, UpdateReviewView, DeleteReviewView, ReviewDetailView, UserReviewsListView, PatchProductView,
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
-    VendorDraftProductsView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
+    VendorDraftProductsView, VendorDraftProductDetailView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
     ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
     VendorProductsListView, VendorProductDetailView
@@ -74,6 +74,7 @@ urlpatterns = [
     # VENDOR - DRAFT PRODUCTS
     # ==================
     path('vendor/drafts/', VendorDraftProductsView.as_view(), name='vendor-drafts'),
+    path('vendor/drafts/<slug:slug>/', VendorDraftProductDetailView.as_view(), name='draft-detail'),
     path('vendor/drafts/<slug:slug>/submit/', SubmitDraftProductView.as_view(), name='submit-draft'),
     path('vendor/drafts/<slug:slug>/update/', UpdateDraftProductView.as_view(), name='update-draft'),
     path('vendor/drafts/<slug:slug>/delete/', DeleteDraftProductView.as_view(), name='delete-draft'),
