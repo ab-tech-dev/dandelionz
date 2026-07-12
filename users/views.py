@@ -5073,7 +5073,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                 title=data.get('title'),
                 message=data.get('message'),
                 notification_type=data.get('notification_type'),
-                category=data.get('category', ''),
+                category=data.get('category') or 'admin_broadcast',
                 priority=data.get('priority', 'normal'),
                 description=data.get('description', ''),
                 action_url=data.get('action_url', ''),
@@ -5113,7 +5113,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                     title=data.get('title'),
                     message=data.get('message'),
                     notification_type=data.get('notification_type'),
-                    category=data.get('category', ''),
+                    category=data.get('category') or 'admin_broadcast',
                     priority=data.get('priority', 'normal'),
                     description=data.get('description', ''),
                     action_url=data.get('action_url', ''),
@@ -5179,8 +5179,8 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        # Get all notifications
-        notifications = Notification.objects.all().select_related('user').order_by('-created_at')
+        # Get all admin broadcasts
+        notifications = Notification.objects.filter(category='admin_broadcast').select_related('user').order_by('-created_at')
 
         # Filter by category if provided
         category_filter = request.query_params.get('category')
@@ -5194,12 +5194,21 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             elif str(draft_filter).lower() in ['false', '0', 'no']:
                 notifications = notifications.filter(is_draft=False)
 
-        serializer = AdminNotificationListSerializer(notifications, many=True)
+        # Deduplicate identical broadcasts (since a group broadcast creates N individual notifications)
+        unique_notifications = []
+        seen = set()
+        for notif in notifications:
+            key = (notif.title, notif.message, notif.is_draft, notif.created_at.replace(microsecond=0, second=0))
+            if key not in seen:
+                seen.add(key)
+                unique_notifications.append(notif)
+
+        serializer = AdminNotificationListSerializer(unique_notifications, many=True)
 
         return Response({
             "success": True,
             "data": serializer.data,
-            "count": notifications.count()
+            "count": len(unique_notifications)
         })
 
     @swagger_auto_schema(
