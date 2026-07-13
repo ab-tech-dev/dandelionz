@@ -3923,6 +3923,7 @@ class PaymentUtilityViewSet(viewsets.ViewSet):
         account_number = serializer.validated_data["account_number"]
         bank_code = serializer.validated_data["bank_code"]
 
+        import requests
         try:
             paystack = Paystack()
             response = paystack.resolve_account(account_number, bank_code)
@@ -3935,8 +3936,16 @@ class PaymentUtilityViewSet(viewsets.ViewSet):
                         "bank_id": response["data"]["bank_id"]
                     }
                 })
+            logger.error(f"Paystack verification failed with response: {response}")
             return Response({"success": False, "message": "Could not verify account"}, status=400)
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"Paystack HTTPError: {e.response.status_code} - {e.response.text}")
+            return Response({
+                "success": False, 
+                "message": "Account verification failed. Please check the details and try again."
+            }, status=400)
         except Exception as e:
+            logger.error(f"Paystack verification threw exception: {str(e)}")
             # Paystack returns 422 if account is not found
             return Response({
                 "success": False, 
