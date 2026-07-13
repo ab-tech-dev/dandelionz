@@ -5114,6 +5114,12 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             else:
                 users = User.objects.filter(is_active=True)
 
+            meta = data.get('metadata', {})
+            if not isinstance(meta, dict):
+                meta = {}
+            meta['recipient_group'] = group
+            meta['recipient_type'] = data.get('recipient_type', '')
+
             for u in users:
                 notification = NotificationService.create_notification(
                     user=u,
@@ -5125,7 +5131,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                     description=data.get('description', ''),
                     action_url=data.get('action_url', ''),
                     action_text=data.get('action_text', ''),
-                    metadata=data.get('metadata', {}),
+                    metadata=meta,
                     related_object_type=data.get('related_object_type', ''),
                     related_object_id=data.get('related_object_id', ''),
                     expires_at=data.get('expires_at'),
@@ -5251,16 +5257,36 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             return Response({"message": "Notification not found"}, status=404)
 
         if notification.is_draft:
-            notification.is_draft = False
-            notification.scheduled_for = None
-            notification.save(update_fields=['is_draft', 'scheduled_for'])
+            matching_drafts = Notification.objects.filter(
+                title=notification.title,
+                message=notification.message,
+                category='admin_broadcast',
+                is_draft=True,
+                created_at__year=notification.created_at.year,
+                created_at__month=notification.created_at.month,
+                created_at__day=notification.created_at.day,
+                created_at__hour=notification.created_at.hour,
+                created_at__minute=notification.created_at.minute
+            )
 
-        NotificationService.send_websocket_notification(notification)
-        NotificationService.send_email_notification(notification)
+            published_count = 0
+            for draft in matching_drafts:
+                draft.is_draft = False
+                draft.scheduled_for = None
+                draft.save(update_fields=['is_draft', 'scheduled_for'])
+                
+                NotificationService.send_websocket_notification(draft)
+                NotificationService.send_email_notification(draft)
+                published_count += 1
 
+            return Response({
+                "success": True,
+                "message": f"Notification published successfully to {published_count} recipients"
+            })
+        
         return Response({
             "success": True,
-            "message": "Notification published successfully"
+            "message": "Notification is not a draft"
         })
 
 
