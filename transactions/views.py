@@ -201,7 +201,7 @@ def _notify_checkout(
         payment_type="installment" if is_installment else "single",
     )
 
-from .models import Order, OrderItem, Payment, TransactionLog, Refund
+from .models import Order, OrderItem, Payment, TransactionLog, Refund, OrderStatusHistory
 from store.models import Cart, CartItem
 from .serializers import (
     OrderSerializer,
