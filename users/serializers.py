@@ -524,6 +524,14 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True
     )
+    recipient_group = serializers.SerializerMethodField()
+    recipient_type = serializers.SerializerMethodField()
+
+    def get_recipient_group(self, obj):
+        return obj.metadata.get('recipient_group') if obj.metadata else None
+
+    def get_recipient_type(self, obj):
+        return obj.metadata.get('recipient_type') if obj.metadata else None
 
     class Meta:
         model = Notification
@@ -537,6 +545,8 @@ class AdminNotificationListSerializer(serializers.ModelSerializer):
             'user',
             'user_email',
             'user_name',
+            'recipient_group',
+            'recipient_type',
             'is_read',
             'is_archived',
             'is_draft',
