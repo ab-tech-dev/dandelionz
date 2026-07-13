@@ -270,6 +270,16 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=2, minute=0),  # Daily at 2 AM
         'options': {'queue': 'maintenance'}
     },
+    'check-installment-payments-due': {
+        'task': 'transactions.check_installment_payments_due',
+        'schedule': crontab(hour=8, minute=0),  # Daily at 8 AM
+        'options': {'queue': 'notifications'}
+    },
+    'check-overdue-deliveries': {
+        'task': 'transactions.check_overdue_deliveries',
+        'schedule': crontab(hour=0, minute=0),  # Daily at midnight
+        'options': {'queue': 'notifications'}
+    },
 }
 
 # Celery Queues

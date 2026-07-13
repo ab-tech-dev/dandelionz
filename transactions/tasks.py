@@ -8,7 +8,7 @@ from django.template.loader import render_to_string
 from django.utils.html import strip_tags
 from django.conf import settings
 
-from .models import Order, TransactionLog
+from .models import Order, TransactionLog, InstallmentPayment
 from users.notification_helpers import send_order_notification, notify_admin
 from authentication.models import CustomUser
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
     bind=True,
     name="transactions.check_overdue_deliveries"
 )
-def check_overdue_deliveries():
+def check_overdue_deliveries(self):
     """
     Periodic task to check for orders that have been SHIPPED for more than 30 days.
     Creates escalation tickets and notifies admins.
@@ -369,8 +369,112 @@ def notify_stakeholders_order_paid(self, order_id):
         raise
 
 
+@shared_task(
+    bind=True,
+    name="transactions.check_installment_payments_due"
+)
+def check_installment_payments_due(self):
+    """
+    Periodic task to remind customers about upcoming and overdue installment payments.
+
+    - Sends a "coming up" reminder for PENDING installments due within the next 2 days.
+    - Sends an "overdue" alert (once) for PENDING installments already past due_date,
+      and flips their status to OVERDUE so the UI can reflect it without recomputing
+      is_overdue() on every request.
+
+    Runs daily. Configure in CELERY_BEAT_SCHEDULE in settings.py:
+
+    'check_installment_payments_due': {
+        'task': 'transactions.check_installment_payments_due',
+        'schedule': crontab(hour=8, minute=0),  # Daily at 8am
+    },
+    """
+    try:
+        now = timezone.now()
+        reminder_window_end = now + timedelta(days=2)
+
+        upcoming = InstallmentPayment.objects.filter(
+            status=InstallmentPayment.PaymentStatus.PENDING,
+            due_date__gte=now,
+            due_date__lte=reminder_window_end,
+        ).select_related('installment_plan__order__customer')
+
+        upcoming_count = 0
+        for inst in upcoming:
+            try:
+                order = inst.installment_plan.order
+                customer = order.customer
+                due_in_days = max((inst.due_date - now).days, 0)
+
+                send_order_notification(
+                    customer,
+                    "Installment Payment Due Soon",
+                    f"Your installment #{inst.payment_number} of ₦{inst.amount:,.2f} for order "
+                    f"{order.order_id} is due in {due_in_days} day(s). Please pay to avoid "
+                    f"a lapse in your payment plan.",
+                    order_id=order.order_id,
+                    action_url=f"/orders/{order.order_id}",
+                )
+                upcoming_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to send upcoming installment reminder for InstallmentPayment {inst.id}: {str(e)}",
+                    exc_info=True,
+                )
+                continue
+
+        # Overdue: flip status once, notify once (guarded by the status filter itself,
+        # so a payment already flipped to OVERDUE won't be re-notified daily)
+        overdue = InstallmentPayment.objects.filter(
+            status=InstallmentPayment.PaymentStatus.PENDING,
+            due_date__lt=now,
+        ).select_related('installment_plan__order__customer')
+
+        overdue_count = 0
+        for inst in overdue:
+            try:
+                order = inst.installment_plan.order
+                customer = order.customer
+                days_overdue = (now - inst.due_date).days
+
+                inst.status = InstallmentPayment.PaymentStatus.OVERDUE
+                inst.save(update_fields=['status', 'updated_at'])
+
+                send_order_notification(
+                    customer,
+                    "Installment Payment Overdue",
+                    f"Your installment #{inst.payment_number} of ₦{inst.amount:,.2f} for order "
+                    f"{order.order_id} is now {days_overdue} day(s) overdue. Please make payment "
+                    f"as soon as possible to keep your payment plan active.",
+                    order_id=order.order_id,
+                    action_url=f"/orders/{order.order_id}",
+                )
+                overdue_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Failed to process overdue installment for InstallmentPayment {inst.id}: {str(e)}",
+                    exc_info=True,
+                )
+                continue
+
+        logger.info(
+            f"check_installment_payments_due: {upcoming_count} upcoming reminder(s), "
+            f"{overdue_count} overdue notice(s) sent"
+        )
+
+        return {
+            "status": "success",
+            "upcoming_reminders_sent": upcoming_count,
+            "overdue_notices_sent": overdue_count,
+        }
+
+    except Exception as e:
+        logger.error(f"Error in check_installment_payments_due task: {str(e)}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+
 # Keep old task name for backward compatibility
 notify_vendors_order_paid = notify_stakeholders_order_paid
-
-
-
