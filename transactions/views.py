@@ -2436,6 +2436,8 @@ class CustomerCancelOrderView(APIView):
     CANCELLABLE_STATUSES = [Order.Status.PENDING, Order.Status.PAID]
 
     def post(self, request, order_id):
+        from users.notification_helpers import send_user_notification
+        from authentication.models import CustomUser
         try:
             order = Order.objects.select_related(
                 'customer', 'payment'
@@ -2495,8 +2497,6 @@ class CustomerCancelOrderView(APIView):
                 )
 
                 # Notify all admins
-                from users.notification_helpers import send_user_notification
-                from authentication.models import CustomUser
                 admins = CustomUser.objects.filter(
                     role__in=['BUSINESS_ADMIN', 'ADMIN'],
                     is_active=True
