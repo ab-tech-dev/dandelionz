@@ -505,25 +505,34 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         
         from transactions.models import Wallet, WalletTransaction
         from rest_framework.pagination import LimitOffsetPagination
-        
+
         wallet, _ = Wallet.objects.get_or_create(user=request.user)
-        
+
         # Filter by type if provided
         transactions = WalletTransaction.objects.filter(wallet=wallet)
         txn_type = request.query_params.get('type')
         if txn_type and txn_type.upper() in ['CREDIT', 'DEBIT']:
             transactions = transactions.filter(transaction_type=txn_type.upper())
-        
-        # Paginate
+
+        ordered_txns = transactions.order_by('-created_at')
+
+        # Paginate — paginate_queryset returns None when no limit/offset params
+        # are provided, so we guard against that to avoid the .count AttributeError
         paginator = LimitOffsetPagination()
-        paginated_txns = paginator.paginate_queryset(
-            transactions.order_by('-created_at'),
-            request
-        )
-        
-        serializer = WalletTransactionListSerializer(paginated_txns, many=True)
-        
-        return paginator.get_paginated_response(serializer.data)
+        paginator.default_limit = 20
+        paginated_txns = paginator.paginate_queryset(ordered_txns, request)
+
+        if paginated_txns is not None:
+            serializer = WalletTransactionListSerializer(paginated_txns, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        # No pagination params — return all results
+        serializer = WalletTransactionListSerializer(ordered_txns, many=True)
+        return Response({
+            "success": True,
+            "count": ordered_txns.count(),
+            "results": serializer.data,
+        })
 
     @swagger_auto_schema(
         operation_id="customer_set_payment_pin",
@@ -3905,8 +3914,11 @@ class PaymentUtilityViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"])
     def verify_account(self, request):
         """Verify bank account details"""
+        logger.info(f"Verify Account payload: {request.data}")
         serializer = BankVerificationSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            logger.error(f"Verify Account validation error: {serializer.errors}")
+            serializer.is_valid(raise_exception=True)
 
         account_number = serializer.validated_data["account_number"]
         bank_code = serializer.validated_data["bank_code"]
