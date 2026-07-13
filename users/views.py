@@ -1651,6 +1651,13 @@ class VendorWalletViewSet(viewsets.ViewSet):
             )
         
         # Create withdrawal request with admin notification
+        # NOTE: auto_process=False (was True) — vendor withdrawals now require
+        # admin approval, same as customer withdrawals. This routes through
+        # approve_withdrawal, which is the only path that actually calls
+        # PayoutService.process_external_transfer(). Previously auto_process=True
+        # set status straight to 'processing', which approve_withdrawal can never
+        # pick up (it only approves 'pending' requests) — so the Paystack transfer
+        # was never triggered and the vendor's money never moved.
         payout, error = PayoutService.create_withdrawal_request(
             user=request.user,
             amount=amount,
@@ -1659,7 +1666,7 @@ class VendorWalletViewSet(viewsets.ViewSet):
             account_name=vendor.account_name or '',
             recipient_code=vendor.recipient_code or '',
             vendor=vendor,
-            auto_process=True
+            auto_process=False
         )
         
         if error:
