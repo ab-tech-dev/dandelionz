@@ -17,7 +17,10 @@ class PushDeviceTokenSerializer(serializers.ModelSerializer):
         model = PushDeviceToken
         fields = ['token', 'platform', 'device_name']
         extra_kwargs = {
-            'token': {'required': True},
+            'token': {
+                'required': True,
+                'validators': []  # Remove UniqueValidator so update_or_create works in the view
+            },
             'platform': {'required': True}
         }
 
