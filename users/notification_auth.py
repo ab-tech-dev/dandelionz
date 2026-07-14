@@ -71,7 +71,7 @@ class JwtAuthMiddleware(BaseMiddleware):
             send: ASGI send channel
         """
         try:
-            close_old_connections()
+            await database_sync_to_async(close_old_connections)()
             
             client_addr = scope.get('client', ('unknown', 'unknown'))
             logger.info(f"JwtAuthMiddleware processing connection from {client_addr[0]}:{client_addr[1]}")
