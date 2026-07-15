@@ -4,6 +4,7 @@ Handles all notification business logic, delivery, and persistence.
 """
 
 import logging
+import requests
 from typing import List, Dict, Any, Optional
 from django.db.models import Q, Count
 from django.utils import timezone
@@ -13,7 +14,7 @@ from datetime import timedelta
 import uuid
 
 from .notification_models import (
-    Notification, NotificationType, NotificationPreference, NotificationLog
+    Notification, NotificationType, NotificationPreference, NotificationLog, PushDeviceToken
 )
 from django.conf import settings
 from django.contrib.auth import get_user_model

@@ -49,6 +49,7 @@ def send_order_notification(
     action_url: Optional[str] = None,
     send_email: bool = True,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> bool:
     """
@@ -62,6 +63,7 @@ def send_order_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: True)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -77,6 +79,7 @@ def send_order_notification(
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'send_push': send_push,
             'category': 'order',
         }
         
@@ -102,6 +105,7 @@ def send_product_notification(
     action_url: Optional[str] = None,
     send_email: bool = True,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> bool:
     """
@@ -115,6 +119,7 @@ def send_product_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: True)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -130,6 +135,7 @@ def send_product_notification(
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'send_push': send_push,
             'category': 'product',
         }
         
@@ -156,6 +162,7 @@ def send_payment_notification(
     action_url: Optional[str] = None,
     send_email: bool = True,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> bool:
     """
@@ -170,6 +177,7 @@ def send_payment_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: True)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -185,6 +193,7 @@ def send_payment_notification(
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'send_push': send_push,
             'category': 'payment',
         }
         
@@ -213,6 +222,7 @@ def send_delivery_notification(
     action_url: Optional[str] = None,
     send_email: bool = True,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> bool:
     """
@@ -226,6 +236,7 @@ def send_delivery_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: True)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -241,6 +252,7 @@ def send_delivery_notification(
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'send_push': send_push,
             'category': 'delivery',
         }
         
@@ -265,6 +277,7 @@ def send_user_notification(
     action_url: Optional[str] = None,
     send_email: bool = True,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> bool:
     """
@@ -277,6 +290,7 @@ def send_user_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: True)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -292,6 +306,7 @@ def send_user_notification(
             'message': message,
             'send_email': send_email,
             'send_websocket': send_websocket,
+            'send_push': send_push,
             'metadata': kwargs,
             'category': 'general',
         }
@@ -313,6 +328,7 @@ def send_bulk_notification(
     action_url: Optional[str] = None,
     send_email: bool = False,
     send_websocket: bool = True,
+    send_push: bool = True,
     **kwargs
 ) -> int:
     """
@@ -325,6 +341,7 @@ def send_bulk_notification(
         action_url: URL to navigate to (optional)
         send_email: Send via email (default: False for bulk)
         send_websocket: Send via WebSocket (default: True)
+        send_push: Send via push notification (default: True)
         **kwargs: Additional metadata
         
     Returns:
@@ -344,6 +361,7 @@ def send_bulk_notification(
                     'message': message,
                     'send_email': send_email,
                     'send_websocket': send_websocket,
+                    'send_push': send_push,
                     'metadata': kwargs,
                 }
                 
