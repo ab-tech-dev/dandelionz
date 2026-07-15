@@ -39,8 +39,8 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = OrderItem
-        fields = ['id', 'order', 'product', 'product_id', 'product_name', 'quantity', 'price_at_purchase', 'item_subtotal']
-        read_only_fields = ['id', 'product', 'product_name', 'item_subtotal', 'price_at_purchase']
+        fields = ['id', 'order', 'product', 'product_id', 'product_name', 'quantity', 'price_at_purchase', 'selected_variants', 'item_subtotal']
+        read_only_fields = ['id', 'product', 'product_name', 'item_subtotal', 'price_at_purchase', 'selected_variants']
 
     def get_item_subtotal(self, obj):
         try:

@@ -231,6 +231,11 @@ class OrderItem(models.Model):
     product = models.ForeignKey('store.Product', on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField()
     price_at_purchase = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    selected_variants = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Variant selections at time of purchase (e.g., {'color': 'Red', 'size': 'M'})"
+    )
 
     @property
     def item_subtotal(self):

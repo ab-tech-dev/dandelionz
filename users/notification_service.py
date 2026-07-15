@@ -407,7 +407,9 @@ class NotificationService:
                 user=user,
                 is_read=False,
                 is_deleted=False,
-                is_draft=False
+                is_draft=False,
+            ).filter(
+                Q(scheduled_for__isnull=True) | Q(scheduled_for__lte=timezone.now())
             ).count()
         except Exception as e:
             logger.error(f"Error getting unread count: {str(e)}")

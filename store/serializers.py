@@ -255,8 +255,8 @@ class ProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
-            'category_name', 'price', 'discount', 'stock', 'brand', 'tags', 
-            'variants', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date', 
+            'category_name', 'price', 'discount', 'stock', 'brand', 'tags',
+            'variants', 'variant_stock', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date',
             'created_at', 'updated_at', 'reviews', 'rating'
         ]
         ref_name = "StoreProductSerializer"
@@ -316,7 +316,7 @@ class CreateProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'name', 'slug', 'description', 'category', 'brand',
-            'price', 'discount', 'stock', 'tags', 'variants', 'image', 
+            'price', 'discount', 'stock', 'tags', 'variants', 'variant_stock', 'image',
             'images', 'videos', 'images_data', 'video_data',
             'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at'
         ]
@@ -363,6 +363,24 @@ class CreateProductSerializer(CloudinarySerializer):
         """Ensure discount is between 0 and 100"""
         if value is not None and (value < 0 or value > 100):
             raise serializers.ValidationError("Discount must be between 0 and 100")
+        return value
+
+    def validate_variant_stock(self, value):
+        """Validate variant_stock structure: {category: {option: count}}"""
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("variant_stock must be a JSON object")
+        for category, stocks in value.items():
+            if not isinstance(stocks, dict):
+                raise serializers.ValidationError(
+                    f"variant_stock['{category}'] must be an object mapping option names to stock counts"
+                )
+            for option, count in stocks.items():
+                if not isinstance(count, int) or count < 0:
+                    raise serializers.ValidationError(
+                        f"Stock count for '{category}.{option}' must be a non-negative integer"
+                    )
         return value
 
     @staticmethod
@@ -573,7 +591,7 @@ class CreateProductSerializer(CloudinarySerializer):
 
         self._parse_multipart_nested_fields(data, mutable)
 
-        for field in ("variants", "images_data", "video_data"):
+        for field in ("variants", "variant_stock", "images_data", "video_data"):
             raw_value = mutable.get(field)
             if isinstance(raw_value, str):
                 raw_value = raw_value.strip()
@@ -607,18 +625,31 @@ class CreateProductSerializer(CloudinarySerializer):
 
     def validate(self, data):
         """Cross-field validation"""
-        # Validate variant associations if variants exist
-        if data.get('variants'):
+        variants = data.get('variants')
+        if variants:
             images_data = data.get('images_data', [])
             from .models import validate_variant_association
-            
+
             for img in images_data:
                 variant_assoc = img.get('variant_association')
                 if variant_assoc:
-                    is_valid, error_msg = validate_variant_association(variant_assoc, data['variants'])
+                    is_valid, error_msg = validate_variant_association(variant_assoc, variants)
                     if not is_valid:
                         raise serializers.ValidationError({"images_data": error_msg})
-        
+
+            variant_stock = data.get('variant_stock')
+            if variant_stock:
+                for category in variant_stock:
+                    if category not in variants:
+                        raise serializers.ValidationError({
+                            "variant_stock": f"Category '{category}' in variant_stock is not defined in variants"
+                        })
+                    for option in variant_stock[category]:
+                        if option not in variants[category]:
+                            raise serializers.ValidationError({
+                                "variant_stock": f"Option '{option}' in variant_stock['{category}'] is not in variants['{category}']"
+                            })
+
         return data
 
     def create(self, validated_data):
@@ -721,9 +752,9 @@ class PendingProductsSerializer(CloudinarySerializer):
     class Meta:
         model = Product
         fields = [
-            'id', 'store', 'vendor', 'vendorName', 'store_owner_email', 'name', 'slug', 
-            'description', 'category', 'category_name', 'price', 'discount', 'stock', 
-            'brand', 'tags', 'variants', 'image', 'images', 'videos', 'in_stock', 'uploaded_date',
+            'id', 'store', 'vendor', 'vendorName', 'store_owner_email', 'name', 'slug',
+            'description', 'category', 'category_name', 'price', 'discount', 'stock',
+            'brand', 'tags', 'variants', 'variant_stock', 'image', 'images', 'videos', 'in_stock', 'uploaded_date',
             'publish_status', 'approval_status', 'approved_by', 'approved_by_email', 'approval_date', 
             'rejection_reason', 'created_at', 'updated_at', 'rating'
         ]
@@ -806,7 +837,7 @@ class UpdateProductSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'name', 'slug', 'description', 'category', 'brand',
-            'price', 'discount', 'stock', 'tags', 'variants', 'image', 
+            'price', 'discount', 'stock', 'tags', 'variants', 'variant_stock', 'image',
             'images', 'videos', 'images_data', 'delete_images', 'video_data',
             'vendorName', 'in_stock', 'publish_status', 'created_at', 'updated_at'
         ]
@@ -848,7 +879,25 @@ class UpdateProductSerializer(CloudinarySerializer):
         for key in value.keys():
             if not isinstance(value[key], list):
                 raise serializers.ValidationError(f"Variant '{key}' must be a list of strings")
-        
+
+        return value
+
+    def validate_variant_stock(self, value):
+        """Validate variant_stock structure: {category: {option: count}}"""
+        if value is None:
+            return value
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("variant_stock must be a JSON object")
+        for category, stocks in value.items():
+            if not isinstance(stocks, dict):
+                raise serializers.ValidationError(
+                    f"variant_stock['{category}'] must be an object mapping option names to stock counts"
+                )
+            for option, count in stocks.items():
+                if not isinstance(count, int) or count < 0:
+                    raise serializers.ValidationError(
+                        f"Stock count for '{category}.{option}' must be a non-negative integer"
+                    )
         return value
 
     def validate(self, data):

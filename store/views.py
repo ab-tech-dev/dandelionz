@@ -1737,6 +1737,19 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
     def post(self, request, *args, **kwargs):
         return super().post(request, *args, **kwargs)
 
+    def create(self, request, *args, **kwargs):
+        name = (request.data.get("name") or "").strip()
+        existing = Category.objects.filter(name__iexact=name).first()
+        if existing and not existing.is_active:
+            existing.is_active = True
+            existing.save(update_fields=["is_active"])
+            serializer = self.get_serializer(existing)
+            return Response(
+                standardized_response(data=serializer.data, message="Category reactivated"),
+                status=status.HTTP_200_OK,
+            )
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         """Track admin who created the category"""
         serializer.save()

@@ -31,7 +31,13 @@ class Category(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name)
+            base_slug = slugify(self.name)
+            slug = base_slug
+            num = 1
+            while Category.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+                slug = f"{base_slug}-{num}"
+                num += 1
+            self.slug = slug
         super().save(*args, **kwargs)
 
     @property
@@ -86,7 +92,12 @@ class Product(models.Model):
         blank=True,
         help_text="Product variants in JSON format: {\"colors\": [\"Red\", \"Blue\"], \"sizes\": [\"S\", \"M\"], \"materials\": [\"Cotton\"]}"
     )
-    
+    variant_stock = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-option stock: {\"colors\": {\"Red\": 5, \"Blue\": 3}, \"sizes\": {\"S\": 10, \"M\": 7}}"
+    )
+
     # Draft & Publish Status
     publish_status = models.CharField(max_length=20, choices=PUBLISH_STATUS, default='draft')
     
