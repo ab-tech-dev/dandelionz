@@ -9,7 +9,7 @@ from .views import (
     CustomerWalletView, WalletTransactionListView, AdminWalletListView,
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
-    CustomerCancelOrderView
+    CustomerCancelOrderView, PaystackMobileReturnView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -30,6 +30,7 @@ urlpatterns = [
 
     # Payment verification endpoint
     path('verify-payment/', SecureVerifyPaymentView.as_view(), name='verify-payment'),
+    path('paystack/return/', PaystackMobileReturnView.as_view(), name='paystack-mobile-return'),
     path('webhook/', PaystackWebhookView.as_view(), name='paystack-webhook'),
 
     # Installment plan endpoints

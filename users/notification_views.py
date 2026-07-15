@@ -6,6 +6,8 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
+from django.db.models import Q
+from django.utils import timezone
 import logging
 
 from .notification_models import (
@@ -61,7 +63,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return Notification.objects.filter(
             user=self.request.user,
             is_deleted=False,
-            is_draft=False
+            is_draft=False,
+        ).filter(
+            Q(scheduled_for__isnull=True) | Q(scheduled_for__lte=timezone.now())
         ).select_related('notification_type')
 
     def get_serializer_class(self):

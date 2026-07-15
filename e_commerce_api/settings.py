@@ -261,7 +261,7 @@ CELERYD_TASK_LOG_FORMAT = '[%(asctime)s: %(levelname)s/%(processName)s] [%(task_
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
     'send-scheduled-notifications': {
-        'task': 'users.send_scheduled_notification',
+        'task': 'users.sweep_due_notifications',
         'schedule': crontab(minute='*/5'),  # Every 5 minutes
         'options': {'queue': 'notifications'}
     },
@@ -460,6 +460,10 @@ PAYSTACK_BASE_URL = os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")
 PAYSTACK_CALLBACK_URL = os.getenv(
     "PAYSTACK_CALLBACK_URL",
     "https://app.dandelionz.com.ng/checkout/success"
+)
+PAYSTACK_MOBILE_CALLBACK_URL = os.getenv(
+    "PAYSTACK_MOBILE_CALLBACK_URL",
+    "https://api.dandelionz.com.ng/transactions/paystack/return/"
 )
 PAYSTACK_WEBHOOK_URL = os.getenv(
     "PAYSTACK_WEBHOOK_URL",

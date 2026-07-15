@@ -6,6 +6,8 @@ from decimal import Decimal
 from datetime import timedelta
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
+import html as _html
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from django.utils import timezone
@@ -52,6 +54,11 @@ def _extract_coords(coords):
     if lat is None or lng is None:
         return None
     return lat, lng
+
+def _get_paystack_callback_url(request):
+    if request.headers.get("X-Platform") == "mobile":
+        return settings.PAYSTACK_MOBILE_CALLBACK_URL
+    return settings.PAYSTACK_CALLBACK_URL
 
 def _ensure_customer_coords(customer_profile):
     if _has_coords(customer_profile.shipping_latitude, customer_profile.shipping_longitude):
@@ -768,7 +775,8 @@ class CheckoutView(APIView):
                         order=order,
                         product=item.product,
                         quantity=item.quantity,
-                        price_at_purchase=item.product.get_final_price
+                        price_at_purchase=item.product.get_final_price,
+                        selected_variants=item.selected_variants or {}
                     )
                 
                 # Keep order.discount at 0 because item prices already include discounts.
@@ -844,7 +852,7 @@ class CheckoutView(APIView):
                     email=user.email,
                     amount=payment.amount,
                     reference=payment.reference,
-                    callback_url=settings.PAYSTACK_CALLBACK_URL
+                    callback_url=_get_paystack_callback_url(request)
                 )
                 logger.info(f"Paystack payment initialized for order {order.order_id}")
 
@@ -1078,7 +1086,7 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                     email=user.email,
                     amount=first_installment.amount,
                     reference=first_installment.reference,
-                    callback_url=settings.PAYSTACK_CALLBACK_URL
+                    callback_url=_get_paystack_callback_url(request)
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
 
@@ -1286,7 +1294,7 @@ Only works for PENDING installments that haven't been paid yet.""",
                 email=request.user.email,
                 amount=installment.amount,
                 reference=installment.reference,
-                callback_url=settings.PAYSTACK_CALLBACK_URL
+                callback_url=_get_paystack_callback_url(request)
             )
         except Exception as e:
             return Response(
@@ -2550,3 +2558,33 @@ class CustomerCancelOrderView(APIView):
             ),
             status=status.HTTP_200_OK
         )
+
+
+class PaystackMobileReturnView(APIView):
+    """
+    Lightweight callback endpoint for mobile Paystack payments.
+
+    Paystack redirects here (instead of the web app's /checkout/success) when
+    the checkout was initiated from the mobile app (detected via X-Platform:
+    mobile header). The mobile WebView intercepts this URL via
+    onShouldStartLoadWithRequest before the page even loads, extracts the
+    reference, and navigates to the in-app success screen.
+
+    This view exists as a fallback in case the JS interception misses the
+    navigation event (e.g. slow device, WebView edge cases).
+    """
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        reference = request.query_params.get("reference") or request.query_params.get("trxref", "")
+        safe_ref = _html.escape(reference)
+        html_body = (
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Payment Processing</title></head>"
+            "<body style='font-family:sans-serif;text-align:center;padding:40px'>"
+            "<p>Payment processing&hellip;</p>"
+            f"<p data-reference='{safe_ref}'></p>"
+            "</body></html>"
+        )
+        return HttpResponse(html_body, content_type="text/html")

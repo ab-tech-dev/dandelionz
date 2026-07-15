@@ -22,12 +22,7 @@ logger = logging.getLogger("users.tasks")
     name="users.send_scheduled_notification"
 )
 def send_scheduled_notification(self, notification_id: int):
-    """
-    Celery task to send a notification.
-    
-    Args:
-        notification_id: The ID of the Notification object
-    """
+    """Send a single notification by ID."""
     try:
         notification = Notification.objects.get(id=notification_id)
 
@@ -35,39 +30,53 @@ def send_scheduled_notification(self, notification_id: int):
             f"[NotificationTask] Processing notification {notification_id}: {notification.title}"
         )
 
+        if notification.was_sent_websocket:
+            return {"status": "skipped", "reason": "already_sent", "notification_id": notification_id}
+
         if notification.is_draft:
-            return {
-                "status": "skipped",
-                "reason": "draft",
-                "notification_id": notification_id,
-            }
+            return {"status": "skipped", "reason": "draft", "notification_id": notification_id}
 
         if notification.scheduled_for and notification.scheduled_for > timezone.now():
-            return {
-                "status": "skipped",
-                "reason": "scheduled_for_future",
-                "notification_id": notification_id,
-            }
+            return {"status": "skipped", "reason": "scheduled_for_future", "notification_id": notification_id}
 
-        # Send notification via WebSocket and Email (and log)
         NotificationService.send_websocket_notification(notification)
         NotificationService.send_email_notification(notification)
 
-        return {
-            "status": "success",
-            "notification_id": notification_id,
-        }
+        return {"status": "success", "notification_id": notification_id}
 
     except Notification.DoesNotExist:
-        logger.warning(f"[NotificationTask] Notification with id {notification_id} not found.")
+        logger.warning(f"[NotificationTask] Notification {notification_id} not found.")
         return {"status": "failed", "reason": "notification_not_found"}
 
-    except Exception as e:
-        logger.error(
-            f"[NotificationTask] Failed for notification {notification_id} "
-            f"(attempt {self.request.retries}): {str(e)}"
-        )
-        raise self.retry(exc=e)
+
+@shared_task(
+    bind=True,
+    name="users.sweep_due_notifications",
+    ignore_result=True,
+)
+def sweep_due_notifications(self):
+    """
+    Runs every 5 minutes via Celery Beat. Finds all unsent scheduled
+    notifications whose fire time has passed and dispatches each one
+    as an individual send_scheduled_notification task.
+    """
+    now = timezone.now()
+    due_ids = list(
+        Notification.objects.filter(
+            is_draft=False,
+            is_deleted=False,
+            scheduled_for__isnull=False,
+            scheduled_for__lte=now,
+            was_sent_websocket=False,
+        ).values_list("id", flat=True)
+    )
+
+    if not due_ids:
+        return
+
+    logger.info(f"[SweepTask] Dispatching {len(due_ids)} due notification(s): {due_ids}")
+    for nid in due_ids:
+        send_scheduled_notification.apply_async(args=[nid], queue="notifications")
 
 
 @shared_task(
