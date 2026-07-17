@@ -123,7 +123,7 @@ class Product(models.Model):
 
     @property
     def in_stock(self):
-        return self.stock > 0
+        return (self.stock or 0) > 0
 
     def __str__(self):
         return self.name
