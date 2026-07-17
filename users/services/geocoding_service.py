@@ -48,3 +48,27 @@ def geocode_address(address: str, country_code: Optional[str] = None) -> Optiona
         return lat, lon
     except Exception:
         return None
+
+
+def ensure_vendor_coords(vendor) -> bool:
+    """Backfill a vendor's store coordinates from their address text.
+
+    Returns True if the vendor ends up with usable coordinates. Mirrors the
+    fallback checkout performs, so a vendor who saved an address without
+    coordinates is not permanently blocked from publishing products.
+    """
+    if vendor.store_latitude is not None and vendor.store_longitude is not None:
+        return True
+
+    address = (vendor.address or "").strip()
+    if not address:
+        return False
+
+    country_code = getattr(settings, "GEOAPIFY_DEFAULT_COUNTRY_CODE", "ng")
+    coords = geocode_address(", ".join([address, "Nigeria"]), country_code)
+    if not coords:
+        return False
+
+    vendor.store_latitude, vendor.store_longitude = coords
+    vendor.save(update_fields=["store_latitude", "store_longitude"])
+    return True

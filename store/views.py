@@ -229,17 +229,21 @@ class CreateProductView(BaseAPIView, generics.CreateAPIView):
                     "Your vendor account is not verified. Please complete verification before adding products."
                 )
 
-            # Check vendor has address with coordinates
+            # Check vendor has address with coordinates. If they saved an address but no
+            # coordinates, geocode it here rather than blocking them outright.
             # Return 400 Bad Request with error code MISSING_ADDRESS
-            if not vendor.store_latitude or not vendor.store_longitude:
-                logger.warning(
-                    f"Product creation blocked: Vendor {vendor.user.email} missing store coordinates. "
-                    f"Latitude: {vendor.store_latitude}, Longitude: {vendor.store_longitude}"
-                )
-                raise MissingAddressException(
-                    detail="You must update your store address with coordinates before you can upload products. "
-                           "Please go to your vendor profile and set your store location."
-                )
+            if vendor.store_latitude is None or vendor.store_longitude is None:
+                from users.services.geocoding_service import ensure_vendor_coords
+
+                if not ensure_vendor_coords(vendor):
+                    logger.warning(
+                        f"Product creation blocked: Vendor {vendor.user.email} missing store coordinates "
+                        f"and geocoding of address {vendor.address!r} did not resolve."
+                    )
+                    raise MissingAddressException(
+                        detail="You must update your store address with coordinates before you can upload products. "
+                               "Please go to your vendor profile and set your store location."
+                    )
 
         images_data = serializer.validated_data.get('images_data', [])
         video_data = serializer.validated_data.get('video_data')
