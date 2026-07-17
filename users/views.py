@@ -5165,24 +5165,49 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                 if notification:
                     created_notifications.append(notification)
 
-        # Schedule if needed
+        # Schedule if needed.
+        #
+        # The notifications already exist by this point, so a scheduling failure
+        # cannot be swallowed: the caller would be told the broadcast succeeded
+        # while nothing is ever queued to send it. Each notification is scheduled
+        # independently so one bad task does not strand the rest, and whatever
+        # fails is both logged and reported back.
+        scheduling_failed = []
         if scheduled_for and created_notifications:
             try:
                 from users.tasks import send_scheduled_notification
-                for n in created_notifications:
-                    send_scheduled_notification.apply_async(args=[str(n.id)], eta=scheduled_for)
             except Exception:
-                pass
+                logger.exception(
+                    "Could not import send_scheduled_notification; %d notification(s) will not be scheduled",
+                    len(created_notifications),
+                )
+                scheduling_failed = [str(n.id) for n in created_notifications]
+            else:
+                for n in created_notifications:
+                    try:
+                        send_scheduled_notification.apply_async(args=[str(n.id)], eta=scheduled_for)
+                    except Exception:
+                        logger.exception(
+                            "Failed to schedule notification %s for %s", n.id, scheduled_for
+                        )
+                        scheduling_failed.append(str(n.id))
 
         if not created_notifications:
             return Response({"message": "Notification not created"}, status=400)
 
-        return Response({
+        payload = {
             "success": True,
             "data": AdminNotificationCreateSerializer(created_notifications[0]).data,
             "message": "Notification created successfully",
-            "count": len(created_notifications)
-        }, status=status.HTTP_201_CREATED)
+            "count": len(created_notifications),
+        }
+        if scheduling_failed:
+            payload["message"] = (
+                "Notification created, but scheduling failed — it will not be sent automatically"
+            )
+            payload["scheduling_failed"] = scheduling_failed
+
+        return Response(payload, status=status.HTTP_201_CREATED)
 
     @swagger_auto_schema(
         operation_id="admin_list_notifications",
