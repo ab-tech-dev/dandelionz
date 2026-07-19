@@ -9,7 +9,8 @@ from .views import (
     CustomerWalletView, WalletTransactionListView, AdminWalletListView,
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
-    CustomerCancelOrderView, PaystackMobileReturnView
+    CustomerCancelOrderView, PaystackMobileReturnView,
+    InitializeWalletDepositView, VerifyWalletDepositView, WalletDepositListView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -48,6 +49,11 @@ urlpatterns = [
     # Wallet endpoints
     path('wallet/', CustomerWalletView.as_view(), name='customer-wallet'),
     path('wallet/transactions/', WalletTransactionListView.as_view(), name='wallet-transactions'),
+
+    # Wallet top-ups
+    path('wallet/deposit/', InitializeWalletDepositView.as_view(), name='wallet-deposit-init'),
+    path('wallet/deposit/verify/', VerifyWalletDepositView.as_view(), name='wallet-deposit-verify'),
+    path('wallet/deposits/', WalletDepositListView.as_view(), name='wallet-deposit-list'),
     path('admin/wallets/', AdminWalletListView.as_view(), name='admin-wallet-list'),
 
     # Delivery fee endpoints

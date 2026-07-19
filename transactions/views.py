@@ -22,7 +22,8 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit
+from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
     send_order_notification,
@@ -226,7 +227,9 @@ from .serializers import (
     InitializeInstallmentPaymentSerializer,
     VerifyPaymentSerializer,
     CommissionAnalyticsQuerySerializer,
-    CommissionAnalyticsResponseSerializer
+    CommissionAnalyticsResponseSerializer,
+    WalletDepositInitSerializer,
+    WalletDepositSerializer
 )
 from .paystack import Paystack
 from authentication.core.response import standardized_response
@@ -301,6 +304,11 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         platform_wallet.credit(
             order.delivery_fee,
             source=f"{source_prefix} Delivery Fee {order.order_id}",
+            entry_type=LedgerEntry.EntryType.DELIVERY_FEE,
+            # Keyed per order: the Order.vendors_credited flag already guards the common
+            # case, but this makes a concurrent double-delivery signal harmless too.
+            idempotency_key=f"delivery-fee-{order.order_id}",
+            order=order,
         )
         TransactionLog.objects.create(
             order=order,
@@ -326,12 +334,23 @@ def credit_vendors_for_order(order, source_prefix="Order"):
 
         vendor_user = vendor.user
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
-        wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
+        wallet.credit(
+            vendor_share,
+            source=f"{source_prefix} {order.order_id}",
+            entry_type=LedgerEntry.EntryType.VENDOR_EARNING,
+            # Per item, not per order: an order can contain several items from the same
+            # vendor, and each is a separate legitimate credit.
+            idempotency_key=f"vendor-earning-{order.order_id}-{item.id}",
+            order=order,
+        )
 
         if platform_wallet:
             platform_wallet.credit(
                 commission_amount,
                 source=f"{source_prefix} Commission {order.order_id}",
+                entry_type=LedgerEntry.EntryType.COMMISSION,
+                idempotency_key=f"commission-{order.order_id}-{item.id}",
+                order=order,
             )
 
         TransactionLog.objects.create(
@@ -1689,9 +1708,11 @@ No authentication required (webhook signature validation instead)""",
         import logging
         logger = logging.getLogger(__name__)
         
+        from transactions.paystack import get_secret_key
+
         signature = request.headers.get("x-paystack-signature", "")
         computed = hmac.new(
-            settings.PAYSTACK_SECRET_KEY.encode(),
+            get_secret_key().encode(),
             request.body,
             hashlib.sha512
         ).hexdigest()
@@ -1707,7 +1728,66 @@ No authentication required (webhook signature validation instead)""",
         if not reference:
             logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
-            
+
+        # Record the event before acting on it. Paystack retries aggressively, and until now
+        # the only thing preventing a retry from being reprocessed was a boolean flag on
+        # Payment - which works for the charge path but nothing else. Recording first makes
+        # replay handling explicit, and gives the admin screens a record of every delivery.
+        # Paystack webhook payloads carry no unique event id - data["id"] is the id of the
+        # underlying object (transaction, transfer, refund), and those are separate id
+        # sequences that can collide numerically. Keying on the raw id alone would let a
+        # transfer.success be silently dropped as a duplicate of an unrelated charge.success
+        # that happened to share an id, stranding a payout in "processing" forever.
+        # Namespacing by event type makes the key unique per (event, object).
+        object_id = request.data.get("id") or data.get("id")
+        event_id = (
+            f"{event}:{object_id}"
+            if object_id
+            else hashlib.sha256(request.body).hexdigest()
+        )
+        paystack_event, is_new = PaystackEvent.objects.get_or_create(
+            event_id=event_id,
+            defaults={
+                "event_type": event or "",
+                "reference": reference,
+                "payload": request.data if isinstance(request.data, dict) else {},
+                "signature_valid": True,
+            },
+        )
+        if not is_new:
+            logger.info(f"Duplicate Paystack event {event_id} ({event}) ignored")
+            return Response({"status": "ok", "detail": "duplicate"})
+
+        try:
+            response = self._dispatch(request, event, data, reference)
+        except Exception as exc:
+            # Record the failure before re-raising, so a webhook that blew up is visible on
+            # the admin failed-payments screen instead of only in the logs.
+            paystack_event.mark(PaystackEvent.Status.FAILED, str(exc))
+            raise
+
+        # Distinguish "we acted on this" from "we returned 200 without doing anything".
+        # _dispatch returns a `detail` on every path where it declined to handle the event
+        # (unknown reference, deposit before deposits ship, installment sent to the wrong
+        # endpoint). Marking those PROCESSED would hide exactly the orphaned events an
+        # operator needs to find on the admin failed-payments screen.
+        detail = response.data.get("detail") if hasattr(response, "data") else None
+        if detail:
+            paystack_event.mark(PaystackEvent.Status.IGNORED, detail)
+        else:
+            paystack_event.mark(PaystackEvent.Status.PROCESSED)
+        return response
+
+    def _dispatch(self, request, event, data, reference):
+        """
+        Route a verified, de-duplicated webhook to the right handler.
+
+        Split out of post() so every exit path gets its PaystackEvent status recorded in one
+        place rather than being marked at each of the nine returns below.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
         # ---------------------------------------------------------
         # Handle Transfer Webhooks (Payouts)
         # ---------------------------------------------------------
@@ -1740,24 +1820,70 @@ No authentication required (webhook signature validation instead)""",
                             wallet = None
                             
                         if wallet:
-                            wallet.credit(payout.amount, source=f"Refund for failed withdrawal {payout.reference}")
+                            # Same idempotency key as the admin-reject path: a withdrawal is
+                            # reversed at most once no matter how many times Paystack retries.
+                            wallet.credit(
+                                payout.amount,
+                                source=f"Refund for failed withdrawal {payout.reference}",
+                                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                                entry_type=LedgerEntry.EntryType.WITHDRAWAL_REVERSAL,
+                                idempotency_key=f"withdrawal-reversal-{payout.reference}",
+                                payout_request=payout,
+                            )
                 
                 return Response({"status": "ok"})
                 
             except PayoutRequest.DoesNotExist:
                 logger.warning(f"PayoutRequest not found for transfer webhook reference: {reference}")
-                return Response({"status": "ok"})
+                return Response({"status": "ok", "detail": "payout request not found"})
 
         # ---------------------------------------------------------
         # Handle Payment Webhooks (Customer Charges)
         # ---------------------------------------------------------
+
+        # Route on the reference prefix rather than assuming every non-transfer event is an
+        # order payment. Legacy unprefixed references classify as ORDER, so payments already
+        # in flight when this deploys still resolve here.
+        kind = references.classify(reference)
+
+        if kind == references.DEPOSIT:
+            try:
+                deposit = WalletDeposit.objects.get(reference=reference)
+            except WalletDeposit.DoesNotExist:
+                logger.warning(f"WalletDeposit not found for reference: {reference}")
+                return Response({"status": "ok", "detail": "deposit not found"})
+
+            if deposit.verified:
+                return Response({"status": "ok", "detail": "deposit already verified"})
+
+            # Re-verify against Paystack rather than trusting the webhook body, matching
+            # how the order charge path below works.
+            try:
+                verify = Paystack().verify_payment(reference)
+            except Exception as e:
+                logger.error(f"Deposit webhook verify failed for {reference}: {e}", exc_info=True)
+                # Return 200 so Paystack retries later rather than hammering us now.
+                return Response({"status": "ok", "detail": "verification deferred"})
+
+            ok, error = _apply_verified_deposit(deposit, verify.get("data", {}))
+            if not ok:
+                logger.warning(f"Deposit {reference} rejected at webhook: {error}")
+                return Response({"status": "ok", "detail": f"deposit rejected: {error}"})
+
+            logger.info(f"Wallet deposit {reference} credited via webhook")
+            return Response({"status": "ok"})
+
+        if kind == references.INSTALLMENT:
+            # Installments have a dedicated webhook endpoint with its own verification.
+            logger.info(f"Installment reference {reference} received on the order webhook")
+            return Response({"status": "ok", "detail": "installment handled elsewhere"})
 
         with transaction.atomic():
             try:
                 payment = Payment.objects.select_for_update().get(reference=reference)
             except Payment.DoesNotExist:
                 logger.warning(f"Payment not found for reference: {reference}")
-                return Response({"status": "ok"})
+                return Response({"status": "ok", "detail": "payment not found"})
 
             try:
                 paystack = Paystack()
@@ -1924,7 +2050,17 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                 
                 # Credit customer wallet with refund amount
                 wallet, _ = Wallet.objects.select_for_update().get_or_create(user=customer)
-                wallet.credit(refund.refunded_amount, source=f"Refund {refund.payment.reference}")
+                # Refunds are money the platform owes the customer, so they land in the
+                # withdrawable bucket - unlike a deposit, a refund can be cashed out.
+                wallet.credit(
+                    refund.refunded_amount,
+                    source=f"Refund {refund.payment.reference}",
+                    bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                    entry_type=LedgerEntry.EntryType.ORDER_REFUND,
+                    idempotency_key=f"order-refund-{refund.payment.reference}",
+                    order=order,
+                    payment=refund.payment,
+                )
                 
                 # Reverse vendor commissions if order was delivered and vendors were credited
                 commission_reversal_amount = Decimal("0.00")
@@ -1946,7 +2082,14 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                 continue
                             platform_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=platform_admin_user)
                             try:
-                                platform_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
+                                platform_wallet.debit(
+                                    commission_amount,
+                                    source=f"Commission Reversal - Refund {refund.payment.reference}",
+                                    entry_type=LedgerEntry.EntryType.COMMISSION_REVERSAL,
+                                    idempotency_key=f"commission-reversal-{refund.payment.reference}-{item.id}",
+                                    order=order,
+                                    payment=refund.payment,
+                                )
                                 vendors_affected.append({
                                     "admin_email": platform_admin_user.email,
                                     "vendor_id": vendor.id,
@@ -2088,6 +2231,210 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                 standardized_response(success=False, error="Invalid action. Use 'APPROVE' or 'REJECT'"),
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+# ----------------------
+# Wallet Deposits
+# ----------------------
+class InitializeWalletDepositView(APIView):
+    """
+    Start a wallet top-up: create a pending WalletDeposit and hand back a Paystack URL.
+
+    Nothing is credited here. The wallet only moves once the payment is verified, either
+    by the verify endpoint below or by the webhook - whichever arrives first.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'checkout'
+
+    @swagger_auto_schema(
+        operation_id="initialize_wallet_deposit",
+        operation_summary="Fund Wallet",
+        operation_description="Start a Paystack payment to top up the authenticated user's wallet.",
+        tags=["Wallet"],
+        request_body=WalletDepositInitSerializer,
+        responses={
+            201: openapi.Response("Deposit initialized"),
+            400: openapi.Response("Invalid amount"),
+        },
+    )
+    def post(self, request):
+        serializer = WalletDepositInitSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        amount = serializer.validated_data['amount']
+        reference = references.new_deposit_reference()
+
+        deposit = WalletDeposit.objects.create(
+            user=request.user,
+            reference=reference,
+            amount=amount,
+        )
+
+        try:
+            paystack = Paystack()
+            resp = paystack.initialize_payment(
+                email=request.user.email,
+                amount=amount,
+                reference=reference,
+                callback_url=_get_paystack_callback_url(request),
+            )
+        except Exception as e:
+            logger.error(f"Paystack init failed for deposit {reference}: {e}", exc_info=True)
+            deposit.mark_as_failed(f"Could not start payment: {e}")
+            return Response(
+                standardized_response(success=False, error="Could not start the payment. Please try again."),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        authorization_url = (resp.get("data") or {}).get("authorization_url", "")
+        deposit.authorization_url = authorization_url
+        deposit.save(update_fields=['authorization_url', 'updated_at'])
+
+        return Response(
+            standardized_response(
+                data={
+                    "reference": reference,
+                    "amount": str(amount),
+                    "authorization_url": authorization_url,
+                },
+                message="Deposit initialized",
+            ),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class VerifyWalletDepositView(APIView):
+    """
+    Verify a wallet top-up and credit the spendable bucket.
+
+    Re-verifies against Paystack rather than trusting the caller, and checks the amount
+    matches what we recorded - otherwise a client could initialise a 100 deposit, pay 100,
+    and have us credit whatever it claimed.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'payment_verification'
+
+    @swagger_auto_schema(
+        operation_id="verify_wallet_deposit",
+        operation_summary="Verify Wallet Deposit",
+        operation_description="Verify a wallet top-up by reference and credit the wallet.",
+        tags=["Wallet"],
+        manual_parameters=[
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+        ],
+        responses={
+            200: openapi.Response("Deposit verified"),
+            400: openapi.Response("Verification failed"),
+            404: openapi.Response("Deposit not found"),
+        },
+    )
+    def get(self, request):
+        reference = request.query_params.get('reference')
+        if not reference:
+            return Response(
+                standardized_response(success=False, error="reference is required"),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            deposit = WalletDeposit.objects.get(reference=reference)
+        except WalletDeposit.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Deposit not found"),
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if deposit.user != request.user and not _is_platform_admin(request.user):
+            return Response(
+                standardized_response(success=False, error="Forbidden"),
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if deposit.verified:
+            return Response(standardized_response(
+                data=WalletDepositSerializer(deposit).data,
+                message="Deposit already verified",
+            ))
+
+        try:
+            resp = Paystack().verify_payment(reference)
+        except Exception as e:
+            logger.error(f"Paystack verify failed for deposit {reference}: {e}", exc_info=True)
+            return Response(
+                standardized_response(success=False, error="Could not verify the payment. Please try again."),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ok, error = _apply_verified_deposit(deposit, resp.get("data", {}))
+        if not ok:
+            return Response(
+                standardized_response(success=False, error=error),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deposit.refresh_from_db()
+        return Response(standardized_response(
+            data=WalletDepositSerializer(deposit).data,
+            message="Wallet funded successfully",
+        ))
+
+
+def _apply_verified_deposit(deposit, pdata):
+    """
+    Shared by the verify endpoint and the webhook, which routinely race each other.
+
+    Returns (True, None) on success, (False, reason) otherwise. Safe to call twice -
+    mark_as_successful is idempotent at both the flag and the ledger level.
+    """
+    if pdata.get("status") != "success":
+        deposit.mark_as_failed(f"Paystack reported status {pdata.get('status')!r}")
+        return False, "Payment was not successful"
+
+    if pdata.get("currency") != EXPECTED_CURRENCY:
+        deposit.mark_as_failed(f"Unexpected currency {pdata.get('currency')!r}")
+        return False, "Invalid currency"
+
+    paid_amount = Decimal(str(pdata.get("amount", 0))) / Decimal(100)
+    if paid_amount != deposit.amount:
+        # Credit what was actually paid, never what was requested.
+        deposit.mark_as_failed(
+            f"Amount mismatch: paid {paid_amount}, expected {deposit.amount}"
+        )
+        return False, "Amount mismatch"
+
+    deposit.mark_as_successful(paystack_transaction_id=pdata.get("id", ""))
+
+    TransactionLog.objects.create(
+        order=None,
+        action=TransactionLog.Action.PAYMENT_RECEIVED,
+        level=TransactionLog.Level.SUCCESS,
+        message=f"Wallet funded with NGN {deposit.amount} ({deposit.reference})",
+        related_user=deposit.user,
+        amount=deposit.amount,
+        metadata={"reference": deposit.reference, "kind": "wallet_deposit"},
+    )
+    return True, None
+
+
+class WalletDepositListView(generics.ListAPIView):
+    """The authenticated user's top-up history."""
+    serializer_class = WalletDepositSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="list_wallet_deposits",
+        operation_summary="List Wallet Deposits",
+        tags=["Wallet"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return WalletDeposit.objects.filter(user=self.request.user)
+
 
 # ----------------------
 # Wallet Management

@@ -1113,6 +1113,11 @@ class WithdrawalResponseSerializer(serializers.Serializer):
 class PaymentSettingsSerializer(serializers.Serializer):
     """Serializer for payment settings"""
     bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    # bank_code is what Paystack identifies the bank by. Without it
+    # PayoutService.get_or_create_paystack_recipient bails at its
+    # `if not profile.bank_code` guard and no transfer recipient is ever created,
+    # so every withdrawal fails with "No transfer recipient code available".
+    bank_code = serializers.CharField(max_length=10, required=False, allow_blank=True)
     account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     account_name = serializers.CharField(max_length=200, read_only=True)
     recipient_code = serializers.CharField(max_length=100, read_only=True)
@@ -1133,6 +1138,7 @@ class PaymentSettingsSerializer(serializers.Serializer):
 class PaymentSettingsUpdateSerializer(serializers.Serializer):
     """Serializer for updating payment settings"""
     bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    bank_code = serializers.CharField(max_length=10, required=False, allow_blank=True)
     account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
 
@@ -1191,6 +1197,7 @@ class AdminWalletTransactionSerializer(serializers.Serializer):
 class AdminPaymentSettingsSerializer(serializers.Serializer):
     """Serializer for admin payment settings (bank details)"""
     bank_name = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    bank_code = serializers.CharField(max_length=10, required=False, allow_blank=True)
     account_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     account_name = serializers.CharField(max_length=200, required=False, allow_blank=True)
     has_pin = serializers.SerializerMethodField(read_only=True)

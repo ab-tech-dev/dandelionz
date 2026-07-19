@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
-    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, 
-    Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory
+    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund,
+    Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory,
+    WalletDeposit
 )
 from store.models import Product
 from decimal import Decimal
@@ -557,3 +558,38 @@ class CommissionAnalyticsResponseSerializer(serializers.Serializer):
     by_vendor = serializers.ListField(child=serializers.DictField())
     top_vendors = serializers.ListField(child=serializers.DictField())
     commission_rate = serializers.CharField()
+
+
+class WalletDepositInitSerializer(serializers.Serializer):
+    """Request body for starting a wallet top-up."""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def validate_amount(self, value):
+        from django.conf import settings
+
+        minimum = getattr(settings, 'MIN_DEPOSIT_NGN', Decimal('100'))
+        maximum = getattr(settings, 'MAX_DEPOSIT_NGN', Decimal('500000'))
+
+        if value <= 0:
+            raise serializers.ValidationError("Deposit amount must be greater than zero.")
+        if value < minimum:
+            raise serializers.ValidationError(
+                f"The minimum deposit is NGN {minimum:,.2f}."
+            )
+        if value > maximum:
+            raise serializers.ValidationError(
+                f"The maximum deposit is NGN {maximum:,.2f}."
+            )
+        return value
+
+
+class WalletDepositSerializer(serializers.ModelSerializer):
+    """A wallet top-up record."""
+
+    class Meta:
+        model = WalletDeposit
+        fields = [
+            'id', 'reference', 'amount', 'status', 'authorization_url',
+            'paid_at', 'created_at',
+        ]
+        read_only_fields = fields

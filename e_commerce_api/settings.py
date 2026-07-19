@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from datetime import timedelta
+from decimal import Decimal
 from dotenv import load_dotenv
 import cloudinary
 import cloudinary.uploader
@@ -488,6 +489,19 @@ DELIVERY_MIN_ORDER_TOTAL_NGN = float(os.getenv('DELIVERY_MIN_ORDER_TOTAL_NGN', '
 DELIVERY_MAX_DISTANCE_MILES = int(os.getenv('DELIVERY_MAX_DISTANCE_MILES', '220'))
 # If True, reject checkout outside max radius. If False, still calculate fee.
 DELIVERY_ENFORCE_MAX_DISTANCE = os.getenv('DELIVERY_ENFORCE_MAX_DISTANCE', 'False').lower() in ('true', '1', 'yes')
+
+# Minimum withdrawal amount (in NGN).
+# Enforced server-side because the clients used to be the only thing checking it, and they
+# disagreed - mobile required 500 while web allowed 100, so a direct API call could withdraw
+# any amount above zero. Paystack charges a flat fee per transfer, so tiny withdrawals can
+# cost more to send than they move.
+MIN_WITHDRAWAL_NGN = Decimal(os.getenv('MIN_WITHDRAWAL_NGN', '500'))
+
+# Wallet top-up bounds (in NGN). The minimum keeps Paystack's per-transaction fee from
+# exceeding the deposit; the maximum is a blast-radius limit, since deposited funds sit on
+# the platform until they are spent or refunded to source.
+MIN_DEPOSIT_NGN = Decimal(os.getenv('MIN_DEPOSIT_NGN', '100'))
+MAX_DEPOSIT_NGN = Decimal(os.getenv('MAX_DEPOSIT_NGN', '500000'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

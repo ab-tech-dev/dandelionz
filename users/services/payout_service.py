@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from users.models import Vendor, Customer, PayoutRequest, BusinessAdmin
@@ -65,15 +66,21 @@ class PayoutService:
         Validate withdrawal request before processing.
         Returns: (is_valid, error_message)
         """
-        # Check wallet exists and has sufficient balance
+        # Check wallet exists and has sufficient WITHDRAWABLE balance.
+        # Deliberately not wallet.balance: that total includes the user's own Paystack
+        # deposits, which are spendable at checkout but must never leave as a bank transfer.
         from transactions.models import Wallet
         wallet, _ = Wallet.objects.get_or_create(user=user)
-        
-        if wallet.balance < Decimal(str(amount)):
-            return False, f"Insufficient balance. Available: ₦{wallet.balance:,.2f}, Requested: ₦{amount:,.2f}"
-        
+
+        if wallet.withdrawable_balance < Decimal(str(amount)):
+            return False, f"Insufficient balance. Available: ₦{wallet.withdrawable_balance:,.2f}, Requested: ₦{amount:,.2f}"
+
         if amount <= 0:
             return False, "Withdrawal amount must be greater than zero"
+
+        minimum = getattr(settings, 'MIN_WITHDRAWAL_NGN', Decimal('500'))
+        if Decimal(str(amount)) < minimum:
+            return False, f"The minimum withdrawal amount is ₦{minimum:,.2f}"
         
         # Check if user has a non-default PIN set
         from users.models import PaymentPIN
@@ -115,7 +122,8 @@ class PayoutService:
         account_name,
         recipient_code='',
         vendor=None,
-        auto_process=False
+        auto_process=False,
+        bank_code=''
     ):
         """
         Create a withdrawal request and debit the wallet.
@@ -124,23 +132,36 @@ class PayoutService:
         Returns: (payout_request, error_message)
         """
         try:
-            # Validate amount
+            # Validate amount. Repeated here rather than relying on the caller having run
+            # validate_withdrawal_request - this is the only funnel every withdrawal path
+            # (customer, vendor, admin) actually goes through.
             if amount <= 0:
                 return None, "Amount must be greater than zero"
+
+            minimum = getattr(settings, 'MIN_WITHDRAWAL_NGN', Decimal('500'))
+            if Decimal(str(amount)) < minimum:
+                return None, f"The minimum withdrawal amount is ₦{minimum:,.2f}"
             
-            # Get wallet and check balance
-            from transactions.models import Wallet
-            wallet, _ = Wallet.objects.get_or_create(user=user)
-            
-            if wallet.balance < Decimal(str(amount)):
-                return None, f"Insufficient balance. Available: ₦{wallet.balance:,.2f}"
-            
+            # Get wallet and check balance under a row lock.
+            # Without the lock, two concurrent withdrawal requests could both read the same
+            # balance, both pass this check, and both debit - overdrawing the wallet.
+            from transactions.models import LedgerEntry, Wallet
+            Wallet.objects.get_or_create(user=user)
+            wallet = Wallet.objects.select_for_update().get(user=user)
+
+            # Only withdrawable funds can be cashed out; deposits are checkout-only.
+            if wallet.withdrawable_balance < Decimal(str(amount)):
+                return None, f"Insufficient balance. Available: ₦{wallet.withdrawable_balance:,.2f}"
+
             # Create withdrawal request
             payout = PayoutRequest.objects.create(
                 user=user if not vendor else None,
                 vendor=vendor,
                 amount=Decimal(str(amount)),
                 bank_name=bank_name,
+                # Snapshotted onto the request so the payout still resolves to the right
+                # bank if the user edits their payout settings before it is approved.
+                bank_code=bank_code,
                 account_number=account_number,
                 account_name=account_name,
                 recipient_code=recipient_code,
@@ -148,9 +169,16 @@ class PayoutService:
                 status='processing' if auto_process else 'pending',
                 processed_at=timezone.now() if auto_process else None,
             )
-            
-            # Debit wallet
-            wallet.debit(Decimal(str(amount)), source=f"Withdrawal {payout.reference}")
+
+            # Debit wallet, withdrawable bucket only
+            wallet.debit(
+                Decimal(str(amount)),
+                source=f"Withdrawal {payout.reference}",
+                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                entry_type=LedgerEntry.EntryType.WITHDRAWAL,
+                idempotency_key=f"withdrawal-{payout.reference}",
+                payout_request=payout,
+            )
             
             # Log the withdrawal request
             logger.info(f"Withdrawal request created: {payout.reference} for {user.email}, Amount: ₦{amount:,.2f}")
@@ -308,12 +336,17 @@ class PayoutService:
 
         recipient_code = payout_request.recipient_code
         
-        # If no recipient code on request, try to get it from profile
+        # If no recipient code on request, try to get it from profile.
+        # The customer_profile branch is what makes customer withdrawals completable at
+        # all: without it a customer payout has no recipient code and every transfer was
+        # rejected below with "No transfer recipient code available".
         if not recipient_code:
             if payout_request.vendor:
                 recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.vendor)
             elif payout_request.user and hasattr(payout_request.user, "admin_payout_profile"):
                 recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.user.admin_payout_profile)
+            elif payout_request.user and hasattr(payout_request.user, "customer_profile"):
+                recipient_code = PayoutService.get_or_create_paystack_recipient(payout_request.user.customer_profile)
         
         if not recipient_code:
             return False, "No transfer recipient code available. Verify bank details."

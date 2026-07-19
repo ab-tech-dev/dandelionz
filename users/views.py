@@ -401,11 +401,31 @@ class CustomerProfileViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Delete the user account (cascade will delete customer profile)
-        user.delete()
+        # Refuse while money is still in the wallet - closing used to destroy the balance
+        # and every record of it along with the user.
+        from users.services.account_closure import check_can_close, close_account
+
+        allowed, blocker = check_can_close(user)
+        if not allowed:
+            return Response(
+                {
+                    # Both keys on purpose: `detail` matches the rest of this endpoint's
+                    # error shape, but apiError() on the clients reads error/message and
+                    # ignores detail, so a detail-only body would surface as the generic
+                    # "Something went wrong" and lose the actionable instruction.
+                    "detail": blocker['message'],
+                    "message": blocker['message'],
+                    "reason": blocker['reason'],
+                    "amount": blocker['amount'],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Anonymise rather than delete, so the ledger survives for auditing.
+        close_account(user)
 
         return Response(
-            {"message": "Account deleted successfully"},
+            {"message": "Account closed successfully"},
             status=status.HTTP_204_NO_CONTENT,
         )
 
@@ -444,16 +464,18 @@ class CustomerProfileViewSet(viewsets.ViewSet):
         wallet, _ = Wallet.objects.get_or_create(user=request.user)
         
         # Calculate totals
+        from django.conf import settings as django_settings
+
         total_credits = WalletTransaction.objects.filter(
             wallet=wallet,
             transaction_type='CREDIT'
         ).aggregate(Sum('amount'))['amount__sum'] or 0
-        
+
         total_debits = WalletTransaction.objects.filter(
             wallet=wallet,
             transaction_type='DEBIT'
         ).aggregate(Sum('amount'))['amount__sum'] or 0
-        
+
         # This month earnings
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -462,14 +484,22 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             transaction_type='CREDIT',
             created_at__gte=month_start
         ).aggregate(Sum('amount'))['amount__sum'] or 0
-        
+
         data = {
             'balance': float(wallet.balance),
+            # The two buckets behind the total. Deposited funds are spendable at checkout
+            # but never withdrawable, so a client showing only `balance` would overstate
+            # what can actually be withdrawn.
+            'spendable_balance': float(wallet.spendable_balance),
+            'withdrawable_balance': float(wallet.withdrawable_balance),
             'total_credits': float(total_credits),
             'total_debits': float(total_debits),
             'this_month_earnings': float(this_month_earnings),
+            # Served rather than hardcoded per client: mobile and web previously disagreed
+            # (500 vs 100) and neither matched the server, which enforced no minimum at all.
+            'min_withdrawal': float(django_settings.MIN_WITHDRAWAL_NGN),
         }
-        
+
         return Response(
             {"success": True, "data": data},
             status=status.HTTP_200_OK,
@@ -533,6 +563,68 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             "count": ordered_txns.count(),
             "results": serializer.data,
         })
+
+    @swagger_auto_schema(
+        operation_id="customer_payment_settings_get",
+        operation_summary="Get Payment Settings",
+        operation_description="Retrieve the customer's saved payout bank details.",
+        tags=["Customer Payment Settings"],
+        responses={
+            200: openapi.Response("Payment settings retrieved"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"])
+    def retrieve_payment_settings(self, request):
+        """Get the customer's saved payout bank details."""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only", "message": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = PaymentSettingsSerializer(customer)
+        return Response(
+            {"success": True, "data": serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="customer_payment_settings_update",
+        operation_summary="Update Payment Settings",
+        operation_description="Update the customer's payout bank account details.",
+        tags=["Customer Payment Settings"],
+        request_body=PaymentSettingsUpdateSerializer,
+        responses={
+            200: openapi.Response("Settings updated successfully"),
+            400: openapi.Response("Invalid data"),
+            403: openapi.Response("Customer access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["put"])
+    def update_payment_settings(self, request):
+        """Update the customer's payout bank details."""
+        customer = self.get_customer(request)
+        if not customer:
+            return Response(
+                {"detail": "Customer access only", "message": "Customer access only"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = PaymentSettingsUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        from users.services.payment_settings import apply_payment_settings
+        apply_payment_settings(customer, serializer.validated_data)
+
+        return Response(
+            {"success": True, "message": "Payment settings updated successfully"},
+            status=status.HTTP_200_OK,
+        )
 
     @swagger_auto_schema(
         operation_id="customer_set_payment_pin",
@@ -630,24 +722,38 @@ class CustomerProfileViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Get customer's bank details from request
-        bank_name = request.data.get('bank_name', '')
-        account_number = request.data.get('account_number', '')
-        account_name = request.data.get('account_name', '')
-        
-        if not all([bank_name, account_number, account_name]):
+        # Bank details come from the saved payout settings, matching how vendors and admins
+        # withdraw. They used to be read off the request body, which meant they were never
+        # persisted and there was no recipient_code to cache - so every customer transfer
+        # failed at "No transfer recipient code available".
+        # Fall back to the body for older clients that still send them inline.
+        bank_name = customer.bank_name or request.data.get('bank_name', '')
+        bank_code = customer.bank_code or request.data.get('bank_code', '')
+        account_number = customer.account_number or request.data.get('account_number', '')
+        account_name = customer.account_name or request.data.get('account_name', '')
+
+        if not all([bank_name, bank_code, account_number, account_name]):
             return Response(
-                {"success": False, "message": "Bank details (bank_name, account_number, account_name) are required"},
+                {
+                    "success": False,
+                    "message": (
+                        "Add and verify your bank account in Payment Settings before "
+                        "withdrawing."
+                    ),
+                    "reason": "payout_details_missing",
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         # Create withdrawal request with admin notification
         payout, error = PayoutService.create_withdrawal_request(
             user=request.user,
             amount=amount,
             bank_name=bank_name,
+            bank_code=bank_code,
             account_number=account_number,
             account_name=account_name,
+            recipient_code=customer.recipient_code or '',
             vendor=None
         )
         
@@ -1545,6 +1651,8 @@ class VendorWalletViewSet(viewsets.ViewSet):
         # Get pending order count
         pending_order_count = vendor.get_pending_order_count()
         
+        from django.conf import settings as django_settings
+
         data = {
             'withdrawable_balance': float(available_balance),
             'available_balance': float(available_balance),
@@ -1555,6 +1663,7 @@ class VendorWalletViewSet(viewsets.ViewSet):
             'total_debits': float(total_debits),
             'total_withdrawals': total_withdrawals,
             'this_month_earnings': float(this_month_earnings),
+            'min_withdrawal': float(django_settings.MIN_WITHDRAWAL_NGN),
         }
         
         return Response(
@@ -1756,16 +1865,12 @@ class VendorPaymentSettingsViewSet(viewsets.ViewSet):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
-        # Update vendor fields
-        if 'bank_name' in serializer.validated_data:
-            vendor.bank_name = serializer.validated_data['bank_name']
-        if 'account_number' in serializer.validated_data:
-            vendor.account_number = serializer.validated_data['account_number']
-        if 'account_name' in serializer.validated_data:
-            vendor.account_name = serializer.validated_data['account_name']
-        
-        vendor.save()
-        
+        # Shared with the admin and customer payout settings endpoints. Persists bank_code
+        # (previously dropped, which broke recipient creation) and clears a stale
+        # recipient_code when the destination account changes.
+        from users.services.payment_settings import apply_payment_settings
+        apply_payment_settings(vendor, serializer.validated_data)
+
         return Response(
             {"success": True, "message": "Payment settings updated successfully"},
             status=status.HTTP_200_OK,
@@ -1901,10 +2006,25 @@ class VendorAccountViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         
-        # Delete user and related data (cascade)
+        # Same guards as the customer path: money must leave before the account does, and
+        # closure anonymises rather than deletes so the ledger survives.
+        from users.services.account_closure import check_can_close, close_account
+
         user = request.user
-        user.delete()
-        
+        allowed, blocker = check_can_close(user)
+        if not allowed:
+            return Response(
+                {
+                    "success": False,
+                    "message": blocker['message'],
+                    "reason": blocker['reason'],
+                    "amount": blocker['amount'],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        close_account(user)
+
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -3821,7 +3941,17 @@ class AdminFinanceViewSet(AdminBaseViewSet):
             else:
                 wallet = w.user.wallet
             
-            wallet.credit(w.amount, source=f"Withdrawal Refund {w.reference}")
+            # Keyed on the payout reference so this can never double-refund, even if the
+            # transfer-failed webhook also fires for the same withdrawal.
+            from transactions.models import LedgerEntry
+            wallet.credit(
+                w.amount,
+                source=f"Withdrawal Refund {w.reference}",
+                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                entry_type=LedgerEntry.EntryType.WITHDRAWAL_REVERSAL,
+                idempotency_key=f"withdrawal-reversal-{w.reference}",
+                payout_request=w,
+            )
             
             # Update withdrawal status
             w.status = 'failed'
@@ -5421,8 +5551,20 @@ class AdminWalletViewSet(AdminBaseViewSet):
             for item in order.order_items.all():
                 commission_amount += item.item_subtotal * Decimal('0.10')
 
+            # The source__icontains checks above and below stay as the primary guard: they
+            # are the only thing that recognises credits made before the ledger existed,
+            # which have no idempotency key to match on. The keys are a second layer that
+            # closes the race the string check cannot.
+            from transactions.models import LedgerEntry
+
             if commission_amount > 0:
-                wallet.credit(commission_amount, source=f"Delivery Commission {order.order_id}")
+                wallet.credit(
+                    commission_amount,
+                    source=f"Delivery Commission {order.order_id}",
+                    entry_type=LedgerEntry.EntryType.COMMISSION,
+                    idempotency_key=f"backfill-commission-{order.order_id}",
+                    order=order,
+                )
 
             existing_delivery_fee_credit = WalletTransaction.objects.filter(
                 wallet=wallet,
@@ -5430,7 +5572,13 @@ class AdminWalletViewSet(AdminBaseViewSet):
                 source__icontains=f"Delivery Fee {order.order_id}",
             ).exists()
             if not existing_delivery_fee_credit and (order.delivery_fee or Decimal('0.00')) > Decimal('0.00'):
-                wallet.credit(order.delivery_fee, source=f"Delivery Delivery Fee {order.order_id}")
+                wallet.credit(
+                    order.delivery_fee,
+                    source=f"Delivery Delivery Fee {order.order_id}",
+                    entry_type=LedgerEntry.EntryType.DELIVERY_FEE,
+                    idempotency_key=f"backfill-delivery-fee-{order.order_id}",
+                    order=order,
+                )
 
     def _money_str(self, value):
         from decimal import Decimal
@@ -5641,8 +5789,17 @@ class AdminWalletViewSet(AdminBaseViewSet):
             processed_at=timezone.now()
         )
         
-        # Debit wallet
-        wallet.debit(amount, source=f"Withdrawal {payout.reference}")
+        # Debit wallet, withdrawable bucket only - an admin cannot cash out deposited funds
+        # any more than a customer can.
+        from transactions.models import LedgerEntry
+        wallet.debit(
+            amount,
+            source=f"Withdrawal {payout.reference}",
+            bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+            entry_type=LedgerEntry.EntryType.WITHDRAWAL,
+            idempotency_key=f"withdrawal-{payout.reference}",
+            payout_request=payout,
+        )
         
         # Trigger Paystack transfer directly for admins
         from users.services.payout_service import PayoutService
@@ -5654,7 +5811,14 @@ class AdminWalletViewSet(AdminBaseViewSet):
             logger.error(f"Admin auto-withdraw Paystack transfer failed: {msg_or_ref}")
             
             # Immediately refund the wallet if Paystack rejects it synchronously
-            wallet.credit(amount, source=f"Refund for failed withdrawal {payout.reference}")
+            wallet.credit(
+                amount,
+                source=f"Refund for failed withdrawal {payout.reference}",
+                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                entry_type=LedgerEntry.EntryType.WITHDRAWAL_REVERSAL,
+                idempotency_key=f"withdrawal-reversal-{payout.reference}",
+                payout_request=payout,
+            )
             
             return Response(
                 {"success": False, "message": f"Bank transfer failed: {msg_or_ref}"},
@@ -5700,6 +5864,10 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
             profile = AdminPayoutProfile.objects.get(user=request.user)
             data = {
                 'bank_name': profile.bank_name or '',
+                # Returned so the client can pre-select the saved bank in its picker;
+                # without it the form reopens with no bank chosen and the user has to
+                # re-pick before they can re-verify.
+                'bank_code': profile.bank_code or '',
                 'account_number': profile.account_number or '',
                 'account_name': profile.account_name or '',
                 'user': request.user,
@@ -5707,6 +5875,7 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
         except AdminPayoutProfile.DoesNotExist:
             data = {
                 'bank_name': '',
+                'bank_code': '',
                 'account_number': '',
                 'account_name': '',
                 'user': request.user,
@@ -5748,16 +5917,9 @@ class AdminPaymentSettingsViewSet(AdminBaseViewSet):
         from users.models import AdminPayoutProfile
         profile, created = AdminPayoutProfile.objects.get_or_create(user=request.user)
         
-        # Update fields
-        if 'bank_name' in serializer.validated_data:
-            profile.bank_name = serializer.validated_data['bank_name']
-        if 'account_number' in serializer.validated_data:
-            profile.account_number = serializer.validated_data['account_number']
-        if 'account_name' in serializer.validated_data:
-            profile.account_name = serializer.validated_data['account_name']
-        
-        profile.save()
-        
+        from users.services.payment_settings import apply_payment_settings
+        apply_payment_settings(profile, serializer.validated_data)
+
         return Response(
             {"success": True, "message": "Payment settings updated successfully"},
             status=status.HTTP_200_OK,
@@ -6119,12 +6281,26 @@ class AdminSettlementsViewSet(AdminBaseViewSet):
         if action == 'APPROVE':
             # Credit customer wallet
             customer_wallet, _ = Wallet.objects.get_or_create(user=dispute.customer)
-            customer_wallet.credit(dispute.amount, source=f"Refund for Order {dispute.order.order_id}")
+            from transactions.models import LedgerEntry
+            customer_wallet.credit(
+                dispute.amount,
+                source=f"Refund for Order {dispute.order.order_id}",
+                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                entry_type=LedgerEntry.EntryType.DISPUTE_CREDIT,
+                idempotency_key=f"dispute-credit-{dispute.id}",
+                order=dispute.order,
+            )
             
             # Debit vendor wallet (if they haven't withdrawn yet)
             vendor_wallet, _ = Wallet.objects.get_or_create(user=dispute.vendor.user)
             try:
-                vendor_wallet.debit(dispute.amount, source=f"Refund reversal for Order {dispute.order.order_id}")
+                vendor_wallet.debit(
+                    dispute.amount,
+                    source=f"Refund reversal for Order {dispute.order.order_id}",
+                    entry_type=LedgerEntry.EntryType.DISPUTE_DEBIT,
+                    idempotency_key=f"dispute-debit-{dispute.id}",
+                    order=dispute.order,
+                )
             except ValueError:
                 # If vendor wallet is insufficient, log it
                 pass

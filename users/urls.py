@@ -136,6 +136,14 @@ urlpatterns = [
     path("customer/wallet/withdraw/", CustomerProfileViewSet.as_view({"post": "request_withdrawal"}), name="customer-request-withdrawal"),
     
     # CUSTOMER PAYMENT SETTINGS & PIN
+    path(
+        "customer/payment-settings/",
+        CustomerProfileViewSet.as_view({
+            "get": "retrieve_payment_settings",
+            "put": "update_payment_settings",
+        }),
+        name="customer-payment-settings",
+    ),
     path("customer/payment-settings/pin/", CustomerProfileViewSet.as_view({"post": "set_payment_pin"}), name="customer-set-pin"),
 
     # VENDOR
