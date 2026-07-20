@@ -279,6 +279,28 @@ class RecommendationEndpointTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp.data['data']), 2)
 
+    def test_related_does_not_reveal_unpublished_products(self):
+        """
+        An unapproved slug must be indistinguishable from a slug that does not
+        exist, or the status code becomes an oracle for enumerating products
+        that have not been published yet. Found by driving the running API.
+        """
+        unpublished = Product.objects.create(
+            store=self.vendor, name='Secret Prototype', price='100.00', stock=5,
+            category=self.category, approval_status='pending', publish_status='submitted',
+        )
+
+        unpublished_resp = self.client.get(
+            '/store/recommendations/', {'type': 'related', 'product': unpublished.slug}
+        )
+        missing_resp = self.client.get(
+            '/store/recommendations/', {'type': 'related', 'product': 'no-such-product'}
+        )
+
+        self.assertEqual(unpublished_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(unpublished_resp.status_code, missing_resp.status_code)
+        self.assertEqual(unpublished_resp.data['error'], missing_resp.data['error'])
+
     def test_invalid_type_returns_400(self):
         resp = self.client.get('/store/recommendations/', {'type': 'magic'})
 
@@ -351,6 +373,32 @@ class InteractionEventEndpointTests(APITestCase):
         event = InteractionEvent.objects.get()
         self.assertIsNone(event.user)
         self.assertEqual(event.product, self.product)
+
+    def test_event_does_not_reveal_unpublished_products(self):
+        """
+        Same oracle as the related endpoint: an unapproved slug must look
+        exactly like a slug that does not exist. This also stops interaction
+        rows accruing against products that are not on sale yet.
+        """
+        unpublished = Product.objects.create(
+            store=self.vendor, name='Secret Prototype', price='100.00', stock=5,
+            approval_status='pending', publish_status='submitted',
+        )
+
+        unpublished_resp = self.client.post(
+            '/store/events/',
+            {'product': unpublished.slug, 'event_type': 'view'},
+            format='json',
+        )
+        missing_resp = self.client.post(
+            '/store/events/',
+            {'product': 'no-such-product', 'event_type': 'view'},
+            format='json',
+        )
+
+        self.assertEqual(unpublished_resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(unpublished_resp.status_code, missing_resp.status_code)
+        self.assertFalse(InteractionEvent.objects.filter(product=unpublished).exists())
 
     def test_authenticated_event_is_attributed_to_the_user(self):
         User = get_user_model()

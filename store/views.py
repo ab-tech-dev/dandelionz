@@ -2712,8 +2712,16 @@ class RecordInteractionView(BaseAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Scoped to publicly visible products, and deliberately indistinguishable
+        # from a slug that does not exist: responding differently would let a
+        # caller enumerate unpublished products by probing likely slugs.
         # values_list avoids loading a whole Product row just to get its id.
-        product_id = Product.objects.filter(slug=slug).values_list('id', flat=True).first()
+        product_id = (
+            Product.objects
+            .filter(slug=slug, approval_status='approved', publish_status='submitted')
+            .values_list('id', flat=True)
+            .first()
+        )
         if product_id is None:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -2792,7 +2800,16 @@ class RecommendationsView(BaseAPIView):
                     standardized_response(success=False, error="product slug is required when type=related"),
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            product = Product.objects.filter(slug=slug).select_related('category').first()
+            # Scoped to publicly visible products, and deliberately
+            # indistinguishable from a slug that does not exist: responding
+            # differently would let a caller enumerate unpublished products by
+            # probing likely slugs.
+            product = (
+                Product.objects
+                .filter(slug=slug, approval_status='approved', publish_status='submitted')
+                .select_related('category')
+                .first()
+            )
             if product is None:
                 return Response(
                     standardized_response(success=False, error="Product not found"),
