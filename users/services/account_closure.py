@@ -12,6 +12,11 @@ the message tells the user which route out applies to their balance.
 **The money trail outlives the account.** Closure anonymises the user row rather than
 deleting it, so LedgerEntry rows survive for auditing. LedgerEntry.wallet is PROTECT, so a
 stray hard delete fails loudly instead of silently erasing history.
+
+Those two rules pull against each other on personal data, and the split is: the ledger keeps
+*amounts and references*, the profile keeps *nothing identifying*. LedgerEntry references no
+bank data at all, and PayoutRequest snapshots its own copy of the destination account at the
+time of payout, so scrubbing the live profile costs the audit trail nothing.
 """
 
 import logging
@@ -101,6 +106,80 @@ def check_can_close(user):
     return True, None
 
 
+# Personal data held on the role profiles rather than on the user row. Cleared at closure
+# for the same reason the user fields are: none of it is referenced by the ledger, and bank
+# details left on a closed account are the most sensitive thing we would be retaining.
+_PROFILE_SCRUB = {
+    'customer_profile': (
+        ('shipping_address', ''),
+        ('city', ''),
+        ('postal_code', ''),
+        ('shipping_latitude', None),
+        ('shipping_longitude', None),
+        ('bank_name', ''),
+        ('bank_code', ''),
+        ('account_number', ''),
+        ('account_name', ''),
+        ('recipient_code', ''),
+    ),
+    'vendor_profile': (
+        ('address', ''),
+        # The coordinates go with the address. For a sole trader the store location is
+        # often their home, so clearing the free-text address while leaving metre-accurate
+        # coordinates behind would defeat the point - the customer branch clears its
+        # shipping coords for the same reason.
+        ('store_latitude', None),
+        ('store_longitude', None),
+        ('bank_name', ''),
+        ('bank_code', ''),
+        ('account_number', ''),
+        ('account_name', ''),
+        ('recipient_code', ''),
+    ),
+    'admin_payout_profile': (
+        ('bank_name', ''),
+        ('bank_code', ''),
+        ('account_number', ''),
+        ('account_name', ''),
+        ('recipient_code', ''),
+    ),
+}
+
+
+def _unpublish_vendor_store(user):
+    """
+    Take a closing vendor's products off sale.
+
+    This has to happen here rather than in one of the two closure endpoints, because the
+    store address is scrubbed a moment later: a published product whose vendor has no
+    address and no coordinates fails geocoding at checkout, so the customer gets an
+    unactionable "Unable to calculate shipping fee" instead of simply not seeing the item.
+    """
+    vendor = getattr(user, 'vendor_profile', None)
+    if vendor is None:
+        return
+
+    from store.models import Product
+    Product.objects.filter(store=vendor).update(publish_status='draft')
+
+
+def _scrub_profiles(user):
+    """Clear payout and address data from whichever role profiles this user has."""
+    for relation, fields in _PROFILE_SCRUB.items():
+        profile = getattr(user, relation, None)
+        if profile is None:
+            continue
+
+        updated = []
+        for field, value in fields:
+            if hasattr(profile, field):
+                setattr(profile, field, value)
+                updated.append(field)
+
+        if updated:
+            profile.save(update_fields=updated)
+
+
 @transaction.atomic
 def close_account(user):
     """
@@ -139,6 +218,14 @@ def close_account(user):
         updated.append('closed_at')
 
     user.save(update_fields=list(dict.fromkeys(updated)))
+
+    _unpublish_vendor_store(user)
+    _scrub_profiles(user)
+
+    # The PIN hash is a live credential. The account cannot authenticate any more, but there
+    # is no reason to keep it, and nothing in the ledger refers to it.
+    from users.models import PaymentPIN
+    PaymentPIN.objects.filter(user=user).delete()
 
     logger.info(f"Account closed and anonymised: {original_email} -> {placeholder}")
     return user

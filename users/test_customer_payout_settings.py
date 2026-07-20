@@ -25,6 +25,42 @@ from users.services.payout_service import PayoutService
 User = get_user_model()
 
 
+class CalculatePayoutTests(TestCase):
+    """
+    calculate_payout is what the admin payout screens quote to a user. Quoting the wallet
+    total would advertise deposited funds as payable, which create_withdrawal_request then
+    refuses - a confusing dead end rather than a leak, but still the wrong number.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email='payout@test.com', password='test123', full_name='Payout User',
+        )
+        Customer.objects.get_or_create(user=self.user)
+        self.user = User.objects.get(pk=self.user.pk)
+        self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
+
+    def test_deposited_funds_are_not_quoted_as_payable(self):
+        self.wallet.credit(
+            Decimal('3000.00'),
+            source='Wallet deposit',
+            bucket=LedgerEntry.Bucket.SPENDABLE,
+        )
+
+        self.assertEqual(PayoutService.calculate_payout(self.user), Decimal('0.00'))
+
+    def test_only_the_withdrawable_part_of_a_mixed_wallet_is_quoted(self):
+        self.wallet.credit(
+            Decimal('3000.00'),
+            source='Wallet deposit',
+            bucket=LedgerEntry.Bucket.SPENDABLE,
+        )
+        self.wallet.credit(Decimal('750.00'), source='Referral bonus')
+        self.user = User.objects.get(pk=self.user.pk)
+
+        self.assertEqual(PayoutService.calculate_payout(self.user), Decimal('750.00'))
+
+
 class CustomerPaymentSettingsEndpointTests(TestCase):
 
     def setUp(self):

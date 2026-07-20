@@ -19,7 +19,7 @@ class PayoutService:
         """
         Calculate the withdrawable payout for a user.
         For vendors: only completed/delivered order earnings are included
-        For customers: wallet balance (referral earnings)
+        For customers: the withdrawable wallet bucket (referral earnings, refunds)
         """
         total = Decimal("0")
 
@@ -33,7 +33,11 @@ class PayoutService:
         elif hasattr(user, "customer_profile"):
             wallet = getattr(user, "wallet", None)
             if wallet:
-                total = wallet.balance
+                # Not wallet.balance: the total includes the customer's own deposits, which
+                # are spendable at checkout but never withdrawable to a bank. Quoting the
+                # total here would advertise a payout that create_withdrawal_request
+                # refuses downstream.
+                total = wallet.withdrawable_balance
 
         return total
     

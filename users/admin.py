@@ -169,13 +169,83 @@ class PayoutRequestAdmin(admin.ModelAdmin):
 
     actions = ['retry_payouts']
 
+    def _net_charged(self, queryset):
+        """
+        How much each selected payout has actually taken out of its wallet, net.
+
+        Net, not "was there a debit": a transfer that Paystack rejects synchronously is
+        debited and then reversed (see AdminWalletViewSet.withdraw), leaving both a
+        WITHDRAWAL debit and a WITHDRAWAL_REVERSAL credit. Such a payout has been made
+        whole, so retrying it would send money a second time - an existence check would
+        wave it straight through.
+
+        One grouped query for the whole selection rather than one per row.
+        """
+        from collections import defaultdict
+        from decimal import Decimal
+
+        from django.db.models import Sum
+        from transactions.models import LedgerEntry
+
+        net = defaultdict(lambda: Decimal('0.00'))
+        rows = (
+            LedgerEntry.objects
+            .filter(payout_request__in=queryset)
+            .values('payout_request_id', 'direction')
+            .annotate(total=Sum('amount'))
+        )
+        for row in rows:
+            amount = row['total'] or Decimal('0.00')
+            if row['direction'] == LedgerEntry.Direction.DEBIT:
+                net[row['payout_request_id']] += amount
+            else:
+                net[row['payout_request_id']] -= amount
+        return net
+
     def retry_payouts(self, request, queryset):
+        from decimal import Decimal
+
         from users.services.payout_service import PayoutService
+        from transactions.models import LedgerEntry
+
         success_count = 0
         failed_count = 0
-        
+
+        net_charged = self._net_charged(queryset)
+
+        # Payouts older than the ledger itself cannot be judged this way. backfill_ledger
+        # only adopts an opening balance per wallet; it never reconstructs per-payout
+        # entries, so every pre-ledger payout has nothing linked to it. Blocking those
+        # would take away the retry action for exactly the historical failures it exists
+        # to fix, so the check applies only from the point the ledger starts.
+        ledger_start = (
+            LedgerEntry.objects.order_by('created_at')
+            .values_list('created_at', flat=True)
+            .first()
+        )
+
         for payout in queryset:
             if payout.status in ['failed', 'processing']:
+                covered_by_ledger = (
+                    ledger_start is not None
+                    and payout.created_at is not None
+                    and payout.created_at >= ledger_start
+                )
+                if covered_by_ledger and net_charged[payout.pk] <= Decimal('0.00'):
+                    # Either never debited, or debited and already reversed. Both mean the
+                    # wallet still holds this money, so paying it out now would create the
+                    # discrepancy rather than settle it.
+                    failed_count += 1
+                    self.message_user(
+                        request,
+                        f"Payout {payout.reference} has no outstanding ledger debit - the "
+                        f"wallet was either never charged for it or has already been "
+                        f"refunded. Not retried. Reconcile the wallet before paying this "
+                        f"out.",
+                        level='ERROR',
+                    )
+                    continue
+
                 success, msg = PayoutService.process_external_transfer(payout)
                 if success:
                     success_count += 1

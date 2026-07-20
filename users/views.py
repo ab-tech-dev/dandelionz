@@ -347,10 +347,25 @@ class CustomerProfileViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Soft delete: set is_active to False so user cannot login
-        with transaction.atomic():
-            user.is_active = False
-            user.save(update_fields=['is_active', 'updated_at'])
+        # Same guards as the POST delete_account route. This endpoint used to only flip
+        # is_active, which meant a customer holding a wallet balance could close their
+        # account here, lose access, and strand the money - the balance guard existed on
+        # only one of the two closure routes.
+        from users.services.account_closure import check_can_close, close_account
+
+        allowed, blocker = check_can_close(user)
+        if not allowed:
+            return Response(
+                {
+                    "success": False,
+                    "error": blocker['message'],
+                    "reason": blocker['reason'],
+                    "amount": blocker['amount'],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        close_account(user)
 
         return Response(
             {"success": True, "message": "Account closed successfully."},
@@ -360,7 +375,13 @@ class CustomerProfileViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_id="customer_delete_account",
         operation_summary="Delete Customer Account",
-        operation_description="Permanently delete the authenticated customer's account. This action cannot be undone. Requires password confirmation.",
+        operation_description=(
+            "Close the authenticated customer's account. This action cannot be undone. "
+            "Personal data (name, email, phone, address, payout details) is erased and the "
+            "account can no longer sign in, but the wallet ledger is retained for financial "
+            "auditing. Blocked while the wallet holds a balance. Requires password "
+            "confirmation."
+        ),
         tags=["Customer Profile"],
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
@@ -378,7 +399,7 @@ class CustomerProfileViewSet(viewsets.ViewSet):
     )
     @action(detail=False, methods=["post"])
     def delete_account(self, request):
-        """Permanently delete the customer account and all associated data."""
+        """Close the customer account: erase personal data, keep the financial ledger."""
         customer = self.get_customer(request)
 
         if not customer:
@@ -1037,16 +1058,24 @@ class VendorViewSet(viewsets.ViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Soft delete vendor and mark all products as inactive
-        with transaction.atomic():
-            from store.models import Product
-            
-            # Mark all vendor's products as inactive
-            Product.objects.filter(store=vendor).update(publish_status='draft')
-            
-            # Set user as inactive so they cannot login
-            user.is_active = False
-            user.save(update_fields=['is_active', 'updated_at'])
+        # Same guards as the POST delete_account route - see the customer equivalent. This
+        # endpoint used to only flip is_active, so a vendor with unpaid earnings could
+        # close here and strand them.
+        from users.services.account_closure import check_can_close, close_account
+
+        allowed, blocker = check_can_close(user)
+        if not allowed:
+            return Response(
+                {
+                    "success": False,
+                    "error": blocker['message'],
+                    "reason": blocker['reason'],
+                    "amount": blocker['amount'],
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        close_account(user)
 
         return Response(
             {"success": True, "message": "Vendor account and store have been closed successfully."},
@@ -1967,7 +1996,12 @@ class VendorAccountViewSet(viewsets.ViewSet):
     @swagger_auto_schema(
         operation_id="vendor_delete_account",
         operation_summary="Delete Vendor Account",
-        operation_description="Permanently delete the vendor account. Requires password confirmation.",
+        operation_description=(
+            "Close the vendor account. Personal and payout data is erased and the account "
+            "can no longer sign in, but the wallet ledger is retained for financial "
+            "auditing. Blocked while the wallet holds a balance. Requires password "
+            "confirmation."
+        ),
         tags=["Vendor Account"],
         request_body=openapi.Schema(
             type=openapi.TYPE_OBJECT,
@@ -1984,7 +2018,7 @@ class VendorAccountViewSet(viewsets.ViewSet):
         security=[{"Bearer": []}],
     )
     def delete_account(self, request):
-        """Delete vendor account"""
+        """Close the vendor account: erase personal data, keep the financial ledger."""
         vendor = self.get_vendor(request)
         if not vendor:
             return Response(
@@ -5505,6 +5539,14 @@ class AdminNotificationViewSet(AdminBaseViewSet):
 # =====================================================
 # ADMIN WALLET & PAYMENTS
 # =====================================================
+class InsufficientWalletFunds(Exception):
+    """
+    Raised when a wallet debit is refused for lack of funds, so the surrounding transaction
+    rolls back without a bare `except ValueError` also swallowing unrelated failures from
+    the other writes in the block.
+    """
+
+
 class AdminWalletViewSet(AdminBaseViewSet):
     """
     ViewSet for managing admin wallet, earnings, and withdrawals.
@@ -5753,7 +5795,10 @@ class AdminWalletViewSet(AdminBaseViewSet):
         wallet, _ = Wallet.objects.get_or_create(user=wallet_owner)
         amount = serializer.validated_data['amount']
         
-        if wallet.balance < amount:
+        # Gate on the withdrawable bucket, not the total. wallet.balance includes
+        # spendable deposits, so checking it here would pass a request that the debit
+        # below is bound to reject - see the same rule in PayoutService.
+        if wallet.withdrawable_balance < amount:
             return Response(
                 {"success": False, "message": "Insufficient balance"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -5776,31 +5821,50 @@ class AdminWalletViewSet(AdminBaseViewSet):
         
         # Create withdrawal request
         from users.models import PayoutRequest
-        import uuid as uuid_lib
-        payout = PayoutRequest.objects.create(
-            user=wallet_owner,
-            amount=amount,
-            bank_name=payout_profile.bank_name,
-            account_number=payout_profile.account_number,
-            account_name=payout_profile.account_name or '',
-            recipient_code=payout_profile.recipient_code or '',
-            reference=f"ADM-{uuid_lib.uuid4().hex[:12].upper()}",
-            status='processing',
-            processed_at=timezone.now()
-        )
-        
-        # Debit wallet, withdrawable bucket only - an admin cannot cash out deposited funds
-        # any more than a customer can.
         from transactions.models import LedgerEntry
-        wallet.debit(
-            amount,
-            source=f"Withdrawal {payout.reference}",
-            bucket=LedgerEntry.Bucket.WITHDRAWABLE,
-            entry_type=LedgerEntry.EntryType.WITHDRAWAL,
-            idempotency_key=f"withdrawal-{payout.reference}",
-            payout_request=payout,
-        )
-        
+        import uuid as uuid_lib
+
+        # The request row and its ledger debit have to commit together. Without this the
+        # debit can raise (a concurrent withdrawal draining the bucket between the check
+        # above and the lock inside debit()) and leave a committed PayoutRequest sitting in
+        # 'processing' with no matching ledger entry - money owed on paper that
+        # reconcile_wallets cannot see, and that retry_payouts would happily pay out.
+        try:
+            with transaction.atomic():
+                payout = PayoutRequest.objects.create(
+                    user=wallet_owner,
+                    amount=amount,
+                    bank_name=payout_profile.bank_name,
+                    account_number=payout_profile.account_number,
+                    account_name=payout_profile.account_name or '',
+                    recipient_code=payout_profile.recipient_code or '',
+                    reference=f"ADM-{uuid_lib.uuid4().hex[:12].upper()}",
+                    status='processing',
+                    processed_at=timezone.now()
+                )
+
+                # Withdrawable bucket only - an admin cannot cash out deposited funds any
+                # more than a customer can.
+                try:
+                    wallet.debit(
+                        amount,
+                        source=f"Withdrawal {payout.reference}",
+                        bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                        entry_type=LedgerEntry.EntryType.WITHDRAWAL,
+                        idempotency_key=f"withdrawal-{payout.reference}",
+                        payout_request=payout,
+                    )
+                except ValueError as exc:
+                    # Only the debit's own refusal becomes a 400. A ValueError from the
+                    # create above is a server fault and must not be reported to the caller
+                    # as a rejected withdrawal.
+                    raise InsufficientWalletFunds(str(exc)) from exc
+        except InsufficientWalletFunds as exc:
+            return Response(
+                {"success": False, "message": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Trigger Paystack transfer directly for admins
         from users.services.payout_service import PayoutService
         success, msg_or_ref = PayoutService.process_external_transfer(payout)
