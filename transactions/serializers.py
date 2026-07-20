@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund,
     Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory,
-    WalletDeposit, DepositRefund
+    WalletDeposit, DepositRefund, LedgerEntry, PaystackEvent
 )
 from store.models import Product
 from decimal import Decimal
@@ -614,5 +614,59 @@ class DepositRefundSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'reference', 'deposit_reference', 'amount', 'status',
             'failure_reason', 'created_at', 'settled_at',
+        ]
+        read_only_fields = fields
+
+
+class LedgerEntrySerializer(serializers.ModelSerializer):
+    """
+    One movement of money, as the admin finance ledger shows it.
+
+    Flattens the wallet owner and the linked order/payout onto the row: the ledger is read
+    as a table, and an operator chasing a figure should not have to make another request to
+    find out whose money it was.
+    """
+    user_email = serializers.EmailField(source='wallet.user.email', read_only=True)
+    user_name = serializers.CharField(source='wallet.user.full_name', read_only=True)
+    entry_type_display = serializers.CharField(source='get_entry_type_display', read_only=True)
+    order_id = serializers.CharField(source='order.order_id', read_only=True, default=None)
+    payout_reference = serializers.CharField(
+        source='payout_request.reference', read_only=True, default=None
+    )
+    signed_amount = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LedgerEntry
+        fields = [
+            'id', 'created_at', 'user_email', 'user_name',
+            'direction', 'bucket', 'entry_type', 'entry_type_display',
+            'amount', 'signed_amount', 'balance_after',
+            'reference', 'description', 'order_id', 'payout_reference',
+            'operation_key',
+        ]
+        read_only_fields = fields
+
+    def get_signed_amount(self, obj):
+        """Debits carry a minus so a column of these sums to the net movement."""
+        if obj.direction == LedgerEntry.Direction.DEBIT:
+            return str(-obj.amount)
+        return str(obj.amount)
+
+
+class PaystackEventSerializer(serializers.ModelSerializer):
+    """
+    A webhook delivery that did not produce a ledger entry.
+
+    This is the failed-payments view: money that Paystack told us about but which never
+    landed anywhere. It is deliberately separate from the ledger rather than mixed into it -
+    the ledger is what actually happened to balances, and putting failures in it would make
+    every total wrong.
+    """
+
+    class Meta:
+        model = PaystackEvent
+        fields = [
+            'id', 'event_id', 'event_type', 'reference', 'status',
+            'error_message', 'signature_valid', 'received_at', 'processed_at',
         ]
         read_only_fields = fields

@@ -11,7 +11,9 @@ from .views import (
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
     CustomerCancelOrderView, PaystackMobileReturnView,
     InitializeWalletDepositView, VerifyWalletDepositView, WalletDepositListView,
-    DepositRefundView, DepositRefundListView
+    DepositRefundView, DepositRefundListView,
+    AdminLedgerView, AdminLedgerSummaryView, AdminLedgerExportView,
+    AdminFailedPaymentsView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -61,6 +63,14 @@ urlpatterns = [
     path('wallet/deposit/refund/', DepositRefundView.as_view(), name='wallet-deposit-refund'),
     path('wallet/deposit/refunds/', DepositRefundListView.as_view(), name='wallet-deposit-refund-list'),
     path('admin/wallets/', AdminWalletListView.as_view(), name='admin-wallet-list'),
+
+    # Finance ledger. The list, summary and export share one filter implementation, so an
+    # export always contains exactly the rows the operator was looking at.
+    path('admin/ledger/', AdminLedgerView.as_view(), name='admin-ledger'),
+    path('admin/ledger/summary/', AdminLedgerSummaryView.as_view(), name='admin-ledger-summary'),
+    path('admin/ledger/export/', AdminLedgerExportView.as_view(), name='admin-ledger-export'),
+    # Deliberately separate from the ledger: these never moved any money.
+    path('admin/failed-payments/', AdminFailedPaymentsView.as_view(), name='admin-failed-payments'),
 
     # Delivery fee endpoints
     path('delivery/calculate-fee/', CalculateDeliveryFeeView.as_view(), name='calculate-delivery-fee'),

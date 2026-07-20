@@ -231,7 +231,9 @@ from .serializers import (
     WalletDepositInitSerializer,
     WalletDepositSerializer,
     DepositRefundRequestSerializer,
-    DepositRefundSerializer
+    DepositRefundSerializer,
+    LedgerEntrySerializer,
+    PaystackEventSerializer
 )
 from .paystack import Paystack
 from authentication.core.response import standardized_response
@@ -2628,6 +2630,194 @@ class WalletTransactionListView(generics.ListAPIView):
     def get_queryset(self):
         wallet = get_object_or_404(Wallet, user=self.request.user)
         return wallet.transactions.all().order_by('-created_at')
+
+
+class AdminLedgerView(generics.ListAPIView):
+    """
+    Every movement of money on the platform, filterable.
+
+    The ledger is append-only and is the source of truth: wallet balance columns are caches
+    derived from it. So this is the screen to reconcile against when a figure is disputed,
+    and it is deliberately read-only - there is no edit endpoint anywhere for these rows.
+
+    Filters (all optional, all combinable): date_from, date_to, entry_type (comma-separated),
+    direction, bucket, user (exact email), reference (contains), search (reference,
+    description, user email or name).
+    """
+    serializer_class = LedgerEntrySerializer
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger",
+        operation_summary="Finance Ledger",
+        operation_description=(
+            "Every credit and debit on the platform, filterable by date, type, direction, "
+            "bucket and user. Append-only and read-only."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('date_from', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='YYYY-MM-DD or YYYY-MM-DD HH:MM:SS'),
+            openapi.Parameter('date_to', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Inclusive; a bare date covers the whole day'),
+            openapi.Parameter('entry_type', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='One or more, comma-separated'),
+            openapi.Parameter('direction', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='CREDIT or DEBIT'),
+            openapi.Parameter('bucket', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='SPENDABLE or WITHDRAWABLE'),
+            openapi.Parameter('user', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Exact email'),
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter('search', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+        ],
+        responses={200: LedgerEntrySerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        from transactions.ledger_report import filtered_entries
+        return filtered_entries(self.request.query_params)
+
+
+class AdminLedgerSummaryView(APIView):
+    """
+    Totals for the same slice of the ledger the list endpoint would return.
+
+    Shares filtered_entries() with the list and the export, so the number on the summary
+    card and the rows beneath it can never disagree.
+    """
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger_summary",
+        operation_summary="Finance Ledger Summary",
+        operation_description=(
+            "Credit, debit and net totals for a filtered slice of the ledger, broken down "
+            "by entry type and by bucket. Accepts the same filters as the ledger list."
+        ),
+        tags=["Admin Finance"],
+        responses={200: openapi.Response("Ledger totals")},
+    )
+    def get(self, request):
+        from transactions.ledger_report import applied_filters, filtered_entries, summarise
+
+        qs = filtered_entries(request.query_params)
+        return Response(standardized_response(data={
+            'filters': applied_filters(request.query_params),
+            **summarise(qs),
+        }))
+
+
+class AdminLedgerExportView(APIView):
+    """
+    Download the filtered ledger as CSV or XLSX.
+
+    Uses the same filter as the list and summary endpoints, so an export always contains
+    exactly the rows the operator was looking at. CSV streams and is unbounded; XLSX is
+    capped, because a spreadsheet is a zip finalised at the end and cannot be streamed.
+    """
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger_export",
+        operation_summary="Export Finance Ledger",
+        operation_description=(
+            "Download the filtered ledger. `export_format=csv` (default) streams and has "
+            "no row limit; `export_format=xlsx` writes real numbers that sum in the sheet "
+            "but is capped."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('export_format', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='csv or xlsx'),
+        ],
+        responses={200: openapi.Response("Spreadsheet download")},
+    )
+    def get(self, request):
+        from transactions.ledger_report import export_csv, export_xlsx, filtered_entries
+
+        # Deliberately not `format`: DRF reserves that query parameter for content
+        # negotiation (URL_FORMAT_OVERRIDE), so ?format=csv never reaches this method -
+        # DRF looks for a renderer named "csv", finds none, and raises its own 404.
+        export_format = (request.query_params.get('export_format') or 'csv').lower()
+        if export_format not in ('csv', 'xlsx'):
+            return Response(
+                standardized_response(
+                    success=False, error="export_format must be csv or xlsx"
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = filtered_entries(request.query_params)
+        filename = f"dandelionz-ledger-{timezone.localtime().strftime('%Y%m%d-%H%M')}"
+
+        if export_format == 'xlsx':
+            return export_xlsx(qs, filename)
+        return export_csv(qs, filename)
+
+
+class AdminFailedPaymentsView(generics.ListAPIView):
+    """
+    Paystack events that never became a ledger entry.
+
+    Kept out of the ledger on purpose. The ledger records what actually happened to
+    balances; a failed or ignored webhook is money that Paystack told us about but which
+    landed nowhere, so including it would make every total on the finance screens wrong.
+    This is the list an operator works through to find payments that need chasing.
+
+    Defaults to the states worth attention - FAILED (the handler raised) and IGNORED (no
+    matching record, so nothing was applied) - since PROCESSED events are just the ledger
+    seen from the other side.
+    """
+    serializer_class = PaystackEventSerializer
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="admin_failed_payments",
+        operation_summary="Failed & Unapplied Payments",
+        operation_description=(
+            "Paystack webhook deliveries that produced no ledger entry: handler failures "
+            "and events with no matching record. Filter with ?status= or ?event_type=."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Defaults to FAILED,IGNORED'),
+            openapi.Parameter('event_type', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+        ],
+        responses={200: PaystackEventSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        params = self.request.query_params
+        qs = PaystackEvent.objects.all().order_by('-received_at')
+
+        requested = params.get('status')
+        if requested:
+            wanted = [s.strip().upper() for s in requested.split(',') if s.strip()]
+            valid = [s for s in wanted if s in PaystackEvent.Status.values]
+            if valid:
+                qs = qs.filter(status__in=valid)
+        else:
+            qs = qs.filter(status__in=[
+                PaystackEvent.Status.FAILED,
+                PaystackEvent.Status.IGNORED,
+            ])
+
+        event_type = params.get('event_type')
+        if event_type:
+            qs = qs.filter(event_type__icontains=event_type.strip())
+
+        reference = params.get('reference')
+        if reference:
+            qs = qs.filter(reference__icontains=reference.strip())
+
+        return qs
 
 
 class AdminWalletListView(generics.ListAPIView):
