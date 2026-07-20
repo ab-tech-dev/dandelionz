@@ -89,6 +89,33 @@ class RelatedProductsTests(RecommendationTestBase):
         self.assertEqual(results[0], tagged)
         self.assertIn(category_only, results)
 
+    def test_falls_back_to_trending_when_every_candidate_scores_zero(self):
+        """
+        The prefilter matches tag substrings while scoring needs exact overlap,
+        so a pool can be non-empty and still score nothing. Checking only
+        whether the pool was empty left the product page with no row at all.
+        """
+        seed = self._product('Seed Item', category=None, brand=None, tags='run')
+        # Prefilters via tags__icontains='run', then scores 0: no shared
+        # category, no shared brand, and {'run'} vs {'running'} do not intersect.
+        self._product('Decoy Item', category=None, brand=None, tags='running')
+
+        results = related_products(seed, limit=8)
+
+        self.assertNotEqual(results, [])
+        self.assertNotIn(seed, results)
+
+    def test_fallback_still_returns_a_full_row_when_the_seed_is_trending(self):
+        """Filtering the seed out of a `limit`-sized list would return limit-1."""
+        seed = self._product('Seed Item', category=None, brand=None, tags='run')
+        for i in range(5):
+            self._product(f'Filler {i}', category=None, brand=None)
+
+        results = related_products(seed, limit=3)
+
+        self.assertEqual(len(results), 3)
+        self.assertNotIn(seed, results)
+
     def test_same_brand_is_related(self):
         seed = self._product('Mystery Item', brand='Umbro')
         same_brand = self._product('Other Item', brand='Umbro')
@@ -278,6 +305,19 @@ class RecommendationEndpointTests(APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp.data['data']), 2)
+
+    def test_category_on_a_type_that_cannot_use_it_returns_400(self):
+        """
+        Silently ignoring it would hand back an unscoped list to a caller who
+        believes they narrowed the request.
+        """
+        resp = self.client.get(
+            '/store/recommendations/',
+            {'type': 'related', 'product': self.seed.slug, 'category': 'footwear'},
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('trending', resp.data['error'])
 
     def test_related_does_not_reveal_unpublished_products(self):
         """

@@ -2817,13 +2817,22 @@ class RecommendationsView(BaseAPIView):
                 )
 
         user = request.user if request.user and request.user.is_authenticated else None
-        products = recommend(
-            kind,
-            user=user,
-            product=product,
-            category=(request.query_params.get('category') or '').strip() or None,
-            limit=limit,
-        )
+        try:
+            products = recommend(
+                kind,
+                user=user,
+                product=product,
+                category=(request.query_params.get('category') or '').strip() or None,
+                limit=limit,
+            )
+        except ValueError as exc:
+            # recommend() rejects argument combinations it cannot honour, such as
+            # a category on a type that does not support one. Those are caller
+            # mistakes, not server faults.
+            return Response(
+                standardized_response(success=False, error=str(exc)),
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         serializer = ProductSerializer(products, many=True)
         return Response(standardized_response(data=serializer.data))
