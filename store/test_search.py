@@ -211,6 +211,20 @@ class SearchSuggestionsTests(APITestCase):
 
         self.assertLessEqual(len(resp.data['data']['products']), 8)
 
+    def test_cached_suggestions_drop_a_product_that_stops_being_visible(self):
+        """
+        The cache holds ids, not rendered names, so a product unapproved inside
+        the TTL disappears on the next request instead of lingering for it.
+        """
+        self.client.get('/store/products/suggestions/', {'q': 'Sneakers'})  # warm the cache
+
+        Product.objects.filter(name='Sneakers').update(approval_status='rejected')
+
+        resp = self.client.get('/store/products/suggestions/', {'q': 'Sneakers'})
+
+        names = [p['name'] for p in resp.data['data']['products']]
+        self.assertNotIn('Sneakers', names)
+
     def test_suggestions_require_no_authentication(self):
         resp = self.client.get('/store/products/suggestions/', {'q': 'Sneakers'})
 

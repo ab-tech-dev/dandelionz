@@ -149,30 +149,51 @@ class ProductSearchSuggestionsView(BaseAPIView):
         # which are invalid keys on some cache backends.
         query_digest = hashlib.sha256(query.lower().encode('utf-8')).hexdigest()
         cache_key = f'search:suggest:{query_digest}'
-        cached = cache.get(cache_key)
-        if cached is not None:
-            return Response(standardized_response(data=cached))
 
-        products = search_products(
-            Product.objects.filter(
-                approval_status='approved',
-                publish_status='submitted'
-            ).select_related('category'),
-            query
-        )[:self.PRODUCT_LIMIT]
+        # Cache ids, not the rendered payload, and re-resolve them through the
+        # visibility filters below on every hit. Caching names and slugs
+        # directly would keep suggesting a product for the rest of the TTL after
+        # it was rejected or unpublished.
+        cached_ids = cache.get(cache_key)
+        if cached_ids is not None:
+            product_ids, category_ids = cached_ids
+        else:
+            product_ids = list(
+                search_products(
+                    self._visible_products(), query
+                ).values_list('id', flat=True)[:self.PRODUCT_LIMIT]
+            )
+            category_ids = list(
+                self._visible_categories(query).values_list('id', flat=True)[:self.CATEGORY_LIMIT]
+            )
+            cache.set(cache_key, (product_ids, category_ids), self.CACHE_SECONDS)
 
-        categories = Category.objects.filter(
-            is_active=True,
-            name__icontains=query
-        )[:self.CATEGORY_LIMIT]
+        return Response(standardized_response(data={
+            'products': self._as_suggestions(self._visible_products(), product_ids),
+            'categories': self._as_suggestions(self._visible_categories(query), category_ids),
+        }))
 
-        data = {
-            'products': [{'name': p.name, 'slug': p.slug} for p in products],
-            'categories': [{'name': c.name, 'slug': c.slug} for c in categories],
-        }
+    @staticmethod
+    def _visible_products():
+        return Product.objects.filter(
+            approval_status='approved',
+            publish_status='submitted'
+        ).select_related('category')
 
-        cache.set(cache_key, data, self.CACHE_SECONDS)
-        return Response(standardized_response(data=data))
+    @staticmethod
+    def _visible_categories(query):
+        return Category.objects.filter(is_active=True, name__icontains=query)
+
+    @staticmethod
+    def _as_suggestions(queryset, ids):
+        """Resolve cached ids back to name/slug pairs, preserving rank order."""
+        if not ids:
+            return []
+        by_id = {row.id: row for row in queryset.filter(id__in=ids)}
+        return [
+            {'name': by_id[i].name, 'slug': by_id[i].slug}
+            for i in ids if i in by_id
+        ]
 
 
 class ProductDetailView(BaseAPIView):
