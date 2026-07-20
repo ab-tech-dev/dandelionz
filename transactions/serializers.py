@@ -618,6 +618,30 @@ class DepositRefundSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class CheckoutOptionsSerializer(serializers.Serializer):
+    """
+    How the customer wants to pay. Both fields optional, so the existing card-only
+    checkout body (which is empty) stays valid.
+    """
+    use_wallet = serializers.BooleanField(required=False, default=False)
+    wallet_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True,
+        help_text="Omit to put as much of the wallet towards the order as it can cover.",
+    )
+
+    def validate_wallet_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("Wallet amount must be greater than zero.")
+        return value
+
+    def validate(self, data):
+        if data.get('wallet_amount') is not None and not data.get('use_wallet'):
+            raise serializers.ValidationError(
+                "Set use_wallet to true to pay with your wallet balance."
+            )
+        return data
+
+
 class LedgerEntrySerializer(serializers.ModelSerializer):
     """
     One movement of money, as the admin finance ledger shows it.

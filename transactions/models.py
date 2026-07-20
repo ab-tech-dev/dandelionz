@@ -567,7 +567,14 @@ class Payment(models.Model):
         # Return early if already successful to prevent duplicate processing
         if self.verified:
             return
-        
+
+        # Confirm any wallet money held for this order. Done here rather than in the verify
+        # view because the webhook and the verify endpoint both land on this method and
+        # routinely race - capturing in one of them would leave the other path holding
+        # money against an order that is already paid.
+        from transactions import wallet_checkout
+        wallet_checkout.capture_for_order(self.order)
+
         self.status = 'SUCCESS'
         self.verified = True
         self.paid_at = timezone.now()

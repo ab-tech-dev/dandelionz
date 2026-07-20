@@ -23,7 +23,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
 from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
@@ -234,8 +234,10 @@ from .serializers import (
     DepositRefundRequestSerializer,
     DepositRefundSerializer,
     LedgerEntrySerializer,
-    PaystackEventSerializer
+    PaystackEventSerializer,
+    CheckoutOptionsSerializer
 )
+from transactions import wallet_checkout
 from .paystack import Paystack
 from authentication.core.response import standardized_response
 
@@ -779,7 +781,16 @@ class CheckoutView(APIView):
     def post(self, request):
         user = request.user
         logger.info(f"Checkout initiated for user: {user.uuid}")
-        
+
+        checkout_serializer = CheckoutOptionsSerializer(data=request.data or {})
+        if not checkout_serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=checkout_serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        use_wallet = checkout_serializer.validated_data.get('use_wallet', False)
+        requested_wallet_amount = checkout_serializer.validated_data.get('wallet_amount')
+
         cart = Cart.objects.filter(customer=user).first()
         if not cart:
             logger.warning(f"Checkout failed: No cart found for user {user.uuid}")
@@ -885,30 +896,56 @@ class CheckoutView(APIView):
                 order.update_total()
                 logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
 
-                # 5. Create or reset Payment
+                # 4b. Decide the wallet/card split before anything is charged.
+                # The wallet is debited here rather than after Paystack succeeds: the two
+                # legs cannot be atomic, and holding the money up front is what stops the
+                # same balance being spent by two checkouts opened together.
+                wallet_amount = Decimal('0.00')
+                card_amount = order.total_price
+                if use_wallet:
+                    wallet_amount, card_amount = wallet_checkout.plan_split(
+                        order.total_price,
+                        wallet_checkout.available_balance(user),
+                        requested_wallet_amount,
+                    )
+                    wallet_checkout.place_hold(user, order, wallet_amount)
+
+                # 5. Create or reset Payment for the card leg only.
+                # payment.amount is what Paystack is asked to charge, which is the
+                # remainder after the wallet - verification compares the two directly, so
+                # putting the order total here would reject every split payment.
                 reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
                 payment, _ = Payment.objects.get_or_create(
                     order=order,
                     defaults={
-                        "amount": order.total_price,
+                        "amount": card_amount,
                         "reference": reference,
                     }
                 )
-                payment.amount = order.total_price
+                payment.amount = card_amount
                 payment.reference = reference
                 payment.verified = False
                 payment.status = 'PENDING'
                 payment.save()
 
-                # 6. Initialize Paystack
-                paystack = Paystack()
-                response = paystack.initialize_payment(
-                    email=user.email,
-                    amount=payment.amount,
-                    reference=payment.reference,
-                    callback_url=_get_paystack_callback_url(request)
-                )
-                logger.info(f"Paystack payment initialized for order {order.order_id}")
+                # 6. Initialize Paystack, unless the wallet covered the whole order
+                authorization_url = None
+                if card_amount > 0:
+                    paystack = Paystack()
+                    response = paystack.initialize_payment(
+                        email=user.email,
+                        amount=payment.amount,
+                        reference=payment.reference,
+                        callback_url=_get_paystack_callback_url(request)
+                    )
+                    authorization_url = response["data"]["authorization_url"]
+                    logger.info(f"Paystack payment initialized for order {order.order_id}")
+                # A fully wallet-funded order is settled below, after this transaction
+                # commits. mark_as_successful() enqueues a Celery task, and enqueuing
+                # inside the transaction means the worker can pick the order up before the
+                # commit lands - and a broker outage would fail an otherwise valid
+                # checkout. Deferring also fails in the safe direction: if it never runs,
+                # the hold is still HELD and the sweeper returns the money.
 
                 _notify_checkout(
                     order=order,
@@ -922,18 +959,36 @@ class CheckoutView(APIView):
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 
+            # Committed. Settle a fully wallet-funded order now that the order, payment and
+            # hold are all durable.
+            if card_amount <= 0:
+                wallet_checkout.capture_for_order(order)
+                payment.mark_as_successful()
+                logger.info(f"Order {order.order_id} paid entirely from wallet")
+
             return Response(
                 standardized_response(
                     data={
                         "order_id": str(order.order_id),
-                        "authorization_url": response["data"]["authorization_url"],
+                        "authorization_url": authorization_url,
                         "reference": payment.reference,
                         "amount": float(payment.amount),
+                        "wallet_amount": float(wallet_amount),
+                        "total_amount": float(order.total_price),
+                        # False when the wallet covered everything: the client should go
+                        # straight to the success screen rather than open a payment page.
+                        "requires_payment": card_amount > 0,
                         "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
                     message="Checkout initialized successfully"
                 ),
                 status=status.HTTP_201_CREATED
+            )
+        except wallet_checkout.WalletPaymentError as e:
+            logger.info(f"Wallet payment refused for user {user.uuid}: {e}")
+            return Response(
+                standardized_response(success=False, error=str(e)),
+                status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
             logger.error(f"Checkout error for user {user.uuid}: {str(e)}", exc_info=True)
@@ -2106,17 +2161,20 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                 order = refund.payment.order
                 customer = order.customer
                 
-                # Credit customer wallet with refund amount
+                # Credit customer wallet with refund amount, per originating bucket.
+                # Not a flat credit to WITHDRAWABLE: once an order can be paid from
+                # SPENDABLE, refunding the whole total as withdrawable would let a customer
+                # deposit, buy, cancel, and walk away with money they could send to a bank -
+                # converting funds that are spend-only by design into cash. The wallet-paid
+                # part goes back to the buckets it came from; the card part stays
+                # withdrawable, which is what it has always been.
                 wallet, _ = Wallet.objects.select_for_update().get_or_create(user=customer)
-                # Refunds are money the platform owes the customer, so they land in the
-                # withdrawable bucket - unlike a deposit, a refund can be cashed out.
-                wallet.credit(
+                wallet_checkout.refund_to_source_buckets(
+                    wallet,
+                    order,
                     refund.refunded_amount,
                     source=f"Refund {refund.payment.reference}",
-                    bucket=LedgerEntry.Bucket.WITHDRAWABLE,
-                    entry_type=LedgerEntry.EntryType.ORDER_REFUND,
-                    idempotency_key=f"order-refund-{refund.payment.reference}",
-                    order=order,
+                    idempotency_prefix=f"order-refund-{refund.payment.reference}",
                     payment=refund.payment,
                 )
                 
@@ -3194,6 +3252,11 @@ class CustomerCancelOrderView(APIView):
                 reason="Cancelled by customer"
             )
 
+            # An order cancelled before it was paid may still be holding wallet money.
+            # Releasing here returns it immediately rather than leaving the customer
+            # locked out of their own balance until the sweeper runs.
+            wallet_checkout.release_for_order(order, reason="Order cancelled")
+
             # Create refund record only if order was paid
             refund = None
             needs_refund = (
@@ -3202,10 +3265,15 @@ class CustomerCancelOrderView(APIView):
                 and order.payment.verified
             )
             if needs_refund:
+                # payment.amount is only the card leg of a split payment, so refunding it
+                # alone would silently keep whatever the customer paid from their wallet.
+                refund_total = money(
+                    order.payment.amount + wallet_checkout.wallet_amount_paid(order)
+                )
                 refund = Refund.objects.create(
                     payment=order.payment,
                     reason="Customer cancelled order",
-                    refunded_amount=order.payment.amount,
+                    refunded_amount=refund_total,
                     status=Refund.Status.PENDING,
                 )
 
@@ -3215,7 +3283,7 @@ class CustomerCancelOrderView(APIView):
                     level=TransactionLog.Level.INFO,
                     message=f"Refund request created for cancelled order {order.order_id}",
                     related_user=request.user,
-                    amount=order.payment.amount,
+                    amount=refund_total,
                 )
 
                 # Notify all admins
