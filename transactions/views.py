@@ -928,9 +928,13 @@ class CheckoutView(APIView):
                 payment.status = 'PENDING'
                 payment.save()
 
-                # 6. Initialize Paystack, unless the wallet covered the whole order
+                # 6. Initialize Paystack, unless the wallet covered the whole order.
+                # Gated on use_wallet as well as the amount: an order whose total computes
+                # to zero any other way (a pricing bug, a fully discounted cart) must still
+                # fail loudly at Paystack rather than be silently marked paid and shipped.
+                wallet_settles_everything = use_wallet and card_amount <= 0
                 authorization_url = None
-                if card_amount > 0:
+                if not wallet_settles_everything:
                     paystack = Paystack()
                     response = paystack.initialize_payment(
                         email=user.email,
@@ -960,9 +964,10 @@ class CheckoutView(APIView):
                 logger.info(f"Cart cleared for user {user.uuid}")
 
             # Committed. Settle a fully wallet-funded order now that the order, payment and
-            # hold are all durable.
-            if card_amount <= 0:
-                wallet_checkout.capture_for_order(order)
+            # hold are all durable. mark_as_successful captures the hold itself - it is the
+            # single choke point the webhook and verify endpoint already rely on - so there
+            # is no separate capture call here.
+            if wallet_settles_everything:
                 payment.mark_as_successful()
                 logger.info(f"Order {order.order_id} paid entirely from wallet")
 
@@ -977,7 +982,7 @@ class CheckoutView(APIView):
                         "total_amount": float(order.total_price),
                         # False when the wallet covered everything: the client should go
                         # straight to the success screen rather than open a payment page.
-                        "requires_payment": card_amount > 0,
+                        "requires_payment": not wallet_settles_everything,
                         "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
                     message="Checkout initialized successfully"
@@ -1037,8 +1042,21 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
         user = request.user
         logger.info(f"Installment checkout initiated for user: {user.uuid}")
         
+        # Refuse rather than ignore. Wallet payment is not supported for installments -
+        # a wallet leg on the first instalment would make the plan's own schedule wrong -
+        # and silently dropping the flag would let a customer believe their balance had
+        # been applied until the next instalment was charged in full.
+        if request.data and request.data.get('use_wallet'):
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Wallet balance cannot be used for installment plans. Pay in full to use your wallet.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         cart = Cart.objects.filter(customer=user).first()
-        
+
         if not cart:
             logger.warning(f"Installment checkout failed: No cart found for user {user.uuid}")
             return Response(
@@ -1711,6 +1729,30 @@ Use the 'reference' or 'trxref' query parameter.""",
                     status=status.HTTP_403_FORBIDDEN
                 )
 
+        # Short-circuit an already-settled payment before calling Paystack. An order paid
+        # entirely from the wallet has no Paystack transaction at all, so asking Paystack
+        # about its reference 404s and the customer lands on "we could not verify your
+        # payment" for an order that is genuinely paid. The already-verified check further
+        # down would have answered correctly - it just ran too late to be reached.
+        if payment.verified:
+            return Response(
+                standardized_response(
+                    data=PaymentSerializer(payment).data,
+                    message="Payment already verified"
+                )
+            )
+
+        # Nothing was charged to a card, so there is nothing at Paystack to verify. Reaching
+        # here with a zero card leg means the wallet settlement never completed.
+        if payment.amount <= 0:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="This order is still being confirmed. Please check your orders in a moment.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         paystack = Paystack()
         try:
             resp = paystack.verify_payment(reference)
@@ -1751,7 +1793,35 @@ Use the 'reference' or 'trxref' query parameter.""",
                     )
                 )
 
-            payment.mark_as_successful()
+            try:
+                payment.mark_as_successful()
+            except wallet_checkout.SettlementBlocked as exc:
+                # The card leg was paid for an order that must not be settled - the wallet
+                # half has already gone back to the customer. Log loudly and refuse rather
+                # than fulfilling an order that is only half paid for; the card money needs
+                # an operator to return it.
+                logger.error(
+                    f"Refusing to settle payment {reference}: {exc}", exc_info=True
+                )
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_FAILED,
+                    level=TransactionLog.Level.ERROR,
+                    message=f"Card payment {reference} received but not settled: {exc}",
+                    related_user=payment.order.customer,
+                    amount=payment.amount,
+                    metadata={"reference": reference, "reason": str(exc)},
+                )
+                return Response(
+                    standardized_response(
+                        success=False,
+                        error=(
+                            "This order can no longer be completed and your card payment "
+                            "will be refunded. Please contact support."
+                        ),
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             # Note: Vendors are credited when order is DELIVERED, not when payment is received
             # This maintains the available vs pending balance flow
 
@@ -2019,6 +2089,13 @@ No authentication required (webhook signature validation instead)""",
             # Validate payment status
             if pdata.get("status") != "success":
                 logger.info(f"Payment {reference} not successful: {pdata.get('status')}")
+                # Paystack has told us this card leg will not succeed, so any wallet money
+                # held for the order goes back now. Leaving it for the expiry sweeper would
+                # keep the customer locked out of their own balance for half an hour after
+                # a failure we already know about.
+                wallet_checkout.release_for_order(
+                    payment.order, reason="Card payment failed"
+                )
                 TransactionLog.objects.create(
                     order=payment.order,
                     action=TransactionLog.Action.PAYMENT_FAILED,
@@ -2055,7 +2132,24 @@ No authentication required (webhook signature validation instead)""",
                 return Response({"status": "ok"})
 
             if not payment.verified:
-                payment.mark_as_successful()
+                try:
+                    payment.mark_as_successful()
+                except wallet_checkout.SettlementBlocked as exc:
+                    # Same guard as the verify endpoint. Raising out of _dispatch would
+                    # mark the PaystackEvent FAILED, which is what puts it on the admin
+                    # failed-payments screen for someone to refund.
+                    logger.error(f"Refusing to settle payment {reference}: {exc}")
+                    TransactionLog.objects.create(
+                        order=payment.order,
+                        action=TransactionLog.Action.PAYMENT_FAILED,
+                        level=TransactionLog.Level.ERROR,
+                        message=f"Card payment {reference} received but not settled: {exc}",
+                        related_user=payment.order.customer,
+                        amount=payment.amount,
+                        metadata={"reference": reference, "reason": str(exc)},
+                    )
+                    return Response({"status": "ok", "detail": f"not settled: {exc}"})
+
                 # Log successful payment
                 TransactionLog.objects.create(
                     order=payment.order,
@@ -2150,13 +2244,18 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
         import logging
         logger = logging.getLogger(__name__)
         
-        if refund.status != Refund.Status.PENDING:
-            return Response(
-                standardized_response(success=False, error="Already processed"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         with transaction.atomic():
+            # Re-read under a row lock. Checking status outside the transaction let two
+            # admins approving at the same moment both pass the guard: the wallet credits
+            # are saved by their deterministic idempotency keys, but the commission
+            # reversal below carries no such key and would run twice.
+            refund = Refund.objects.select_for_update().get(pk=refund.pk)
+            if refund.status != Refund.Status.PENDING:
+                return Response(
+                    standardized_response(success=False, error="Already processed"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             if action == "APPROVE":
                 order = refund.payment.order
                 customer = order.customer
@@ -3256,6 +3355,15 @@ class CustomerCancelOrderView(APIView):
             # Releasing here returns it immediately rather than leaving the customer
             # locked out of their own balance until the sweeper runs.
             wallet_checkout.release_for_order(order, reason="Order cancelled")
+
+            # Void the card leg too. Cancelling a PENDING split order hands the wallet half
+            # back, but the Paystack link stays live - paying it afterwards would settle an
+            # order that only ever collected the card half. Marking the payment CANCELLED
+            # is defence in depth behind settlement_blocker.
+            if previous_status == Order.Status.PENDING and hasattr(order, 'payment'):
+                if not order.payment.verified:
+                    order.payment.status = 'CANCELLED'
+                    order.payment.save(update_fields=['status'])
 
             # Create refund record only if order was paid
             refund = None

@@ -6343,16 +6343,22 @@ class AdminSettlementsViewSet(AdminBaseViewSet):
         
         # If approved, process refund
         if action == 'APPROVE':
-            # Credit customer wallet
-            customer_wallet, _ = Wallet.objects.get_or_create(user=dispute.customer)
+            # Credit customer wallet, per originating bucket - the same rule the refund
+            # path uses. A flat credit to WITHDRAWABLE here would convert an order paid
+            # from deposited funds into money the customer can send to a bank, which is
+            # the laundering route the two-bucket split exists to close. Disputes are
+            # admin-raised today, so this was latent rather than reachable, but it is the
+            # same defect and the fix is the same call.
+            from transactions import wallet_checkout
             from transactions.models import LedgerEntry
-            customer_wallet.credit(
+            customer_wallet, _ = Wallet.objects.get_or_create(user=dispute.customer)
+            wallet_checkout.refund_to_source_buckets(
+                customer_wallet,
+                dispute.order,
                 dispute.amount,
                 source=f"Refund for Order {dispute.order.order_id}",
-                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                idempotency_prefix=f"dispute-credit-{dispute.id}",
                 entry_type=LedgerEntry.EntryType.DISPUTE_CREDIT,
-                idempotency_key=f"dispute-credit-{dispute.id}",
-                order=dispute.order,
             )
             
             # Debit vendor wallet (if they haven't withdrawn yet)

@@ -40,6 +40,49 @@ class WalletPaymentError(Exception):
     """A wallet payment that cannot be honoured. The message is safe to show the user."""
 
 
+class SettlementBlocked(Exception):
+    """
+    A card payment arrived for an order that must not be settled.
+
+    Raised rather than returned so no caller can ignore it by accident - the whole failure
+    mode this guards against was a capture that quietly returned False.
+    """
+
+
+def settlement_blocker(order, payment):
+    """
+    Why this order must not be marked paid, or None if it may be.
+
+    Guards the gap between the two legs of a split payment. The wallet leg can be returned
+    to the customer - by cancelling, or by the expiry sweeper - while the card leg's Paystack
+    link is still live and payable. Settling then would fulfil the order having collected
+    only the card half, with the wallet half back in the customer's balance.
+
+    Both variants are reachable without any race:
+      cancel  - cancel a PENDING split order, take the wallet money back, then pay the card
+      expiry  - abandon checkout for longer than HOLD_TTL_MINUTES, then pay the card
+
+    A cancelled order is refused outright. Otherwise the order is refused when a hold was
+    released and the card leg alone does not cover the total.
+    """
+    from transactions.models import Order, WalletHold
+
+    if order.status == Order.Status.CANCELED:
+        return f"order {order.order_id} was cancelled"
+
+    released = WalletHold.objects.filter(
+        order=order, status=WalletHold.Status.RELEASED
+    ).first()
+    if released is not None and not active_hold_for(order):
+        if money(payment.amount) < money(order.total_price):
+            return (
+                f"wallet hold {released.reference} was released, so the card leg "
+                f"({payment.amount}) no longer covers the order total ({order.total_price})"
+            )
+
+    return None
+
+
 def available_balance(user):
     """Total the wallet can put towards an order: both buckets are spendable at checkout."""
     wallet = Wallet.objects.filter(user=user).first()
@@ -175,7 +218,7 @@ def release_for_order(order, reason="Checkout not completed"):
 
 
 def refund_to_source_buckets(wallet, order, amount, *, source, idempotency_prefix,
-                             payment=None):
+                             payment=None, entry_type=None):
     """
     Credit a refund back to the buckets the money actually came from.
 
@@ -188,6 +231,12 @@ def refund_to_source_buckets(wallet, order, amount, *, source, idempotency_prefi
     route the two-bucket design exists to close, and it opens the moment checkout can spend
     from SPENDABLE.
 
+    A partial refund is allocated **proportionally** to how the order was paid. Returning
+    the wallet share first would be safer for the platform but wrong for the customer: on
+    an order paid ₦500 from deposits and ₦4,500 by card, a ₦500 partial refund would come
+    back entirely as spend-only money when 90% of what they paid could have returned as
+    withdrawable.
+
     Returns {'spendable': Decimal, 'withdrawable': Decimal}.
     """
     amount = money(amount)
@@ -195,35 +244,42 @@ def refund_to_source_buckets(wallet, order, amount, *, source, idempotency_prefi
     if amount <= 0:
         return applied
 
+    entry_type = entry_type or LedgerEntry.EntryType.ORDER_REFUND
     hold = captured_hold_for(order)
-    remaining = amount
 
-    if hold is not None:
-        # Return the wallet-funded part first, proportionally capped so a partial refund
-        # cannot return more spendable money than the customer actually put in.
-        from_spendable = min(money(hold.spendable_amount), remaining)
-        if from_spendable > 0:
-            wallet.credit(
-                from_spendable,
-                source=source,
-                bucket=LedgerEntry.Bucket.SPENDABLE,
-                entry_type=LedgerEntry.EntryType.ORDER_REFUND,
-                idempotency_key=f"{idempotency_prefix}-spendable",
-                order=order,
-                payment=payment,
-            )
-            applied['spendable'] = from_spendable
-            remaining = money(remaining - from_spendable)
+    from_spendable = Decimal('0.00')
+    if hold is not None and hold.spendable_amount > 0:
+        card_amount = money(payment.amount) if payment is not None else Decimal('0.00')
+        total_paid = money(hold.amount + card_amount)
+        if total_paid > 0:
+            share = (money(hold.spendable_amount) / total_paid)
+            from_spendable = money(amount * share)
+        # Never return more spendable than was actually paid from that bucket, and never
+        # more than the refund itself.
+        from_spendable = min(from_spendable, money(hold.spendable_amount), amount)
 
+    if from_spendable > 0:
+        wallet.credit(
+            from_spendable,
+            source=source,
+            bucket=LedgerEntry.Bucket.SPENDABLE,
+            entry_type=entry_type,
+            idempotency_key=f"{idempotency_prefix}-spendable",
+            order=order,
+            payment=payment,
+        )
+        applied['spendable'] = from_spendable
+
+    remaining = money(amount - from_spendable)
     if remaining > 0:
-        # The wallet's withdrawable share plus the whole card leg. Both are money the
-        # customer could already have taken to a bank, so returning them as withdrawable
-        # changes nothing about what they can do with it.
+        # The wallet's withdrawable share plus the card leg. Both are money the customer
+        # could already have taken to a bank, so returning them as withdrawable changes
+        # nothing about what they can do with it.
         wallet.credit(
             remaining,
             source=source,
             bucket=LedgerEntry.Bucket.WITHDRAWABLE,
-            entry_type=LedgerEntry.EntryType.ORDER_REFUND,
+            entry_type=entry_type,
             idempotency_key=f"{idempotency_prefix}-withdrawable",
             order=order,
             payment=payment,

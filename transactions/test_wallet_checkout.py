@@ -31,7 +31,11 @@ from transactions.models import (
     Wallet,
     WalletHold,
 )
-from transactions.wallet_checkout import WalletPaymentError, plan_split
+from transactions.wallet_checkout import (
+    SettlementBlocked as WalletHoldSettlementBlocked,
+    WalletPaymentError,
+    plan_split,
+)
 from users.models import Customer, Vendor
 
 User = get_user_model()
@@ -379,6 +383,106 @@ class HoldResolutionTests(WalletCheckoutBase):
 @patch('transactions.tasks.notify_stakeholders_order_paid.delay')
 @patch('transactions.views._notify_checkout')
 @patch('transactions.views.Paystack.initialize_payment')
+class SettlementAfterReleaseTests(WalletCheckoutBase):
+    """
+    The double-spend the security review found.
+
+    A split payment's two legs are separable: the wallet leg can be returned to the
+    customer - by cancelling, or by the expiry sweeper - while the card leg's Paystack link
+    is still live and payable. Settling then fulfils an order having collected only the
+    card half, with the wallet half back in the customer's balance.
+
+    Both variants below are fully deterministic. Neither needs a race.
+    """
+
+    def _split_order(self, mock_init):
+        mock_init.return_value = {'data': {'authorization_url': 'https://paystack.test/a'}}
+        self._add_to_cart(quantity=8)  # 8000 total
+        self._fund(spendable=Decimal('5000'))
+        response = self._checkout(use_wallet=True)
+        return Order.objects.get(order_id=response.data['data']['order_id'])
+
+    def test_paying_the_card_leg_after_cancelling_is_refused(self, mock_init, _notify, _task):
+        """
+        Cancel a PENDING split order (wallet money comes back), then pay the still-valid
+        card link. Without the guard the order flips CANCELED -> PAID and ships for the
+        card leg alone.
+        """
+        order = self._split_order(mock_init)
+        self.client.post(f'/transactions/orders/{order.order_id}/cancel/')
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.spendable_balance, Decimal('5000.00'))
+
+        order.refresh_from_db()
+        with self.assertRaises(WalletHoldSettlementBlocked):
+            order.payment.mark_as_successful()
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CANCELED)
+        self.assertFalse(order.payment.verified)
+
+    def test_paying_after_the_sweeper_released_the_hold_is_refused(
+        self, mock_init, _notify, _task
+    ):
+        """
+        The variant that needs no cancel call at all: abandon checkout past the hold TTL,
+        let release_expired_holds return the money, then pay the card leg.
+        """
+        from django.core.management import call_command
+
+        order = self._split_order(mock_init)
+        hold = WalletHold.objects.get(order=order)
+        hold.expires_at = timezone.now() - timezone.timedelta(minutes=1)
+        hold.save(update_fields=['expires_at'])
+        call_command('release_expired_holds')
+
+        self.wallet.refresh_from_db()
+        self.assertEqual(self.wallet.spendable_balance, Decimal('5000.00'))
+
+        order.refresh_from_db()
+        with self.assertRaises(WalletHoldSettlementBlocked):
+            order.payment.mark_as_successful()
+
+        order.refresh_from_db()
+        self.assertNotEqual(order.status, Order.Status.PAID)
+
+    def test_a_normal_split_payment_still_settles(self, mock_init, _notify, _task):
+        """The guard must not block the ordinary path it sits in front of."""
+        order = self._split_order(mock_init)
+
+        order.payment.mark_as_successful()
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.PAID)
+        self.assertEqual(
+            WalletHold.objects.get(order=order).status, WalletHold.Status.CAPTURED
+        )
+
+    def test_cancelling_a_pending_order_voids_the_card_leg(self, mock_init, _notify, _task):
+        """Defence in depth: the Paystack link should not be payable at all afterwards."""
+        order = self._split_order(mock_init)
+
+        self.client.post(f'/transactions/orders/{order.order_id}/cancel/')
+
+        order.payment.refresh_from_db()
+        self.assertEqual(order.payment.status, 'CANCELLED')
+
+    def test_a_card_only_order_is_unaffected_by_the_guard(self, mock_init, _notify, _task):
+        """No hold was ever placed, so there is nothing for the guard to trip on."""
+        mock_init.return_value = {'data': {'authorization_url': 'https://paystack.test/a'}}
+        self._add_to_cart(quantity=5)
+        response = self._checkout()
+        order = Order.objects.get(order_id=response.data['data']['order_id'])
+
+        order.payment.mark_as_successful()
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.PAID)
+
+
+@patch('transactions.tasks.notify_stakeholders_order_paid.delay')
+@patch('transactions.views._notify_checkout')
+@patch('transactions.views.Paystack.initialize_payment')
 class RefundBucketTests(WalletCheckoutBase):
     """
     The laundering route this whole feature had to close.
@@ -447,15 +551,34 @@ class RefundBucketTests(WalletCheckoutBase):
         self.assertEqual(applied['spendable'], Decimal('0.00'))
         self.assertEqual(applied['withdrawable'], Decimal('5000.00'))
 
-    def test_a_partial_refund_does_not_return_more_spendable_than_was_paid(
+    def test_a_partial_refund_is_allocated_proportionally(
         self, mock_init, _notify, _task
     ):
+        """
+        A ₦5,000 order paid ₦2,000 wallet / ₦3,000 card is 40% wallet-funded, so a ₦1,000
+        partial refund returns ₦400 spendable and ₦600 withdrawable.
+
+        Returning the wallet share first instead would be safer for the platform but wrong
+        for the customer: on an order paid mostly by card they would get back spend-only
+        money for a purchase they largely paid for with a card.
+        """
         order = self._paid_order(mock_init, spendable=Decimal('2000'), quantity=5)
 
         applied = self._refund(order, amount=Decimal('1000.00'))
 
-        self.assertEqual(applied['spendable'], Decimal('1000.00'))
-        self.assertEqual(applied['withdrawable'], Decimal('0.00'))
+        self.assertEqual(applied['spendable'], Decimal('400.00'))
+        self.assertEqual(applied['withdrawable'], Decimal('600.00'))
+
+    def test_a_partial_refund_never_returns_more_spendable_than_was_paid(
+        self, mock_init, _notify, _task
+    ):
+        """The proportional share is still capped by what the wallet actually put in."""
+        order = self._paid_order(mock_init, spendable=Decimal('2000'), quantity=5)
+
+        applied = self._refund(order, amount=Decimal('5000.00'))
+
+        self.assertEqual(applied['spendable'], Decimal('2000.00'))
+        self.assertEqual(applied['withdrawable'], Decimal('3000.00'))
 
     def test_cancelling_refunds_the_wallet_leg_as_well_as_the_card(
         self, mock_init, _notify, _task

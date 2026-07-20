@@ -568,11 +568,21 @@ class Payment(models.Model):
         if self.verified:
             return
 
+        # Refuse to settle an order whose wallet leg has already gone back to the customer.
+        # A split payment's two legs are separable: the hold can be released by cancelling
+        # or by the expiry sweeper while the card leg's Paystack link is still payable, and
+        # settling then would fulfil the order having collected only the card half. Raised,
+        # not returned - an earlier version relied on capture_for_order returning False and
+        # nothing checked it, which is precisely how the order got marked paid anyway.
+        from transactions import wallet_checkout
+        blocker = wallet_checkout.settlement_blocker(self.order, self)
+        if blocker:
+            raise wallet_checkout.SettlementBlocked(blocker)
+
         # Confirm any wallet money held for this order. Done here rather than in the verify
         # view because the webhook and the verify endpoint both land on this method and
         # routinely race - capturing in one of them would leave the other path holding
         # money against an order that is already paid.
-        from transactions import wallet_checkout
         wallet_checkout.capture_for_order(self.order)
 
         self.status = 'SUCCESS'
