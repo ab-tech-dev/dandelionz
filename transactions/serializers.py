@@ -2,7 +2,7 @@ from rest_framework import serializers
 from .models import (
     Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund,
     Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory,
-    WalletDeposit
+    WalletDeposit, DepositRefund
 )
 from store.models import Product
 from decimal import Decimal
@@ -591,5 +591,28 @@ class WalletDepositSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'reference', 'amount', 'status', 'authorization_url',
             'paid_at', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+class DepositRefundRequestSerializer(serializers.Serializer):
+    """Request body for returning deposited funds to their original card."""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Refund amount must be greater than zero.")
+        return value
+
+
+class DepositRefundSerializer(serializers.ModelSerializer):
+    """A refund of deposited funds back to source."""
+    deposit_reference = serializers.CharField(source='deposit.reference', read_only=True)
+
+    class Meta:
+        model = DepositRefund
+        fields = [
+            'id', 'reference', 'deposit_reference', 'amount', 'status',
+            'failure_reason', 'created_at', 'settled_at',
         ]
         read_only_fields = fields

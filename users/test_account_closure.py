@@ -65,8 +65,10 @@ class AccountClosureGuardTests(TestCase):
 
         self.assertFalse(allowed)
         self.assertEqual(blocker['reason'], BLOCKED_SPENDABLE)
-        self.assertIn('refund to your original payment card', blocker['message'])
+        self.assertIn('original payment card', blocker['message'])
         self.assertNotIn('Withdraw it to your bank', blocker['message'])
+        # The message names a route the user can actually take.
+        self.assertEqual(blocker['refund_endpoint'], '/transactions/wallet/deposit/refund/')
 
     def test_withdrawable_is_reported_before_spendable(self):
         """With both, the actionable one the user can resolve themselves comes first."""

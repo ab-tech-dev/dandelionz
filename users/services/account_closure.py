@@ -32,6 +32,7 @@ BLOCKED_WITHDRAWABLE = 'withdrawable_balance'
 BLOCKED_SPENDABLE = 'spendable_balance'
 BLOCKED_PENDING_WITHDRAWAL = 'pending_withdrawal'
 BLOCKED_ACTIVE_HOLD = 'active_hold'
+BLOCKED_PENDING_REFUND = 'pending_refund'
 
 
 def check_can_close(user):
@@ -67,9 +68,10 @@ def check_can_close(user):
                 'message': (
                     f"You have ₦{wallet.spendable_balance:,.2f} in deposited funds. "
                     f"Deposits cannot be withdrawn to a bank, so either spend the balance "
-                    f"on an order or request a refund to your original payment card, then "
-                    f"close your account."
+                    f"on an order or refund it to your original payment card, then close "
+                    f"your account."
                 ),
+                'refund_endpoint': '/transactions/wallet/deposit/refund/',
             }
 
         live_hold = WalletHold.objects.filter(
@@ -84,6 +86,25 @@ def check_can_close(user):
                     "Complete or cancel it before closing your account."
                 ),
             }
+
+    # A refund in flight has already left the wallet but has not reached the card yet. If
+    # it fails, mark_as_failed credits the money back - to a wallet that would no longer
+    # have an owner who can reach it.
+    from transactions.models import DepositRefund
+
+    refund_in_flight = DepositRefund.objects.filter(
+        user=user,
+        status__in=[DepositRefund.Status.PENDING, DepositRefund.Status.PROCESSING],
+    ).exists()
+    if refund_in_flight:
+        return False, {
+            'reason': BLOCKED_PENDING_REFUND,
+            'amount': None,
+            'message': (
+                "You have a refund on its way back to your card. Wait for it to complete "
+                "before closing your account."
+            ),
+        }
 
     pending = PayoutRequest.objects.filter(
         user=user, status__in=['pending', 'processing']

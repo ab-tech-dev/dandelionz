@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import requests
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
@@ -87,6 +89,34 @@ class Paystack:
             "reason": reason,
         }
         resp = requests.post(f"{self.base_url}/transfer",
+                             json=payload, headers=self.headers, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def refund(self, transaction, amount=None, merchant_note="", customer_note=""):
+        """
+        Refund a charge back to the card it came from.
+
+        ``transaction`` is Paystack's own transaction id or reference - this is why
+        WalletDeposit captures paystack_transaction_id at verification time. Refunds are
+        the only way to return deposited funds: deposits land in the spendable bucket and
+        must never be payable to a bank account, so a transfer is not an option.
+
+        ``amount`` is in naira and converted to kobo here, matching the other methods.
+        Omitting it refunds the full transaction, which is Paystack's default.
+
+        Paystack accepts the refund and settles it asynchronously; the outcome arrives as a
+        refund.processed or refund.failed webhook.
+        """
+        payload = {"transaction": str(transaction)}
+        if amount is not None:
+            payload["amount"] = int(Decimal(str(amount)) * 100)  # kobo
+        if merchant_note:
+            payload["merchant_note"] = merchant_note
+        if customer_note:
+            payload["customer_note"] = customer_note
+
+        resp = requests.post(f"{self.base_url}/refund",
                              json=payload, headers=self.headers, timeout=10)
         resp.raise_for_status()
         return resp.json()

@@ -10,7 +10,8 @@ from .views import (
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
     CustomerCancelOrderView, PaystackMobileReturnView,
-    InitializeWalletDepositView, VerifyWalletDepositView, WalletDepositListView
+    InitializeWalletDepositView, VerifyWalletDepositView, WalletDepositListView,
+    DepositRefundView, DepositRefundListView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -54,6 +55,11 @@ urlpatterns = [
     path('wallet/deposit/', InitializeWalletDepositView.as_view(), name='wallet-deposit-init'),
     path('wallet/deposit/verify/', VerifyWalletDepositView.as_view(), name='wallet-deposit-verify'),
     path('wallet/deposits/', WalletDepositListView.as_view(), name='wallet-deposit-list'),
+
+    # Refunding deposits to source - the only way deposited funds leave the wallet
+    # without being spent, since they are never withdrawable to a bank.
+    path('wallet/deposit/refund/', DepositRefundView.as_view(), name='wallet-deposit-refund'),
+    path('wallet/deposit/refunds/', DepositRefundListView.as_view(), name='wallet-deposit-refund-list'),
     path('admin/wallets/', AdminWalletListView.as_view(), name='admin-wallet-list'),
 
     # Delivery fee endpoints

@@ -18,6 +18,7 @@ ORDER = 'ORDER'
 DEPOSIT = 'DEPOSIT'
 INSTALLMENT = 'INSTALLMENT'
 TRANSFER = 'TRANSFER'
+REFUND = 'REFUND'
 
 PREFIXES = {
     'ORD-': ORDER,
@@ -25,6 +26,7 @@ PREFIXES = {
     'INS-': INSTALLMENT,
     'WTH-': TRANSFER,
     'ADM-': TRANSFER,
+    'RFD-': REFUND,
 }
 
 
@@ -54,3 +56,15 @@ def new_order_reference(order_id):
 
 def new_installment_reference(plan_id):
     return f"INS-{plan_id}-{uuid.uuid4().hex[:10]}"
+
+
+def new_refund_reference():
+    """
+    Our own handle for a deposit refund.
+
+    Paystack mints its own refund id and its refund webhooks quote the *original*
+    transaction's reference, not this one - so this is never sent to Paystack. It exists so
+    the refund has a stable identifier of its own for ledger idempotency keys and for
+    anything a user or admin has to quote back to us.
+    """
+    return f"RFD-{uuid.uuid4().hex[:16].upper()}"

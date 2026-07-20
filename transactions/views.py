@@ -22,7 +22,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund
 from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
@@ -229,7 +229,9 @@ from .serializers import (
     CommissionAnalyticsQuerySerializer,
     CommissionAnalyticsResponseSerializer,
     WalletDepositInitSerializer,
-    WalletDepositSerializer
+    WalletDepositSerializer,
+    DepositRefundRequestSerializer,
+    DepositRefundSerializer
 )
 from .paystack import Paystack
 from authentication.core.response import standardized_response
@@ -1726,6 +1728,14 @@ No authentication required (webhook signature validation instead)""",
         reference = data.get("reference")
 
         if not reference:
+            # Refund events carry no `reference` of their own - they quote the original
+            # transaction instead. Without this fallback every refund webhook was dropped
+            # at the guard below, so a refund could never be marked settled or failed.
+            reference = data.get("transaction_reference")
+            if not reference and isinstance(data.get("transaction"), dict):
+                reference = data["transaction"].get("reference")
+
+        if not reference:
             logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
 
@@ -1787,6 +1797,21 @@ No authentication required (webhook signature validation instead)""",
         """
         import logging
         logger = logging.getLogger(__name__)
+
+        # ---------------------------------------------------------
+        # Handle Refund Webhooks (Deposits returned to source)
+        # ---------------------------------------------------------
+        # Checked before the charge routing below: a refund event quotes the original
+        # deposit's DEP- reference, so classify() would send it down the deposit path and
+        # it would be read as a second top-up.
+        if event in ["refund.processed", "refund.failed", "refund.pending"]:
+            from transactions.deposit_refund_service import settle_refund_webhook
+
+            handled, detail = settle_refund_webhook(event, data)
+            if not handled:
+                logger.warning(f"Refund webhook not applied: {detail}")
+                return Response({"status": "ok", "detail": detail})
+            return Response({"status": "ok"})
 
         # ---------------------------------------------------------
         # Handle Transfer Webhooks (Payouts)
@@ -2434,6 +2459,122 @@ class WalletDepositListView(generics.ListAPIView):
 
     def get_queryset(self):
         return WalletDeposit.objects.filter(user=self.request.user)
+
+
+class DepositRefundView(APIView):
+    """
+    Return deposited funds to the card they came from.
+
+    This is the only way deposited money leaves the wallet other than being spent.
+    Deposits are never withdrawable to a bank - that is what stops the wallet turning a
+    stolen card into a bank transfer - so a user who wants their top-up back, or who wants
+    to close an account holding one, has to come through here.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'checkout'
+
+    @swagger_auto_schema(
+        operation_id="get_refundable_balance",
+        operation_summary="Refundable Deposit Balance",
+        operation_description=(
+            "How much of the authenticated user's deposited balance can be returned to "
+            "source, and the top-ups it would be taken from."
+        ),
+        tags=["Wallet"],
+        responses={200: openapi.Response("Refundable balance")},
+    )
+    def get(self, request):
+        from transactions.deposit_refund_service import refundable_deposits, total_refundable
+
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        deposits = refundable_deposits(request.user)
+
+        return Response(standardized_response(data={
+            "spendable_balance": str(wallet.spendable_balance),
+            "refundable_amount": str(total_refundable(request.user)),
+            "deposits": [
+                {
+                    "reference": d.reference,
+                    "amount": str(d.amount),
+                    "refundable_amount": str(d.refundable_amount),
+                    "paid_at": d.paid_at,
+                }
+                for d in deposits
+            ],
+        }))
+
+    @swagger_auto_schema(
+        operation_id="request_deposit_refund",
+        operation_summary="Refund Deposit to Card",
+        operation_description=(
+            "Debit the spendable balance and ask Paystack to return the money to the "
+            "original card. Settlement is confirmed asynchronously by webhook."
+        ),
+        tags=["Wallet"],
+        request_body=DepositRefundRequestSerializer,
+        responses={
+            201: openapi.Response("Refund requested"),
+            400: openapi.Response("Refund cannot be honoured"),
+        },
+    )
+    def post(self, request):
+        from transactions.deposit_refund_service import RefundError, request_refund
+
+        serializer = DepositRefundRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            refunds, errors = request_refund(
+                request.user, serializer.validated_data['amount']
+            )
+        except RefundError as exc:
+            return Response(
+                standardized_response(success=False, error=str(exc)),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if errors and not any(r.status != DepositRefund.Status.FAILED for r in refunds):
+            # Every leg was rejected and each has already credited its debit back, so the
+            # balance is untouched. Say so rather than reporting a refund in progress.
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="The refund could not be started. Your balance is unchanged.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            standardized_response(
+                data=DepositRefundSerializer(refunds, many=True).data,
+                message=(
+                    "Refund requested. It will appear on your card once your bank "
+                    "processes it, usually within a few working days."
+                ),
+            ),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class DepositRefundListView(generics.ListAPIView):
+    """The authenticated user's refund history."""
+    serializer_class = DepositRefundSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_id="list_deposit_refunds",
+        operation_summary="List Deposit Refunds",
+        tags=["Wallet"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return DepositRefund.objects.filter(user=self.request.user).select_related('deposit')
 
 
 # ----------------------

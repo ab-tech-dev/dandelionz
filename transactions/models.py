@@ -1269,3 +1269,112 @@ class WalletDeposit(models.Model):
 
     def __str__(self):
         return f"Deposit {self.reference} - {self.amount} ({self.status})"
+
+    @property
+    def refunded_amount(self):
+        """How much of this deposit has been returned or is on its way back."""
+        settled = self.refunds.exclude(status=DepositRefund.Status.FAILED)
+        return money(settled.aggregate(total=models.Sum('amount'))['total'] or 0)
+
+    @property
+    def refundable_amount(self):
+        return money(self.amount - self.refunded_amount)
+
+
+class DepositRefund(models.Model):
+    """
+    Returning deposited money to the card it came from.
+
+    Deposits are spendable at checkout but never withdrawable to a bank - that asymmetry is
+    what stops the wallet laundering a stolen card into a bank transfer. It also means a
+    normal withdrawal cannot return this money, so refunding to source is the *only* exit
+    for a spendable balance. Account closure depends on it: closure is blocked while
+    deposited funds remain, and the block message tells the user to refund to their card.
+
+    A refund is allocated across one or more WalletDeposits, because a balance is usually
+    the sum of several top-ups and Paystack refunds a specific transaction. Newest deposits
+    are consumed first: Paystack will not refund indefinitely old transactions, so spending
+    the most recent ones gives the request the best chance of being accepted.
+
+    The wallet is debited when the refund is *requested*, not when Paystack settles it.
+    Otherwise the user could spend the same money at checkout while the refund was in
+    flight and we would pay it out twice.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        PROCESSED = 'PROCESSED', 'Processed'
+        FAILED = 'FAILED', 'Failed'
+
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='deposit_refunds')
+    deposit = models.ForeignKey(
+        WalletDeposit, on_delete=models.PROTECT, related_name='refunds',
+        help_text="The top-up being returned. PROTECT: the refund is meaningless without it.",
+    )
+    reference = models.CharField(max_length=100, unique=True, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+
+    paystack_refund_id = models.CharField(max_length=100, blank=True)
+    failure_reason = models.TextField(blank=True)
+
+    requested_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='deposit_refunds_requested',
+        help_text="Set when an admin raised the refund on the user's behalf.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', '-created_at']),
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['reference']),
+        ]
+
+    def __str__(self):
+        return f"Refund {self.reference} - {self.amount} ({self.status})"
+
+    def mark_as_processed(self, paystack_refund_id=''):
+        """Paystack settled the refund. The wallet was already debited at request time."""
+        if self.status == self.Status.PROCESSED:
+            return False
+        self.status = self.Status.PROCESSED
+        self.settled_at = timezone.now()
+        if paystack_refund_id:
+            self.paystack_refund_id = str(paystack_refund_id)
+        self.save(update_fields=[
+            'status', 'settled_at', 'paystack_refund_id', 'updated_at',
+        ])
+        return True
+
+    def mark_as_failed(self, reason=''):
+        """
+        Paystack refused or reversed the refund. Put the money back in the spendable
+        bucket, since the debit at request time assumed it was leaving.
+
+        Idempotent on both halves: the status guard stops a repeat, and the ledger
+        idempotency key makes the credit at-most-once even if two callers race.
+        """
+        if self.status in (self.Status.FAILED, self.Status.PROCESSED):
+            # Never un-settle a refund Paystack already paid out.
+            return False
+
+        with transaction.atomic():
+            wallet, _ = Wallet.objects.get_or_create(user=self.user)
+            wallet.credit(
+                self.amount,
+                source=f"Reversal of failed refund {self.reference}",
+                bucket=LedgerEntry.Bucket.SPENDABLE,
+                entry_type=LedgerEntry.EntryType.DEPOSIT,
+                idempotency_key=f"deposit-refund-reversal-{self.reference}",
+                reference=self.reference,
+            )
+            self.status = self.Status.FAILED
+            self.failure_reason = reason or ''
+            self.save(update_fields=['status', 'failure_reason', 'updated_at'])
+        return True
