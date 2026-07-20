@@ -633,24 +633,22 @@ class LedgerEntrySerializer(serializers.ModelSerializer):
     payout_reference = serializers.CharField(
         source='payout_request.reference', read_only=True, default=None
     )
-    signed_amount = serializers.SerializerMethodField()
 
+    # Deliberately no signed_amount: `direction` already carries the sign and both clients
+    # apply it themselves for display. Serving a pre-signed copy meant a third place
+    # decided what sign a debit has - alongside the two clients and the export - which is
+    # the drift this module exists to avoid. The export computes its own in _row_values
+    # because a spreadsheet column has to sum without a formula.
     class Meta:
         model = LedgerEntry
         fields = [
             'id', 'created_at', 'user_email', 'user_name',
             'direction', 'bucket', 'entry_type', 'entry_type_display',
-            'amount', 'signed_amount', 'balance_after',
+            'amount', 'balance_after',
             'reference', 'description', 'order_id', 'payout_reference',
             'operation_key',
         ]
         read_only_fields = fields
-
-    def get_signed_amount(self, obj):
-        """Debits carry a minus so a column of these sums to the net movement."""
-        if obj.direction == LedgerEntry.Direction.DEBIT:
-            return str(-obj.amount)
-        return str(obj.amount)
 
 
 class PaystackEventSerializer(serializers.ModelSerializer):

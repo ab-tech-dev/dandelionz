@@ -18,6 +18,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
+from rest_framework.pagination import PageNumberPagination
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
@@ -242,8 +243,38 @@ PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
 
 # ----------------------
+# Pagination
+# ----------------------
+class FinancePagination(PageNumberPagination):
+    """
+    Pagination for the financial list endpoints.
+
+    This project sets no DEFAULT_PAGINATION_CLASS, so a ListAPIView without one returns a
+    bare JSON array and silently ignores ?page. For tables over LedgerEntry, WalletDeposit
+    and PaystackEvent that is not survivable: they grow with every transaction on the
+    platform, so an unpaginated view serialises the entire financial history into one
+    response, and any client reading `.results` gets undefined and renders nothing.
+
+    Defined up here rather than beside the admin views because the customer-facing deposit
+    and refund lists further up the file use it too.
+    """
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
+# ----------------------
 # Custom Throttle Classes
 # ----------------------
+class LedgerExportThrottle(UserRateThrottle):
+    """
+    The ledger export is the most expensive endpoint in the app and hands over every
+    user's email alongside their complete transaction history in one file. The generic
+    1000/hour user rate is not a meaningful limit on that.
+    """
+    scope = 'ledger_export'
+
+
 class PaymentVerificationThrottle(UserRateThrottle):
     """
     Stricter rate limit for payment verification endpoints.
@@ -2450,6 +2481,7 @@ class WalletDepositListView(generics.ListAPIView):
     """The authenticated user's top-up history."""
     serializer_class = WalletDepositSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FinancePagination
 
     @swagger_auto_schema(
         operation_id="list_wallet_deposits",
@@ -2566,6 +2598,7 @@ class DepositRefundListView(generics.ListAPIView):
     """The authenticated user's refund history."""
     serializer_class = DepositRefundSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FinancePagination
 
     @swagger_auto_schema(
         operation_id="list_deposit_refunds",
@@ -2646,6 +2679,7 @@ class AdminLedgerView(generics.ListAPIView):
     """
     serializer_class = LedgerEntrySerializer
     permission_classes = [IsAdmin]
+    pagination_class = FinancePagination
 
     @swagger_auto_schema(
         operation_id="admin_finance_ledger",
@@ -2719,6 +2753,7 @@ class AdminLedgerExportView(APIView):
     capped, because a spreadsheet is a zip finalised at the end and cannot be streamed.
     """
     permission_classes = [IsAdmin]
+    throttle_classes = [LedgerExportThrottle]
 
     @swagger_auto_schema(
         operation_id="admin_finance_ledger_export",
@@ -2773,6 +2808,7 @@ class AdminFailedPaymentsView(generics.ListAPIView):
     """
     serializer_class = PaystackEventSerializer
     permission_classes = [IsAdmin]
+    pagination_class = FinancePagination
 
     @swagger_auto_schema(
         operation_id="admin_failed_payments",

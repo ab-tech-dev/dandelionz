@@ -39,22 +39,33 @@ EXPORT_COLUMNS = [
 ]
 
 
+DATE_ONLY_FORMAT = '%Y-%m-%d'
+_DATETIME_FORMATS = ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', DATE_ONLY_FORMAT)
+
+
 def _parse_date(value, end_of_day=False):
     """
     Accept either a date or a full timestamp.
 
-    A date alone is read as local midnight, and `end_of_day` pushes it to 23:59:59.999999 -
+    A bare date is read as local midnight, and `end_of_day` pushes it to 23:59:59.999999 -
     otherwise `date_to=2026-07-20` would silently exclude everything that happened on the
     20th, which is the single most surprising way a finance report can be wrong.
+
+    That promotion keys off which *format matched*, not off the parsed time being midnight.
+    Testing `hour == 0 and minute == 0` cannot tell a bare date from a deliberate
+    `2026-07-21 00:00:00`, so an operator asking for a precise cutoff would silently get a
+    whole extra day folded into the total they were about to sign off.
     """
     if not value:
         return None
 
     text = str(value).strip()
     parsed = None
-    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d'):
+    matched_format = None
+    for fmt in _DATETIME_FORMATS:
         try:
             parsed = datetime.strptime(text, fmt)
+            matched_format = fmt
             break
         except ValueError:
             continue
@@ -62,12 +73,49 @@ def _parse_date(value, end_of_day=False):
     if parsed is None:
         return None
 
-    if parsed.hour == 0 and parsed.minute == 0 and parsed.second == 0 and end_of_day:
+    if end_of_day and matched_format == DATE_ONLY_FORMAT:
         parsed = datetime.combine(parsed.date(), time.max)
 
     if timezone.is_naive(parsed):
         parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
     return parsed
+
+
+def parse_filters(params):
+    """
+    Normalise raw query parameters once, so every consumer sees the same values.
+
+    filtered_entries() and applied_filters() both need the parsed dates. Parsing in each
+    of them separately meant the "filters applied" block echoed back to the operator was
+    computed independently of the query that actually ran - so a change to one could leave
+    the screen describing a range the rows did not come from.
+    """
+    entry_type = params.get('entry_type')
+    types = []
+    if entry_type:
+        wanted = [t.strip().upper() for t in str(entry_type).split(',') if t.strip()]
+        types = [t for t in wanted if t in LedgerEntry.EntryType.values]
+
+    direction = params.get('direction')
+    direction = str(direction).upper() if direction else ''
+
+    bucket = params.get('bucket')
+    bucket = str(bucket).upper() if bucket else ''
+
+    def _clean(name):
+        value = params.get(name)
+        return str(value).strip() if value else ''
+
+    return {
+        'date_from': _parse_date(params.get('date_from')),
+        'date_to': _parse_date(params.get('date_to'), end_of_day=True),
+        'entry_types': types,
+        'direction': direction if direction in LedgerEntry.Direction.values else '',
+        'bucket': bucket if bucket in LedgerEntry.Bucket.values else '',
+        'user': _clean('user'),
+        'reference': _clean('reference'),
+        'search': _clean('search'),
+    }
 
 
 def filtered_entries(params):
@@ -79,48 +127,39 @@ def filtered_entries(params):
     quietly widens is better than a 500 in an admin screen, and the applied filters are
     echoed back in the response so an operator can see what actually ran.
     """
+    f = parse_filters(params)
+
     qs = (
         LedgerEntry.objects
         .select_related('wallet', 'wallet__user', 'order', 'payout_request')
         .order_by('-created_at', '-id')
     )
 
-    date_from = _parse_date(params.get('date_from'))
-    if date_from:
-        qs = qs.filter(created_at__gte=date_from)
+    if f['date_from']:
+        qs = qs.filter(created_at__gte=f['date_from'])
 
-    date_to = _parse_date(params.get('date_to'), end_of_day=True)
-    if date_to:
-        qs = qs.filter(created_at__lte=date_to)
+    if f['date_to']:
+        qs = qs.filter(created_at__lte=f['date_to'])
 
-    entry_type = params.get('entry_type')
-    if entry_type:
-        # Comma-separated so a report can cover a related group in one pass, e.g.
-        # WITHDRAWAL,WITHDRAWAL_REVERSAL to see a payout and its reversal together.
-        types = [t.strip().upper() for t in str(entry_type).split(',') if t.strip()]
-        valid = [t for t in types if t in LedgerEntry.EntryType.values]
-        if valid:
-            qs = qs.filter(entry_type__in=valid)
+    # Comma-separated so a report can cover a related group in one pass, e.g.
+    # WITHDRAWAL,WITHDRAWAL_REVERSAL to see a payout and its reversal together.
+    if f['entry_types']:
+        qs = qs.filter(entry_type__in=f['entry_types'])
 
-    direction = params.get('direction')
-    if direction and str(direction).upper() in LedgerEntry.Direction.values:
-        qs = qs.filter(direction=str(direction).upper())
+    if f['direction']:
+        qs = qs.filter(direction=f['direction'])
 
-    bucket = params.get('bucket')
-    if bucket and str(bucket).upper() in LedgerEntry.Bucket.values:
-        qs = qs.filter(bucket=str(bucket).upper())
+    if f['bucket']:
+        qs = qs.filter(bucket=f['bucket'])
 
-    user = params.get('user')
-    if user:
-        qs = qs.filter(wallet__user__email__iexact=str(user).strip())
+    if f['user']:
+        qs = qs.filter(wallet__user__email__iexact=f['user'])
 
-    reference = params.get('reference')
-    if reference:
-        qs = qs.filter(reference__icontains=str(reference).strip())
+    if f['reference']:
+        qs = qs.filter(reference__icontains=f['reference'])
 
-    search = params.get('search')
-    if search:
-        term = str(search).strip()
+    if f['search']:
+        term = f['search']
         qs = qs.filter(
             Q(reference__icontains=term)
             | Q(description__icontains=term)
@@ -132,18 +171,22 @@ def filtered_entries(params):
 
 
 def applied_filters(params):
-    """Echo back what was actually applied, so a screen can show it and an export can say so."""
-    date_from = _parse_date(params.get('date_from'))
-    date_to = _parse_date(params.get('date_to'), end_of_day=True)
+    """
+    Echo back what was actually applied, so a screen can show it and an export can say so.
+
+    Reports the *normalised* values rather than the raw input: an entry_type the backend
+    rejected as unknown should not be echoed as though it narrowed anything.
+    """
+    f = parse_filters(params)
     return {
-        'date_from': date_from.isoformat() if date_from else None,
-        'date_to': date_to.isoformat() if date_to else None,
-        'entry_type': params.get('entry_type') or None,
-        'direction': params.get('direction') or None,
-        'bucket': params.get('bucket') or None,
-        'user': params.get('user') or None,
-        'reference': params.get('reference') or None,
-        'search': params.get('search') or None,
+        'date_from': f['date_from'].isoformat() if f['date_from'] else None,
+        'date_to': f['date_to'].isoformat() if f['date_to'] else None,
+        'entry_type': ','.join(f['entry_types']) if f['entry_types'] else None,
+        'direction': f['direction'] or None,
+        'bucket': f['bucket'] or None,
+        'user': f['user'] or None,
+        'reference': f['reference'] or None,
+        'search': f['search'] or None,
     }
 
 
@@ -208,7 +251,8 @@ def _row_values(entry):
     signed = entry.amount if entry.direction == LedgerEntry.Direction.CREDIT else -entry.amount
     return {
         'created_at': timezone.localtime(entry.created_at).strftime('%Y-%m-%d %H:%M:%S'),
-        'user_email': entry.wallet.user.email if entry.wallet_id and entry.wallet.user else '',
+        # wallet is a non-nullable PROTECT FK, so there is always an owner to name.
+        'user_email': entry.wallet.user.email,
         'entry_type': entry.entry_type,
         'direction': entry.direction,
         'bucket': entry.bucket,

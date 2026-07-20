@@ -108,6 +108,20 @@ class LedgerFilterTests(TestCase):
     def test_an_unparseable_date_is_ignored(self):
         self.assertEqual(filtered_entries({'date_from': 'last tuesday'}).count(), 4)
 
+    def test_an_explicit_midnight_cutoff_is_not_promoted_to_end_of_day(self):
+        """
+        A bare date means "the whole day"; a supplied 00:00:00 means midnight exactly.
+        Deciding on the parsed time rather than the input format cannot tell them apart,
+        and would fold an extra day into a total an operator is about to sign off.
+        """
+        today = timezone.localtime().strftime('%Y-%m-%d')
+
+        bare = filtered_entries({'date_to': today}).count()
+        explicit = filtered_entries({'date_to': f'{today} 00:00:00'}).count()
+
+        self.assertEqual(bare, 4)
+        self.assertEqual(explicit, 0)
+
     def test_filters_combine(self):
         qs = filtered_entries({'user': 'bob@test.com', 'direction': 'DEBIT'})
         self.assertEqual(qs.count(), 1)
@@ -301,8 +315,55 @@ class AdminLedgerEndpointTests(TestCase):
         response = self.client.get('/transactions/admin/ledger/')
 
         self.assertEqual(response.status_code, 200)
-        results = response.data['results'] if isinstance(response.data, dict) else response.data
-        self.assertEqual(len(results), 2)
+        self.assertEqual(len(response.data['results']), 2)
+
+    def test_the_response_is_paginated(self):
+        """
+        Both clients read `.results`, `.count`, `.next` and `.previous`. This project sets
+        no DEFAULT_PAGINATION_CLASS, so a view that forgets pagination_class returns a bare
+        list and every screen renders empty while the API looks fine in isolation.
+
+        Asserted on the envelope directly. An earlier version of these tests read
+        `data['results'] if isinstance(data, dict) else data`, which passes under either
+        shape - so it could not fail on the one contract the clients actually depend on,
+        and the unpaginated bug shipped.
+        """
+        response = self.client.get('/transactions/admin/ledger/')
+
+        self.assertIsInstance(response.data, dict)
+        for key in ('count', 'next', 'previous', 'results'):
+            self.assertIn(key, response.data)
+        self.assertEqual(response.data['count'], 2)
+
+    def test_paging_past_the_end_is_a_404_rather_than_the_whole_list(self):
+        """An ignored ?page silently returns page 1 again, which reads as "no more rows"."""
+        response = self.client.get('/transactions/admin/ledger/?page=2')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_page_size_splits_the_results(self):
+        first = self.client.get('/transactions/admin/ledger/?page_size=1')
+        second = self.client.get('/transactions/admin/ledger/?page_size=1&page=2')
+
+        self.assertEqual(len(first.data['results']), 1)
+        self.assertEqual(len(second.data['results']), 1)
+        self.assertNotEqual(
+            first.data['results'][0]['id'], second.data['results'][0]['id']
+        )
+        self.assertIsNotNone(first.data['next'])
+        self.assertIsNone(first.data['previous'])
+
+    def test_the_summary_counts_the_whole_slice_not_just_the_page(self):
+        """
+        The summary is not paginated: it must total every matching row, or the card above
+        a paged table would only describe the rows currently visible.
+        """
+        list_response = self.client.get('/transactions/admin/ledger/?page_size=1')
+        summary_response = self.client.get('/transactions/admin/ledger/summary/')
+
+        self.assertEqual(len(list_response.data['results']), 1)
+        self.assertEqual(list_response.data['count'], 2)
+        self.assertEqual(summary_response.data['data']['count'], 2)
 
     def test_the_summary_matches_the_list_for_the_same_filters(self):
         list_response = self.client.get('/transactions/admin/ledger/?direction=DEBIT')
@@ -310,12 +371,10 @@ class AdminLedgerEndpointTests(TestCase):
             '/transactions/admin/ledger/summary/?direction=DEBIT'
         )
 
-        results = (
-            list_response.data['results']
-            if isinstance(list_response.data, dict)
-            else list_response.data
+        self.assertEqual(
+            summary_response.data['data']['count'],
+            list_response.data['count'],
         )
-        self.assertEqual(summary_response.data['data']['count'], len(results))
         self.assertEqual(summary_response.data['data']['total_debits'], '500.00')
 
     def test_the_summary_echoes_the_filters_it_applied(self):
@@ -379,7 +438,9 @@ class AdminFailedPaymentsTests(TestCase):
         self.client.force_authenticate(user=self.admin)
 
     def _results(self, response):
-        return response.data['results'] if isinstance(response.data, dict) else response.data
+        # Asserted, not tolerated: see test_the_response_is_paginated on the ledger.
+        self.assertIsInstance(response.data, dict)
+        return response.data['results']
 
     def test_it_defaults_to_the_states_worth_attention(self):
         """PROCESSED events are the ledger seen from the other side, not a problem."""

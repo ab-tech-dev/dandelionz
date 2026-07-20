@@ -237,6 +237,9 @@ REST_FRAMEWORK = {
         'payment_verification': '5/min',  # Payment verification: 5 requests per minute
         'installment_verification': '5/min',  # Installment payment verification: 5 requests per minute
         'checkout': '10/min',  # Checkout endpoint: 10 requests per minute
+        # Full financial history plus every user's email, in one file. Deliberately
+        # tighter than checkout: it is a bulk data export, not an interactive action.
+        'ledger_export': '6/min',
     }
 }
 
