@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from .models import Product, Category
 from .search import search_products
+from .recommendations import MAX_LIMIT, RECOMMENDATION_TYPES, clamp_limit, recommend
 from authentication.core.base_view import BaseAPIView
 from .serializers import ProductSerializer, CategorySerializer
 from authentication.core.response import standardized_response
@@ -14,6 +15,7 @@ from rest_framework import generics
 from django_filters.rest_framework import DjangoFilterBackend
 from django_filters import FilterSet, NumberFilter, CharFilter
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.utils import timezone
 from django.core.cache import cache
@@ -2604,3 +2606,207 @@ class VendorProductDetailView(BaseAPIView):
             ),
             status=status.HTTP_200_OK
         )
+
+
+# ======================================================
+# RECOMMENDATIONS & INTERACTION TRACKING
+# ======================================================
+class InteractionEventAnonThrottle(AnonRateThrottle):
+    """
+    Rate limit for anonymous interaction tracking.
+
+    The default 'anon' rate (100/hour) is tuned for meaningful writes; a view
+    event fires on every product a visitor opens, so ordinary browsing would
+    trip it. Limits: 120 requests per minute per IP.
+    """
+    scope = 'interaction_event_anon'
+
+
+class InteractionEventUserThrottle(UserRateThrottle):
+    """
+    Rate limit for authenticated interaction tracking.
+    Limits: 120 requests per minute per user.
+    """
+    scope = 'interaction_event'
+
+
+@extend_schema(
+    tags=["Recommendations"],
+    description=(
+        "Record a lightweight product interaction (view or cart add). Fire-and-forget: "
+        "clients should not wait on or retry this call."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "product": {"type": "string", "description": "Product slug"},
+                "event_type": {"type": "string", "enum": ["view", "cart_add"]},
+            },
+            "required": ["product", "event_type"],
+        }
+    },
+    examples=[
+        OpenApiExample(
+            "Record a product view",
+            summary="Track that a product page was opened",
+            value={"product": "wireless-headphones", "event_type": "view"}
+        )
+    ],
+    responses={
+        202: OpenApiResponse(description="Event accepted"),
+        400: OpenApiResponse(description="Unknown product or invalid event type"),
+    },
+)
+class RecordInteractionView(BaseAPIView):
+    """
+    Accept one interaction event and return immediately.
+
+    Deliberately cheap: one validated INSERT, no serializer, no fan-out. A bad
+    slug is a 400 rather than an exception, and an unexpected write failure is
+    swallowed into a 202 -- losing an analytics row must never surface as an
+    error on the client's critical path.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [InteractionEventAnonThrottle, InteractionEventUserThrottle]
+
+    def _session_key(self, request):
+        """
+        Session key used to group anonymous activity.
+
+        Creates a session only when the visitor does not already have one, so
+        this costs one extra write per visitor rather than one per event.
+        """
+        session = getattr(request, 'session', None)
+        if session is None:
+            return ''
+
+        try:
+            if not session.session_key:
+                session.create()
+            return session.session_key or ''
+        except Exception:
+            # Session storage problems must not fail an analytics write.
+            logger.warning("Could not resolve session key for interaction event", exc_info=True)
+            return ''
+
+    def post(self, request):
+        from .models import InteractionEvent
+
+        slug = request.data.get('product')
+        event_type = request.data.get('event_type')
+
+        valid_types = [choice[0] for choice in InteractionEvent.EVENT_TYPES]
+        if event_type not in valid_types:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"event_type must be one of: {', '.join(valid_types)}"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not slug:
+            return Response(
+                standardized_response(success=False, error="Product slug is required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # values_list avoids loading a whole Product row just to get its id.
+        product_id = Product.objects.filter(slug=slug).values_list('id', flat=True).first()
+        if product_id is None:
+            return Response(
+                standardized_response(success=False, error="Product not found"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        session_key = '' if user else self._session_key(request)
+
+        try:
+            InteractionEvent.objects.create(
+                product_id=product_id,
+                user=user,
+                session_key=session_key,
+                event_type=event_type,
+            )
+        except Exception:
+            # Accepted-but-dropped is the right trade here: the caller is not
+            # waiting on this and cannot act on the failure.
+            logger.warning("Failed to record interaction event for product %s", slug, exc_info=True)
+
+        return Response(
+            standardized_response(message="Event recorded"),
+            status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(
+    tags=["Recommendations"],
+    description=(
+        "Product recommendations. 'related' needs a product slug; 'for-you' personalizes for the "
+        "authenticated user and falls back to trending for anonymous callers; 'trending' works with "
+        "no personalization data and is the fallback for everything else."
+    ),
+    parameters=[
+        OpenApiParameter(name='type', description="One of: related, for-you, trending", required=True, type=str),
+        OpenApiParameter(name='product', description="Product slug (required when type=related)", required=False, type=str),
+        OpenApiParameter(name='category', description="Category slug (optional, only used when type=trending)", required=False, type=str),
+        OpenApiParameter(name='limit', description="Number of products to return, 1-24 (default 8)", required=False, type=int),
+    ],
+    responses={
+        200: ProductSerializer(many=True),
+        400: OpenApiResponse(description="Invalid type, limit, or product slug"),
+    },
+)
+class RecommendationsView(BaseAPIView):
+    """Read-only recommendations, serialized identically to /store/products/."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        kind = (request.query_params.get('type') or '').strip()
+        if kind not in RECOMMENDATION_TYPES:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"type must be one of: {', '.join(RECOMMENDATION_TYPES)}"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        limit = clamp_limit(request.query_params.get('limit'))
+        if limit is None:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"limit must be a positive integer (maximum {MAX_LIMIT})"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        product = None
+        if kind == 'related':
+            slug = (request.query_params.get('product') or '').strip()
+            if not slug:
+                return Response(
+                    standardized_response(success=False, error="product slug is required when type=related"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            product = Product.objects.filter(slug=slug).select_related('category').first()
+            if product is None:
+                return Response(
+                    standardized_response(success=False, error="Product not found"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        products = recommend(
+            kind,
+            user=user,
+            product=product,
+            category=(request.query_params.get('category') or '').strip() or None,
+            limit=limit,
+        )
+
+        serializer = ProductSerializer(products, many=True)
+        return Response(standardized_response(data=serializer.data))

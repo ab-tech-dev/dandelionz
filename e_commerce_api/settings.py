@@ -236,6 +236,10 @@ REST_FRAMEWORK = {
         'payment_verification': '5/min',  # Payment verification: 5 requests per minute
         'installment_verification': '5/min',  # Installment payment verification: 5 requests per minute
         'checkout': '10/min',  # Checkout endpoint: 10 requests per minute
+        # Interaction tracking fires once per product a shopper opens, so it
+        # needs far more headroom than the default 'anon'/'user' rates.
+        'interaction_event': '120/min',  # Interaction tracking (authenticated)
+        'interaction_event_anon': '120/min',  # Interaction tracking (anonymous)
     }
 }
 

@@ -296,6 +296,46 @@ class Favourite(models.Model):
         return f"{self.customer.full_name or self.customer.email} favourited {self.product.name}"
 
 
+# ==========================================
+# Interaction Event Model
+# ==========================================
+class InteractionEvent(models.Model):
+    """
+    A single lightweight signal that a product was looked at or added to a cart.
+
+    Rows are written fire-and-forget from the client, so this model stays
+    deliberately thin: no uniqueness, no updates, one INSERT per event. The
+    recommendation engine reads only recent rows, so old ones can be pruned
+    without touching anything else.
+
+    ``user`` is nullable because anonymous browsing is still useful signal;
+    ``session_key`` groups that activity until the visitor signs in.
+    """
+    EVENT_TYPES = [
+        ('view', 'Product View'),
+        ('cart_add', 'Added to Cart'),
+    ]
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='interaction_events')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, null=True, blank=True, related_name='interaction_events')
+    session_key = models.CharField(max_length=40, blank=True, help_text="Django session key for anonymous visitors")
+    event_type = models.CharField(max_length=20, choices=EVENT_TYPES)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        # Both reads the engine makes are "recent events for X", so each index
+        # covers one of them with created_at as the range column.
+        indexes = [
+            models.Index(fields=['product', 'created_at']),
+            models.Index(fields=['user', 'created_at']),
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        who = self.user.email if self.user else (self.session_key or 'anonymous')
+        return f"{who} {self.event_type} {self.product.name}"
+
+
 class Review(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reviews')
     customer = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reviews')
