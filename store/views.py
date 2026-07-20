@@ -1,9 +1,11 @@
 import logging
 import json
+import hashlib
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from .models import Product, Category
+from .search import search_products
 from authentication.core.base_view import BaseAPIView
 from .serializers import ProductSerializer, CategorySerializer
 from authentication.core.response import standardized_response
@@ -14,6 +16,7 @@ from django_filters import FilterSet, NumberFilter, CharFilter
 from rest_framework.filters import OrderingFilter, SearchFilter
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.utils import timezone
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +72,11 @@ class ProductFilterSet(FilterSet):
 class ProductListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = ProductSerializer
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    # SearchFilter is deliberately absent: `search` is handled by
+    # store.search.search_products, which ranks by relevance and also covers
+    # brand, tags and category name. See filter_queryset below.
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = ProductFilterSet
-    search_fields = ['name', 'description']
     ordering_fields = ['price', 'name']
 
     def get_queryset(self):
@@ -79,7 +84,17 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
         return Product.objects.filter(
             approval_status='approved',
             publish_status='submitted'
-        ).all()
+        ).select_related('category').all()
+
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        # An explicit ?ordering= wins; relevance ordering only fills the gap.
+        explicit_ordering = self.request.query_params.get('ordering')
+        return search_products(
+            queryset,
+            self.request.query_params.get('search'),
+            apply_ordering=not explicit_ordering,
+        )
 
     @extend_schema(
         parameters=[
@@ -88,11 +103,11 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
             OpenApiParameter(name='min_price', description='Filter by minimum price', required=False, type=float),
             OpenApiParameter(name='max_price', description='Filter by maximum price', required=False, type=float),
             OpenApiParameter(name='category', description='Filter by category', required=False, type=str),
-            OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
-            OpenApiParameter(name='ordering', description='Order by price or name', required=False, type=str),
+            OpenApiParameter(name='search', description='Search across name, brand, tags, category and description. Results are ranked by relevance.', required=False, type=str),
+            OpenApiParameter(name='ordering', description='Order by price or name. Overrides relevance ordering when searching.', required=False, type=str),
         ],
         responses={200: ProductSerializer(many=True)},
-        description="Retrieve a list of products. Supports filtering by exact price or price range, search, and ordering. Only shows approved products."
+        description="Retrieve a list of products. Supports filtering by exact price or price range, relevance-ranked search, and ordering. Only shows approved products."
     )
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -102,6 +117,60 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
             return self.get_paginated_response(standardized_response(data=serializer.data))
         serializer = self.get_serializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))
+
+
+class ProductSearchSuggestionsView(BaseAPIView):
+    """Typeahead suggestions for the search page. Intentionally lightweight."""
+    permission_classes = [AllowAny]
+
+    PRODUCT_LIMIT = 8
+    CATEGORY_LIMIT = 4
+    MIN_QUERY_LENGTH = 2
+    CACHE_SECONDS = 300
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(name='q', description='Partial search query (minimum 2 characters)', required=True, type=str),
+        ],
+        description="Return product and category name suggestions for search-as-you-type."
+    )
+    def get(self, request):
+        query = (request.query_params.get('q') or '').strip()
+
+        # Single characters match nearly everything, so they cost a lot and
+        # suggest nothing useful.
+        if len(query) < self.MIN_QUERY_LENGTH:
+            return Response(standardized_response(data={'products': [], 'categories': []}))
+
+        # Hash rather than interpolate: raw query text can exceed Django's 250
+        # character key limit and may contain spaces or control characters,
+        # which are invalid keys on some cache backends.
+        query_digest = hashlib.sha256(query.lower().encode('utf-8')).hexdigest()
+        cache_key = f'search:suggest:{query_digest}'
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(standardized_response(data=cached))
+
+        products = search_products(
+            Product.objects.filter(
+                approval_status='approved',
+                publish_status='submitted'
+            ).select_related('category'),
+            query
+        )[:self.PRODUCT_LIMIT]
+
+        categories = Category.objects.filter(
+            is_active=True,
+            name__icontains=query
+        )[:self.CATEGORY_LIMIT]
+
+        data = {
+            'products': [{'name': p.name, 'slug': p.slug} for p in products],
+            'categories': [{'name': c.name, 'slug': c.slug} for c in categories],
+        }
+
+        cache.set(cache_key, data, self.CACHE_SECONDS)
+        return Response(standardized_response(data=data))
 
 
 class ProductDetailView(BaseAPIView):

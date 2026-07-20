@@ -7,6 +7,7 @@ from .views import (
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, VendorDraftProductDetailView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
+    ProductSearchSuggestionsView,
     ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
     VendorProductsListView, VendorProductDetailView
 )
@@ -24,6 +25,7 @@ urlpatterns = [
     path('products/stats/', ProductStatsView.as_view(), name='product-stats'),
     path('products/summary/', ProductSummaryView.as_view(), name='product-summary'),
     path('products/filtered/', ProductFilteredView.as_view(), name='product-filtered'),
+    path('products/suggestions/', ProductSearchSuggestionsView.as_view(), name='product-search-suggestions'),
     
     # ==================
     # PRODUCTS - CRUD
