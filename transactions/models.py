@@ -1109,8 +1109,16 @@ class WalletHold(models.Model):
         CAPTURED = 'CAPTURED', 'Captured'
         RELEASED = 'RELEASED', 'Released'
 
+    class Purpose(models.TextChoices):
+        ORDER = 'ORDER', 'Order payment'
+        DELIVERY = 'DELIVERY', 'Delivery fee'
+
     wallet = models.ForeignKey(Wallet, on_delete=models.CASCADE, related_name='holds')
     order = models.ForeignKey(Order, on_delete=models.CASCADE, null=True, blank=True, related_name='wallet_holds')
+    # What the held money is for. An order can carry both an ORDER hold (the goods, captured
+    # at checkout) and later a DELIVERY hold (the delivery fee), so the two must be told apart
+    # or a refund would reverse the wrong one.
+    purpose = models.CharField(max_length=12, choices=Purpose.choices, default=Purpose.ORDER)
     reference = models.CharField(max_length=100, unique=True, db_index=True)
 
     amount = models.DecimalField(max_digits=12, decimal_places=2)
@@ -1175,6 +1183,40 @@ class WalletHold(models.Model):
 
     def __str__(self):
         return f"Hold {self.reference} - {self.amount} ({self.status})"
+
+
+class DeliveryCharge(models.Model):
+    """
+    The customer's payment of an order's delivery fee - a second payment, made after the goods
+    are paid and the admin has set the fee. Mirrors the split-checkout shape: payable from the
+    wallet, by card, or both. The wallet portion is held via a WalletHold with purpose=DELIVERY
+    (reversible if the card leg is abandoned); this row tracks the card leg and the overall
+    state, and flips Order.delivery_fee_paid when it settles.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PAID = 'PAID', 'Paid'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='delivery_charges')
+    reference = models.CharField(max_length=100, unique=True, db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    wallet_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    card_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    gateway = models.CharField(max_length=50, default='Paystack')
+    paystack_transaction_id = models.CharField(max_length=100, blank=True, default='')
+    verified = models.BooleanField(default=False)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['order', 'status'])]
+
+    def __str__(self):
+        return f"DeliveryCharge {self.reference} - {self.amount} ({self.status})"
 
 
 class PaystackEvent(models.Model):

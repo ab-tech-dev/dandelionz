@@ -16,6 +16,7 @@ from .views import (
     AdminFailedPaymentsView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
+from .delivery_payment_views import InitializeDeliveryPaymentView, VerifyDeliveryPaymentView
 
 urlpatterns = [
     # Order endpoints
@@ -23,6 +24,7 @@ urlpatterns = [
     path('orders/<uuid:order_id>/', OrderDetailView.as_view(), name='order-detail'),
     path('orders/<uuid:order_id>/cancel/', CustomerCancelOrderView.as_view(), name='cancel-order'),
     path('orders/<uuid:order_id>/delivery-fee/', OrderDeliveryFeeView.as_view(), name='order-delivery-fee'),
+    path('orders/<uuid:order_id>/delivery-payment/', InitializeDeliveryPaymentView.as_view(), name='init-delivery-payment'),
     path('orders/<uuid:order_id>/receipt/', OrderReceiptView.as_view(), name='order-receipt'),
     path('orders/<uuid:order_id>/items/', OrderItemListCreateView.as_view(), name='order-item-list-create'),
     path('order-items/<int:pk>/', OrderItemDetailView.as_view(), name='order-item-detail'),
@@ -34,6 +36,7 @@ urlpatterns = [
 
     # Payment verification endpoint
     path('verify-payment/', SecureVerifyPaymentView.as_view(), name='verify-payment'),
+    path('verify-delivery-payment/', VerifyDeliveryPaymentView.as_view(), name='verify-delivery-payment'),
     path('paystack/return/', PaystackMobileReturnView.as_view(), name='paystack-mobile-return'),
     path('webhook/', PaystackWebhookView.as_view(), name='paystack-webhook'),
 

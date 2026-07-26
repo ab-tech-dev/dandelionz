@@ -119,15 +119,20 @@ def plan_split(total, wallet_available, requested=None):
     return money(wallet_amount), money(total - wallet_amount)
 
 
-def place_hold(user, order, amount):
+def place_hold(user, order, amount, purpose=None):
     """
     Debit the wallet and record a hold against this order.
 
     Runs under a row lock on the wallet: the balance check and the debit have to be one
     step, or two checkouts started together both see enough money and both succeed.
 
+    `purpose` distinguishes the order's goods payment (the default) from a later delivery-fee
+    payment, so the two holds on one order never get confused.
+
     Returns the WalletHold, or None when there is nothing to hold.
     """
+    purpose = purpose or WalletHold.Purpose.ORDER
+    is_delivery = purpose == WalletHold.Purpose.DELIVERY
     amount = money(amount)
     if amount <= 0:
         return None
@@ -148,10 +153,12 @@ def place_hold(user, order, amount):
         from_spendable = min(spendable, amount)
         from_withdrawable = money(amount - from_spendable)
 
-        reference = f"HLD-{uuid.uuid4().hex[:16].upper()}"
+        prefix = "DHLD" if is_delivery else "HLD"
+        reference = f"{prefix}-{uuid.uuid4().hex[:16].upper()}"
         hold = WalletHold.objects.create(
             wallet=wallet,
             order=order,
+            purpose=purpose,
             reference=reference,
             amount=amount,
             spendable_amount=from_spendable,
@@ -161,27 +168,33 @@ def place_hold(user, order, amount):
 
         wallet.debit(
             amount,
-            source=f"Order payment {order.order_id}",
+            source=f"{'Delivery fee' if is_delivery else 'Order payment'} {order.order_id}",
             entry_type=LedgerEntry.EntryType.ORDER_PAYMENT,
-            idempotency_key=f"order-hold-{reference}",
+            idempotency_key=f"{'delivery' if is_delivery else 'order'}-hold-{reference}",
             order=order,
         )
 
     logger.info(
-        f"Wallet hold {reference} placed for order {order.order_id}: {amount} "
+        f"Wallet hold {reference} ({purpose}) placed for order {order.order_id}: {amount} "
         f"(spendable {from_spendable}, withdrawable {from_withdrawable})"
     )
     return hold
 
 
-def active_hold_for(order):
-    """The hold still reserving money for this order, if any."""
-    return WalletHold.objects.filter(order=order, status=WalletHold.Status.HELD).first()
+def active_hold_for(order, purpose=None):
+    """The hold still reserving money for this order (of the given purpose), if any."""
+    purpose = purpose or WalletHold.Purpose.ORDER
+    return WalletHold.objects.filter(
+        order=order, purpose=purpose, status=WalletHold.Status.HELD
+    ).first()
 
 
-def captured_hold_for(order):
-    """The hold whose money was actually spent on this order, if any."""
-    return WalletHold.objects.filter(order=order, status=WalletHold.Status.CAPTURED).first()
+def captured_hold_for(order, purpose=None):
+    """The hold whose money was actually spent on this order (of the given purpose), if any."""
+    purpose = purpose or WalletHold.Purpose.ORDER
+    return WalletHold.objects.filter(
+        order=order, purpose=purpose, status=WalletHold.Status.CAPTURED
+    ).first()
 
 
 def wallet_amount_paid(order):
@@ -195,9 +208,9 @@ def wallet_amount_paid(order):
     return money(hold.amount) if hold else Decimal('0.00')
 
 
-def capture_for_order(order):
+def capture_for_order(order, purpose=None):
     """Confirm the wallet spend once the rest of the payment has landed. Idempotent."""
-    hold = active_hold_for(order)
+    hold = active_hold_for(order, purpose)
     if hold is None:
         return False
     captured = hold.capture()
@@ -206,9 +219,9 @@ def capture_for_order(order):
     return captured
 
 
-def release_for_order(order, reason="Checkout not completed"):
+def release_for_order(order, reason="Checkout not completed", purpose=None):
     """Return held wallet money to its original buckets. Idempotent."""
-    hold = active_hold_for(order)
+    hold = active_hold_for(order, purpose)
     if hold is None:
         return False
     released = hold.release(reason)

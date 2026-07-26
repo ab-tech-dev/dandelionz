@@ -2110,6 +2110,27 @@ No authentication required (webhook signature validation instead)""",
             logger.info(f"Installment reference {reference} received on the order webhook")
             return Response({"status": "ok", "detail": "installment handled elsewhere"})
 
+        if kind == references.DELIVERY:
+            # An order's delivery-fee card leg. Re-verify against Paystack, then settle - the
+            # webhook is the backstop for a customer who closes the page before verify runs.
+            try:
+                verify = Paystack().verify_payment(reference)
+            except Exception as e:
+                logger.error(f"Delivery webhook verify failed for {reference}: {e}", exc_info=True)
+                return Response({"status": "ok", "detail": "verification deferred"})
+
+            data = verify.get("data", {})
+            if data.get("status") != "success":
+                return Response({"status": "ok", "detail": "delivery payment not successful"})
+
+            from transactions import delivery_payment
+            handled, detail = delivery_payment.settle_delivery_webhook(data)
+            if not handled:
+                logger.warning(f"Delivery charge {reference} not settled at webhook: {detail}")
+                return Response({"status": "ok", "detail": detail or "delivery not settled"})
+            logger.info(f"Delivery charge {reference} settled via webhook")
+            return Response({"status": "ok"})
+
         settlement_blocked = None
         with transaction.atomic():
             try:
