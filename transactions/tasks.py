@@ -476,5 +476,34 @@ def check_installment_payments_due(self):
         }
 
 
+@shared_task(
+    bind=True,
+    name="transactions.release_expired_wallet_holds"
+)
+def release_expired_wallet_holds(self):
+    """
+    Return wallet money held for checkouts that were abandoned.
+
+    Runs the same sweep as `manage.py release_expired_holds` - both call
+    wallet_checkout.sweep_expired_holds, so scheduling this via Celery beat needs nothing
+    extra on the host. Wired in CELERY_BEAT_SCHEDULE to run every 10 minutes.
+
+    Idempotent, so a missed or repeated run cannot double-pay.
+    """
+    from transactions import wallet_checkout
+
+    try:
+        result = wallet_checkout.sweep_expired_holds()
+        if result['released'] or result['failed']:
+            logger.info(
+                f"release_expired_wallet_holds: released {result['released']}, "
+                f"failed {result['failed']}, of {result['total']} expired"
+            )
+        return {"status": "success", **result}
+    except Exception as e:
+        logger.error(f"Error in release_expired_wallet_holds task: {str(e)}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
 # Keep old task name for backward compatibility
 notify_vendors_order_paid = notify_stakeholders_order_paid

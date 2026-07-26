@@ -49,6 +49,19 @@ def _country_code_from_profile(profile):
 def _has_coords(lat, lng):
     return lat is not None and lng is not None
 
+def _capture_paystack_transaction_id(payment, paystack_data):
+    """
+    Record Paystack's transaction id on the payment from a verified response.
+
+    Kept for the refund-to-source path: if this card leg later cannot be settled, the
+    transaction id is what its refund is issued against. Written only when present and not
+    already stored, so a webhook/verify race does not overwrite it.
+    """
+    txn_id = (paystack_data or {}).get("id")
+    if txn_id and not payment.paystack_transaction_id:
+        payment.paystack_transaction_id = str(txn_id)
+        payment.save(update_fields=["paystack_transaction_id"])
+
 def _extract_coords(coords):
     if not isinstance(coords, (tuple, list)) or len(coords) != 2:
         return None
@@ -1793,21 +1806,28 @@ Use the 'reference' or 'trxref' query parameter.""",
                     )
                 )
 
+            # Capture Paystack's transaction id before settling, so a card leg that turns
+            # out to be unsettleable can still be refunded to source.
+            _capture_paystack_transaction_id(payment, data)
+
             try:
                 payment.mark_as_successful()
             except wallet_checkout.SettlementBlocked as exc:
                 # The card leg was paid for an order that must not be settled - the wallet
-                # half has already gone back to the customer. Log loudly and refuse rather
-                # than fulfilling an order that is only half paid for; the card money needs
-                # an operator to return it.
+                # half has already gone back to the customer. Refund the card money to
+                # source automatically rather than fulfilling a half-paid order.
                 logger.error(
                     f"Refusing to settle payment {reference}: {exc}", exc_info=True
                 )
+                refund = wallet_checkout.refund_stranded_card_leg(payment, reason=str(exc))
                 TransactionLog.objects.create(
                     order=payment.order,
                     action=TransactionLog.Action.PAYMENT_FAILED,
                     level=TransactionLog.Level.ERROR,
-                    message=f"Card payment {reference} received but not settled: {exc}",
+                    message=(
+                        f"Card payment {reference} received but not settled: {exc}. "
+                        f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+                    ),
                     related_user=payment.order.customer,
                     amount=payment.amount,
                     metadata={"reference": reference, "reason": str(exc)},
@@ -1817,7 +1837,7 @@ Use the 'reference' or 'trxref' query parameter.""",
                         success=False,
                         error=(
                             "This order can no longer be completed and your card payment "
-                            "will be refunded. Please contact support."
+                            "is being refunded. It will appear on your card in a few days."
                         ),
                     ),
                     status=status.HTTP_400_BAD_REQUEST
@@ -2132,18 +2152,25 @@ No authentication required (webhook signature validation instead)""",
                 return Response({"status": "ok"})
 
             if not payment.verified:
+                # Capture Paystack's transaction id before settling, so an unsettleable
+                # card leg can still be refunded to source.
+                _capture_paystack_transaction_id(payment, pdata)
+
                 try:
                     payment.mark_as_successful()
                 except wallet_checkout.SettlementBlocked as exc:
-                    # Same guard as the verify endpoint. Raising out of _dispatch would
-                    # mark the PaystackEvent FAILED, which is what puts it on the admin
-                    # failed-payments screen for someone to refund.
+                    # Same guard as the verify endpoint. Refund the card money to source
+                    # automatically; the failed-payments screen still records it.
                     logger.error(f"Refusing to settle payment {reference}: {exc}")
+                    refund = wallet_checkout.refund_stranded_card_leg(payment, reason=str(exc))
                     TransactionLog.objects.create(
                         order=payment.order,
                         action=TransactionLog.Action.PAYMENT_FAILED,
                         level=TransactionLog.Level.ERROR,
-                        message=f"Card payment {reference} received but not settled: {exc}",
+                        message=(
+                            f"Card payment {reference} received but not settled: {exc}. "
+                            f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+                        ),
                         related_user=payment.order.customer,
                         amount=payment.amount,
                         metadata={"reference": reference, "reason": str(exc)},

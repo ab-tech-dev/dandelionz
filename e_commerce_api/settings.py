@@ -284,6 +284,13 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=0, minute=0),  # Daily at midnight
         'options': {'queue': 'notifications'}
     },
+    'release-expired-wallet-holds': {
+        # Returns wallet money from abandoned split-payment checkouts. Frequent because a
+        # customer whose hold has not cleared is locked out of that balance until it does.
+        'task': 'transactions.release_expired_wallet_holds',
+        'schedule': crontab(minute='*/10'),  # Every 10 minutes
+        'options': {'queue': 'maintenance'}
+    },
 }
 
 # Celery Queues

@@ -217,6 +217,136 @@ def release_for_order(order, reason="Checkout not completed"):
     return released
 
 
+def refund_stranded_card_leg(payment, reason="Order could not be completed"):
+    """
+    Return a card charge to source when its order can no longer be settled.
+
+    Called when settlement_blocker refused a paid card leg: the money is sitting at Paystack
+    for an order that will never ship, so it goes back to the card. This money never entered
+    the wallet, so there is no ledger movement - the OrderPaymentRefund row is the record.
+
+    Idempotent: an existing non-FAILED refund for this payment short-circuits, so a webhook
+    retry or a verify/webhook race cannot refund the same charge twice.
+
+    The record is created and committed before Paystack is called, so a row always exists to
+    retry against if the network call fails. Returns the OrderPaymentRefund, or None when
+    there is nothing to refund.
+    """
+    from transactions import references
+    from transactions.models import OrderPaymentRefund
+    from transactions.paystack import Paystack
+
+    amount = money(payment.amount)
+    if amount <= 0:
+        return None
+
+    transaction_handle = payment.paystack_transaction_id or payment.reference
+    if not transaction_handle:
+        logger.error(
+            f"Cannot refund stranded card leg for payment {payment.reference}: "
+            f"no Paystack transaction reference recorded"
+        )
+        return None
+
+    with transaction.atomic():
+        existing = (
+            OrderPaymentRefund.objects
+            .select_for_update()
+            .filter(payment=payment)
+            .exclude(status=OrderPaymentRefund.Status.FAILED)
+            .first()
+        )
+        if existing is not None:
+            return existing
+
+        refund = OrderPaymentRefund.objects.create(
+            payment=payment,
+            order=payment.order,
+            reference=references.new_refund_reference(),
+            amount=amount,
+            reason=reason,
+        )
+
+    # Network call outside the row lock, once the record is durable.
+    try:
+        resp = Paystack().refund(
+            transaction=transaction_handle,
+            amount=amount,
+            merchant_note=f"Order payment refund {refund.reference}: {reason}",
+        )
+    except Exception as exc:
+        logger.error(
+            f"Paystack refund failed for stranded card leg {refund.reference} "
+            f"(payment {payment.reference}): {exc}",
+            exc_info=True,
+        )
+        refund.mark_as_failed(f"Could not start the refund: {exc}")
+        return refund
+
+    data = resp.get("data") or {}
+    refund.status = OrderPaymentRefund.Status.PROCESSING
+    refund.paystack_refund_id = str(data.get("id") or "")
+    refund.save(update_fields=['status', 'paystack_refund_id', 'updated_at'])
+    logger.info(
+        f"Refund {refund.reference} accepted by Paystack for stranded card leg "
+        f"of order {payment.order.order_id} ({amount})"
+    )
+    return refund
+
+
+def sweep_expired_holds(now=None, dry_run=False, on_event=None):
+    """
+    Release wallet money held for checkouts that were never completed.
+
+    A hold is resolved when the card leg succeeds or fails, but neither happens if the
+    customer simply closes the payment page - so without this the money sits reserved
+    indefinitely and the customer is locked out of their own balance with nothing on screen
+    explaining why. This is the backstop for that abandonment.
+
+    Shared by the release_expired_holds management command and the Celery task of the same
+    name, so the two can never drift. `on_event(kind, hold, detail)` lets a caller stream
+    progress (the command prints it; the task logs it); pass None to stay quiet.
+
+    Idempotent: WalletHold.release() no-ops on anything already captured or released, and
+    the ledger credits carry per-hold idempotency keys, so a double run cannot double-pay.
+
+    Returns {'total', 'released', 'failed'}.
+    """
+    now = now or timezone.now()
+
+    def emit(kind, hold, detail=''):
+        if on_event is not None:
+            on_event(kind, hold, detail)
+
+    expired = (
+        WalletHold.objects
+        .filter(status=WalletHold.Status.HELD, expires_at__lt=now)
+        .select_related('wallet', 'wallet__user', 'order')
+        .order_by('expires_at')
+    )
+
+    total = expired.count()
+    released = 0
+    failed = 0
+
+    for hold in expired.iterator():
+        if dry_run:
+            emit('would_release', hold)
+            continue
+        try:
+            if hold.release("Checkout abandoned"):
+                released += 1
+                emit('released', hold)
+        except Exception as exc:
+            # One bad hold must not strand the rest. A failed release leaves the hold HELD,
+            # so the next run retries it.
+            failed += 1
+            logger.error(f"Failed to release wallet hold {hold.reference}: {exc}")
+            emit('failed', hold, str(exc))
+
+    return {'total': total, 'released': released, 'failed': failed}
+
+
 def refund_to_source_buckets(wallet, order, amount, *, source, idempotency_prefix,
                              payment=None, entry_type=None):
     """

@@ -197,10 +197,40 @@ def settle_refund_webhook(event, data):
     if not transaction_reference:
         return False, "refund webhook carried no transaction reference"
 
+    # A refunded transaction is either a wallet deposit (DEP- reference) or an order card
+    # leg (order reference). Try the deposit first for backward compatibility, then fall
+    # through to an order payment. The two reference spaces do not overlap.
     deposit = WalletDeposit.objects.filter(reference=transaction_reference).first()
-    if deposit is None:
-        return False, f"no wallet deposit for refunded transaction {transaction_reference}"
+    if deposit is not None:
+        return _settle_deposit_refund(event, data, deposit)
 
+    from transactions.models import Payment
+    payment = Payment.objects.filter(reference=transaction_reference).first()
+    if payment is not None:
+        return _settle_order_payment_refund(event, data, payment)
+
+    return False, f"no wallet deposit or order payment for refunded transaction {transaction_reference}"
+
+
+def _apply_refund_event(event, data, refund):
+    """Shared settlement of a refund record from a refund.* webhook."""
+    if event == "refund.processed":
+        refund.mark_as_processed(data.get("id") or "")
+        logger.info(f"Refund {refund.reference} settled by Paystack")
+        return True, None
+
+    if event == "refund.pending":
+        return True, None
+
+    if event == "refund.failed":
+        refund.mark_as_failed(data.get("message") or "Paystack could not complete the refund.")
+        logger.warning(f"Refund {refund.reference} failed")
+        return True, None
+
+    return False, f"unhandled refund event {event}"
+
+
+def _settle_deposit_refund(event, data, deposit):
     amount = data.get("amount")
     candidates = deposit.refunds.filter(
         status__in=[DepositRefund.Status.PENDING, DepositRefund.Status.PROCESSING]
@@ -216,16 +246,21 @@ def settle_refund_webhook(event, data):
     if refund is None:
         return False, f"no unsettled refund for deposit {deposit.reference}"
 
-    if event == "refund.processed":
-        refund.mark_as_processed(data.get("id") or "")
-        logger.info(f"Refund {refund.reference} settled by Paystack")
-        return True, None
+    return _apply_refund_event(event, data, refund)
 
-    if event in ("refund.failed", "refund.pending"):
-        if event == "refund.pending":
-            return True, None
-        refund.mark_as_failed(data.get("message") or "Paystack could not complete the refund.")
-        logger.warning(f"Refund {refund.reference} failed; spendable balance restored")
-        return True, None
 
-    return False, f"unhandled refund event {event}"
+def _settle_order_payment_refund(event, data, payment):
+    from transactions.models import OrderPaymentRefund
+
+    refund = (
+        payment.source_refunds
+        .filter(status__in=[
+            OrderPaymentRefund.Status.PENDING, OrderPaymentRefund.Status.PROCESSING
+        ])
+        .order_by('created_at')
+        .first()
+    )
+    if refund is None:
+        return False, f"no unsettled refund for order payment {payment.reference}"
+
+    return _apply_refund_event(event, data, refund)

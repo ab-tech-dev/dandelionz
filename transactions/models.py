@@ -548,10 +548,14 @@ class Payment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='payment')
     reference = models.CharField(max_length=100, unique=True, default=uuid.uuid4)
     amount = models.DecimalField(max_digits=10, decimal_places=2)
-    status = models.CharField(max_length=20, default='PENDING')  # PENDING, SUCCESS, FAILED
+    status = models.CharField(max_length=20, default='PENDING')  # PENDING, SUCCESS, FAILED, CANCELLED
     gateway = models.CharField(max_length=50, default='Paystack')
     paid_at = models.DateTimeField(null=True, blank=True)
     verified = models.BooleanField(default=False)
+    # Paystack's own transaction id, captured at verification. Needed to refund a card leg
+    # to source when an order can no longer be settled - our reference identifies the charge
+    # to us, but Paystack's refund call is happiest with the transaction id it issued.
+    paystack_transaction_id = models.CharField(max_length=100, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
 
     def mark_as_successful(self):
@@ -1394,4 +1398,80 @@ class DepositRefund(models.Model):
             self.status = self.Status.FAILED
             self.failure_reason = reason or ''
             self.save(update_fields=['status', 'failure_reason', 'updated_at'])
+        return True
+
+
+class OrderPaymentRefund(models.Model):
+    """
+    Returning a card charge to source when the order it paid for can no longer be settled.
+
+    A split payment's two legs are separable: the wallet leg can be handed back to the
+    customer - by cancelling, or by the abandonment sweeper - while the card leg's Paystack
+    link is still live and payable. If the customer then pays the card leg, settlement is
+    refused (see wallet_checkout.settlement_blocker), which leaves real money collected at
+    Paystack for an order that will never ship. This record tracks returning it to the card.
+
+    Distinct from DepositRefund: that returns wallet *deposit* money and debits the SPENDABLE
+    bucket. This money never entered the wallet - it was a direct card charge for an order -
+    so there is no wallet ledger movement, and a failure does not credit any bucket. This
+    row is the whole audit trail, settled by the Paystack refund webhook like any other.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PROCESSING = 'PROCESSING', 'Processing'
+        PROCESSED = 'PROCESSED', 'Processed'
+        FAILED = 'FAILED', 'Failed'
+
+    payment = models.ForeignKey(
+        Payment, on_delete=models.PROTECT, related_name='source_refunds',
+        help_text="The card charge being returned. PROTECT: the refund is meaningless without it.",
+    )
+    order = models.ForeignKey(
+        Order, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='payment_refunds',
+    )
+    reference = models.CharField(max_length=100, unique=True, db_index=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING)
+
+    paystack_refund_id = models.CharField(max_length=100, blank=True)
+    reason = models.CharField(max_length=255, blank=True)
+    failure_reason = models.TextField(blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    settled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', '-created_at']),
+            models.Index(fields=['reference']),
+        ]
+
+    def __str__(self):
+        return f"Order payment refund {self.reference} - {self.amount} ({self.status})"
+
+    def mark_as_processed(self, paystack_refund_id=''):
+        """Paystack settled the refund to the card. No wallet movement is involved."""
+        if self.status == self.Status.PROCESSED:
+            return False
+        self.status = self.Status.PROCESSED
+        self.settled_at = timezone.now()
+        if paystack_refund_id:
+            self.paystack_refund_id = str(paystack_refund_id)
+        self.save(update_fields=['status', 'settled_at', 'paystack_refund_id', 'updated_at'])
+        return True
+
+    def mark_as_failed(self, reason=''):
+        """
+        Paystack refused the refund. Nothing to reverse in the wallet - this money was never
+        there - so this only records the failure for an operator to chase manually.
+        """
+        if self.status in (self.Status.FAILED, self.Status.PROCESSED):
+            return False
+        self.status = self.Status.FAILED
+        self.failure_reason = reason or ''
+        self.save(update_fields=['status', 'failure_reason', 'updated_at'])
         return True
