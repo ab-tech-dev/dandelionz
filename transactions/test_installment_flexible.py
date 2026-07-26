@@ -179,6 +179,28 @@ class FlexibleInstallmentTests(TestCase):
             plan.charges.filter(status=InstallmentCharge.Status.PENDING).count(), 1
         )
 
+    def test_plan_serializer_exposes_running_balance(self, Paystack):
+        plan = self._make_plan()
+        self._fund(Decimal('2000'))
+        self._init(plan, amount='2000', use_wallet=True)  # settles now
+        resp = self.client.get(reverse('installment-plan-detail', kwargs={'id': plan.id}))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.data['data'] if 'data' in resp.data else resp.data
+        self.assertEqual(float(data['amount_paid']), 2000.0)
+        self.assertEqual(data['balance_remaining'], 4000.0)
+        self.assertAlmostEqual(data['paid_fraction'], 0.3333, places=3)
+        self.assertIsNotNone(data['next_due_date'])
+
+    def test_admin_can_list_all_plans(self, Paystack):
+        plan = self._make_plan()
+        admin = User.objects.create_user(email='ipadmin@test.com', password='pass12345', role=User.Role.BUSINESS_ADMIN)
+        self.client.force_authenticate(user=admin)
+        resp = self.client.get(reverse('installment-plan-list'))
+        self.assertEqual(resp.status_code, 200)
+        rows = resp.data['data'] if 'data' in resp.data else resp.data
+        rows = rows.get('results', rows) if isinstance(rows, dict) else rows
+        self.assertTrue(any(r['id'] == plan.id for r in rows))
+
     def test_paying_a_replaced_link_refunds_to_source(self, Paystack):
         plan = self._make_plan()
         self._mock_init(Paystack)
