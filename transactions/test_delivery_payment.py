@@ -179,3 +179,28 @@ class DeliveryPaymentTests(TestCase):
         self.client.force_authenticate(user=other)
         vresp = self.client.get(self._verify_url(), {'reference': reference})
         self.assertEqual(vresp.status_code, 404)
+
+    def test_paying_a_replaced_link_refunds_to_source(self, Paystack):
+        """Restart cancels the old charge; paying its stale link is refunded, not stranded."""
+        self._mock_init(Paystack)
+        first = self.client.post(self._init_url(), {}, format='json')
+        old_ref = first.data['data']['reference']
+
+        # Restart: the old charge is cancelled, a new one is created.
+        self.client.post(self._init_url(), {}, format='json')
+        old_charge = DeliveryCharge.objects.get(reference=old_ref)
+        self.assertEqual(old_charge.status, DeliveryCharge.Status.CANCELLED)
+
+        # The customer pays the OLD (replaced) link. Verify must refund it to source.
+        self._mock_verify(Paystack, Decimal('2500'), txn_id=4242)
+        Paystack.return_value.refund.return_value = {'data': {'id': 9001, 'status': 'pending'}}
+        vresp = self.client.get(self._verify_url(), {'reference': old_ref})
+
+        self.assertEqual(vresp.status_code, 400)  # told to use the current payment
+        Paystack.return_value.refund.assert_called_once()
+        self.assertEqual(Paystack.return_value.refund.call_args.kwargs['amount'], Decimal('2500.00'))
+        old_charge.refresh_from_db()
+        self.assertEqual(old_charge.status, DeliveryCharge.Status.REFUNDED)
+        # The order is NOT marked paid off a refunded, stranded payment.
+        self.order.refresh_from_db()
+        self.assertFalse(self.order.delivery_fee_paid)

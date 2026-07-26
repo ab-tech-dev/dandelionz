@@ -1197,6 +1197,7 @@ class DeliveryCharge(models.Model):
         PENDING = 'PENDING', 'Pending'
         PAID = 'PAID', 'Paid'
         CANCELLED = 'CANCELLED', 'Cancelled'
+        REFUNDED = 'REFUNDED', 'Refunded'
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='delivery_charges')
     reference = models.CharField(max_length=100, unique=True, db_index=True)
@@ -1206,6 +1207,9 @@ class DeliveryCharge(models.Model):
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     gateway = models.CharField(max_length=50, default='Paystack')
     paystack_transaction_id = models.CharField(max_length=100, blank=True, default='')
+    # Set when a payment landed on a charge we could no longer honour (a replaced link) and
+    # was returned to source, so the stranded payment stays traceable.
+    paystack_refund_id = models.CharField(max_length=100, blank=True, default='')
     verified = models.BooleanField(default=False)
     paid_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

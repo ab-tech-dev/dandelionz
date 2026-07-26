@@ -510,9 +510,14 @@ class AdminSetOrderDeliveryView(generics.GenericAPIView):
     def patch(self, request, *args, **kwargs):
         order = self.get_object()
 
-        if str(order.payment_status).upper() != "PAID":
+        # Must be paid for (goods) and not yet shipped: scheduling a shipped/delivered order is
+        # meaningless and could reset delivery_fee_paid on an order already on its way.
+        if str(order.payment_status).upper() != "PAID" or order.status != Order.Status.PAID:
             return Response(
-                standardized_response(success=False, error="Only paid orders can be scheduled for delivery"),
+                standardized_response(
+                    success=False,
+                    error="Only paid orders that have not yet shipped can be scheduled for delivery",
+                ),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -527,12 +532,18 @@ class AdminSetOrderDeliveryView(generics.GenericAPIView):
             latest = data['expected_delivery_latest']
 
         fee = data['delivery_fee']
+        fee_changed = fee != order.delivery_fee
         order.expected_delivery_earliest = earliest
         order.expected_delivery_latest = latest
         order.delivery_fee = fee
-        # A zero fee needs no second payment, so it can ship straight away. A positive fee
-        # (re)opens the charge - it must be paid before shipping, so reset the flag.
-        order.delivery_fee_paid = (fee <= 0)
+        # A zero fee needs no second payment - it can ship straight away. A new or changed
+        # positive fee (re)opens the charge and must be paid before shipping. But re-saving an
+        # UNCHANGED positive fee (e.g. the admin only nudged the window) must NOT un-pay a fee
+        # the customer already settled, or the order would silently become unshippable again.
+        if fee <= 0:
+            order.delivery_fee_paid = True
+        elif fee_changed:
+            order.delivery_fee_paid = False
         order.save(update_fields=[
             'expected_delivery_earliest', 'expected_delivery_latest',
             'delivery_fee', 'delivery_fee_paid', 'updated_at',

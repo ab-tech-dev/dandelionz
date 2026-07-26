@@ -131,6 +131,49 @@ class AdminSetDeliveryTests(TestCase):
         self.order.refresh_from_db()
         self.assertEqual(self.order.status, Order.Status.SHIPPED)
 
+    def test_reschedule_with_unchanged_fee_keeps_it_paid(self):
+        # Schedule with a fee, then simulate the customer paying it.
+        self.client.patch(self._delivery_url(), {
+            'use_default': True, 'delivery_fee': '1500.00',
+        }, format='json')
+        self.order.refresh_from_db()
+        self.order.delivery_fee_paid = True
+        self.order.save(update_fields=['delivery_fee_paid'])
+
+        # Admin only nudges the window; same fee. The paid flag must survive.
+        earliest = timezone.now() + timedelta(days=2)
+        latest = timezone.now() + timedelta(days=5)
+        self.client.patch(self._delivery_url(), {
+            'expected_delivery_earliest': earliest.isoformat(),
+            'expected_delivery_latest': latest.isoformat(),
+            'delivery_fee': '1500.00',
+        }, format='json')
+        self.order.refresh_from_db()
+        self.assertTrue(self.order.delivery_fee_paid)
+
+    def test_changing_the_fee_reopens_payment(self):
+        self.client.patch(self._delivery_url(), {
+            'use_default': True, 'delivery_fee': '1500.00',
+        }, format='json')
+        self.order.refresh_from_db()
+        self.order.delivery_fee_paid = True
+        self.order.save(update_fields=['delivery_fee_paid'])
+
+        # A different fee must be paid again.
+        self.client.patch(self._delivery_url(), {
+            'use_default': True, 'delivery_fee': '2000.00',
+        }, format='json')
+        self.order.refresh_from_db()
+        self.assertFalse(self.order.delivery_fee_paid)
+
+    def test_cannot_schedule_a_shipped_order(self):
+        self.order.status = Order.Status.SHIPPED
+        self.order.save(update_fields=['status'])
+        resp = self.client.patch(self._delivery_url(), {
+            'use_default': True, 'delivery_fee': '1000.00',
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+
     def test_only_paid_orders_can_be_scheduled(self):
         self.order.payment_status = 'UNPAID'
         self.order.save(update_fields=['payment_status'])

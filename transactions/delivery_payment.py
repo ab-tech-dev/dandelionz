@@ -177,6 +177,43 @@ def settle_delivery_charge(charge, paystack_transaction_id=''):
     return charge
 
 
+def _refund_stranded_delivery(charge, paystack_data, reason):
+    """
+    A payment landed on a delivery charge we can no longer honour - a link the customer
+    replaced by restarting. The money is sitting at Paystack for a charge that will never be
+    applied, so return it to source. Same intent as the order flow's stranded-card-leg refund.
+
+    Idempotent on the REFUNDED status. The CANCELLED DeliveryCharge row is the durable record;
+    this only ever moves it to REFUNDED after Paystack accepts the refund.
+    """
+    if charge.status == DeliveryCharge.Status.REFUNDED:
+        return charge
+
+    amount = money(Decimal(str(paystack_data.get('amount', 0))) / 100)
+    if amount <= 0:
+        return charge
+    transaction_handle = str(paystack_data.get('id') or '') or charge.reference
+
+    try:
+        resp = Paystack().refund(
+            transaction=transaction_handle,
+            amount=amount,
+            merchant_note=f"Stranded delivery payment {charge.reference}: {reason}",
+        )
+    except Exception as exc:
+        logger.error(
+            f"Failed to refund stranded delivery payment {charge.reference}: {exc}",
+            exc_info=True,
+        )
+        return charge
+
+    charge.status = DeliveryCharge.Status.REFUNDED
+    charge.paystack_refund_id = str((resp.get('data') or {}).get('id') or '')
+    charge.save(update_fields=['status', 'paystack_refund_id', 'updated_at'])
+    logger.info(f"Refunded stranded delivery payment {charge.reference} ({amount}) to source")
+    return charge
+
+
 def verify_delivery_payment(reference):
     """Verify a delivery card leg with Paystack and settle it. Idempotent on an already-paid charge."""
     charge = DeliveryCharge.objects.filter(reference=reference).select_related('order').first()
@@ -184,7 +221,22 @@ def verify_delivery_payment(reference):
         raise DeliveryPaymentError("Delivery payment not found.")
     if charge.status == DeliveryCharge.Status.PAID:
         return charge
+    if charge.status == DeliveryCharge.Status.REFUNDED:
+        raise DeliveryPaymentError(
+            "That payment link was replaced and any payment on it has been refunded. "
+            "Please use the current delivery payment."
+        )
     if charge.status == DeliveryCharge.Status.CANCELLED:
+        # The customer may have paid this now-replaced link. If Paystack confirms it, the money
+        # is stranded on a charge we cannot apply - refund it to source rather than keep it.
+        if money(charge.card_amount) > 0:
+            data = Paystack().verify_payment(reference).get('data') or {}
+            if data.get('status') == 'success':
+                _refund_stranded_delivery(charge, data, "payment link was replaced")
+                raise DeliveryPaymentError(
+                    "That payment link had expired and your payment has been refunded. "
+                    "Please use the current delivery payment."
+                )
         raise DeliveryPaymentError("This delivery payment was cancelled. Please start a new one.")
 
     # No card leg to verify (wallet-only that never settled): settle straight away.
@@ -212,7 +264,13 @@ def settle_delivery_webhook(data):
         return False, f"no delivery charge for {reference}"
     if charge.status == DeliveryCharge.Status.PAID:
         return True, None
+    if charge.status == DeliveryCharge.Status.REFUNDED:
+        return True, None
     if charge.status == DeliveryCharge.Status.CANCELLED:
+        # Payment landed on a replaced link: return it to source rather than strand it.
+        if money(charge.card_amount) > 0 and data.get('status') == 'success':
+            _refund_stranded_delivery(charge, data, "payment link was replaced")
+            return True, f"delivery charge {reference} was cancelled; payment refunded"
         return False, f"delivery charge {reference} was cancelled"
 
     if money(charge.card_amount) > 0:
