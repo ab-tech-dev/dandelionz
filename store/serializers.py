@@ -250,6 +250,13 @@ class ProductSerializer(CloudinarySerializer):
     image = serializers.SerializerMethodField()
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
     rating = serializers.SerializerMethodField()
+    # Read-only everywhere: commission is the platform's cut and is set only through the
+    # admin commission endpoint, never by a vendor editing their own product.
+    commission_rate = serializers.DecimalField(
+        max_digits=4, decimal_places=3, read_only=True,
+        help_text="Platform commission override for this product as a decimal. "
+                  "Null = use the vendor/platform rate.",
+    )
 
     class Meta:
         model = Product
@@ -257,7 +264,7 @@ class ProductSerializer(CloudinarySerializer):
             'id', 'vendor', 'vendorName', 'name', 'slug', 'description', 'category',
             'category_name', 'price', 'discount', 'stock', 'brand', 'tags',
             'variants', 'variant_stock', 'image', 'images', 'videos', 'in_stock', 'approval_status', 'uploaded_date',
-            'created_at', 'updated_at', 'reviews', 'rating'
+            'created_at', 'updated_at', 'reviews', 'rating', 'commission_rate'
         ]
         ref_name = "StoreProductSerializer"
 
@@ -1087,7 +1094,8 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'slug', 'name', 'description', 'price', 'category', 'category_slug',
-            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status', 'rating'
+            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate',
+            'vendor', 'status', 'rating', 'commission_rate'
         ]
         read_only_fields = fields
 

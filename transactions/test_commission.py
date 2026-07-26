@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework.test import APIClient
 
 from store.models import Product
 from transactions import commission
@@ -152,3 +154,63 @@ class CommissionCreditAndReversalTests(TestCase):
             idempotency_key=f"commission-{order.order_id}-{item.id}",
         )
         self.assertEqual(credited.amount, Decimal('400.00'))  # the true charge, not 500
+
+
+class AdminSetCommissionEndpointTests(TestCase):
+    """The admin endpoints that set/clear per-vendor and per-product commission rates."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            email='admin@test.com', password='pass12345', role=User.Role.BUSINESS_ADMIN,
+        )
+        self.vendor_user = User.objects.create_user(
+            email='ev@test.com', password='pass12345', role='VENDOR',
+        )
+        self.vendor, _ = Vendor.objects.get_or_create(
+            user=self.vendor_user, defaults={'store_name': 'EV Store'},
+        )
+        self.product = Product.objects.create(
+            store=self.vendor, name='Thing', price=Decimal('1000.00'), stock=10,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+    def _vendor_url(self):
+        return reverse('admin-set-vendor-commission', kwargs={'vendor_uuid': self.vendor_user.uuid})
+
+    def _product_url(self):
+        return reverse('admin-set-product-commission', kwargs={'slug': self.product.slug})
+
+    def test_admin_sets_vendor_rate(self):
+        resp = self.client.patch(self._vendor_url(), {'commission_rate': '0.07'}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.vendor.refresh_from_db()
+        self.assertEqual(self.vendor.commission_rate, Decimal('0.070'))
+
+    def test_admin_clears_vendor_rate_with_null(self):
+        self.vendor.commission_rate = Decimal('0.05')
+        self.vendor.save()
+        resp = self.client.patch(self._vendor_url(), {'commission_rate': None}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.vendor.refresh_from_db()
+        self.assertIsNone(self.vendor.commission_rate)
+
+    def test_admin_sets_product_rate(self):
+        resp = self.client.patch(self._product_url(), {'commission_rate': '0.04'}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.commission_rate, Decimal('0.040'))
+        self.assertEqual(resp.data['data']['effective_rate_label'], '4%')
+
+    def test_rate_above_ceiling_is_rejected(self):
+        resp = self.client.patch(self._vendor_url(), {'commission_rate': '0.20'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.vendor.refresh_from_db()
+        self.assertIsNone(self.vendor.commission_rate)
+
+    def test_non_admin_is_forbidden(self):
+        self.client.force_authenticate(user=self.vendor_user)
+        resp = self.client.patch(self._vendor_url(), {'commission_rate': '0.05'}, format='json')
+        self.assertEqual(resp.status_code, 403)
+        self.vendor.refresh_from_db()
+        self.assertIsNone(self.vendor.commission_rate)

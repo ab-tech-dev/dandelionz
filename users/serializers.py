@@ -656,6 +656,24 @@ class AdminProductUpdateSerializer(serializers.Serializer):
         return value
 
 
+class CommissionRateSerializer(serializers.Serializer):
+    """
+    Set (or clear) a per-vendor or per-product commission rate. Admin-only; the 0.10 ceiling
+    is the platform maximum, so a rate can only ever lower a party's cut. null clears the
+    override so the next level up (vendor, then platform default) applies.
+    """
+    from decimal import Decimal as _Decimal
+
+    commission_rate = serializers.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        min_value=_Decimal("0"),
+        max_value=_Decimal("0.10"),
+        allow_null=True,
+        help_text="Commission as a decimal 0-0.10 (e.g. 0.08 = 8%). null clears the override.",
+    )
+
+
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 
@@ -879,6 +897,11 @@ class AdminVendorDetailSerializer(serializers.Serializer):
     is_verified_vendor = serializers.BooleanField()
     is_active = serializers.BooleanField(source='user.is_active')
     is_verified = serializers.BooleanField(source='user.is_verified')
+    commission_rate = serializers.DecimalField(
+        max_digits=4, decimal_places=3, allow_null=True, read_only=True,
+        help_text="Platform commission for this vendor as a decimal (e.g. 0.08 = 8%). "
+                  "Null = platform default.",
+    )
     created_at = serializers.DateTimeField(source='user.date_joined', read_only=True)
 
 class AdminVendorApprovalSerializer(serializers.Serializer):
