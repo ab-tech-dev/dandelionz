@@ -19,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from transactions import references, wallet_checkout
-from transactions.models import DeliveryCharge, WalletHold, money
+from transactions.models import DeliveryCharge, Order, WalletHold, money
 from transactions.paystack import Paystack
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,39 @@ EXPECTED_CURRENCY = "NGN"
 
 class DeliveryPaymentError(Exception):
     """A delivery-fee payment that cannot be honoured. The message is safe to show the user."""
+
+
+# ---------------------------------------------------------------------------
+# "Needs attention" queries - shared by the admin endpoint and the daily reminder
+# so the badge on screen and the email an admin gets can never describe different sets.
+# ---------------------------------------------------------------------------
+
+def unscheduled_orders():
+    """Paid orders the admin has not yet given a delivery window + fee. Admin-actionable."""
+    return Order.objects.filter(
+        status=Order.Status.PAID, expected_delivery_latest__isnull=True,
+    )
+
+
+def orders_awaiting_delivery_fee():
+    """Scheduled orders waiting on the customer to pay a positive delivery fee. Informational."""
+    return Order.objects.filter(
+        status=Order.Status.PAID, delivery_fee_paid=False,
+        delivery_fee__gt=0, expected_delivery_latest__isnull=False,
+    )
+
+
+def orders_ready_to_ship():
+    """
+    Paid, scheduled orders whose delivery fee is settled - ready for the admin to ship.
+
+    Requires a window so the three buckets stay disjoint: an order with no window is
+    "unscheduled", never "ready", even if its fee flag is somehow already set.
+    """
+    return Order.objects.filter(
+        status=Order.Status.PAID, delivery_fee_paid=True,
+        expected_delivery_latest__isnull=False,
+    )
 
 
 def _open_charge(order):

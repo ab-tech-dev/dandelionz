@@ -145,3 +145,77 @@ class AdminSetDeliveryTests(TestCase):
             'use_default': True, 'delivery_fee': '1000.00',
         }, format='json')
         self.assertIn(resp.status_code, (401, 403))
+
+
+@patch('authentication.views_admin.send_order_notification', lambda *a, **k: True)
+class DeliveryAttentionTests(TestCase):
+    """The admin needs-attention surface and the daily reminder task."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            email='aadmin@test.com', password='pass12345', role=User.Role.BUSINESS_ADMIN,
+        )
+        self.customer = User.objects.create_user(
+            email='acust@test.com', password='pass12345', role='CUSTOMER',
+        )
+        Customer.objects.get_or_create(user=self.customer)
+        self.client.force_authenticate(user=self.admin)
+
+    def _order(self, **kwargs):
+        defaults = dict(
+            customer=self.customer, total_price=Decimal('5000.00'),
+            status=Order.Status.PAID, payment_status='PAID',
+        )
+        defaults.update(kwargs)
+        return Order.objects.create(**defaults)
+
+    def _make_all_three(self):
+        # unscheduled: no window
+        self._order()
+        # awaiting_fee: window set, fee due, unpaid
+        self._order(
+            expected_delivery_latest=timezone.now() + timedelta(days=5),
+            expected_delivery_earliest=timezone.now() + timedelta(days=2),
+            delivery_fee=Decimal('1500.00'), delivery_fee_paid=False,
+        )
+        # ready_to_ship: scheduled and fee paid
+        self._order(
+            expected_delivery_latest=timezone.now() + timedelta(days=4),
+            expected_delivery_earliest=timezone.now() + timedelta(days=1),
+            delivery_fee_paid=True,
+        )
+
+    def test_attention_endpoint_counts_each_bucket(self):
+        self._make_all_three()
+        resp = self.client.get(reverse('admin-orders-delivery-attention'))
+        self.assertEqual(resp.status_code, 200)
+        counts = resp.data['data']['counts']
+        self.assertEqual(counts['unscheduled'], 1)
+        self.assertEqual(counts['awaiting_fee'], 1)
+        self.assertEqual(counts['ready_to_ship'], 1)
+
+    def test_attention_endpoint_forbidden_to_non_admin(self):
+        self.client.force_authenticate(user=self.customer)
+        resp = self.client.get(reverse('admin-orders-delivery-attention'))
+        self.assertIn(resp.status_code, (401, 403))
+
+    @patch('transactions.tasks.notify_admin')
+    def test_reminder_notifies_when_there_is_actionable_work(self, mock_notify):
+        from transactions.tasks import remind_admins_pending_deliveries
+        self._make_all_three()
+        result = remind_admins_pending_deliveries.apply().get()
+        self.assertTrue(result['notified'])
+        mock_notify.assert_called_once()
+
+    @patch('transactions.tasks.notify_admin')
+    def test_reminder_is_quiet_when_only_awaiting_customer_fee(self, mock_notify):
+        from transactions.tasks import remind_admins_pending_deliveries
+        # Only an awaiting-fee order exists: waiting on the customer, not the admin.
+        self._order(
+            expected_delivery_latest=timezone.now() + timedelta(days=5),
+            delivery_fee=Decimal('1500.00'), delivery_fee_paid=False,
+        )
+        result = remind_admins_pending_deliveries.apply().get()
+        self.assertFalse(result['notified'])
+        mock_notify.assert_not_called()

@@ -291,6 +291,13 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(minute='*/10'),  # Every 10 minutes
         'options': {'queue': 'maintenance'}
     },
+    'remind-admins-pending-deliveries': {
+        # Daily nudge so paid orders do not sit unscheduled (blocking the customer) or
+        # fee-paid-but-unshipped without anyone noticing.
+        'task': 'transactions.remind_admins_pending_deliveries',
+        'schedule': crontab(hour=8, minute=30),  # Daily at 8:30 AM
+        'options': {'queue': 'notifications'}
+    },
 }
 
 # Celery Queues

@@ -505,5 +505,55 @@ def release_expired_wallet_holds(self):
         return {"status": "error", "error": str(e)}
 
 
+@shared_task(
+    bind=True,
+    name="transactions.remind_admins_pending_deliveries"
+)
+def remind_admins_pending_deliveries(self):
+    """
+    Daily nudge to admins about orders needing delivery attention.
+
+    Two things need an admin: orders not yet scheduled (the customer is blocked until a
+    window + fee is set) and orders whose fee is paid and are ready to ship. Orders merely
+    waiting on the customer's own fee payment are counted for context but do not, on their
+    own, trigger a reminder. One summary goes to all admins rather than one per order, so a
+    busy day is a line, not a flood. Wired in CELERY_BEAT_SCHEDULE to run daily.
+    """
+    try:
+        from transactions import delivery_payment
+
+        unscheduled = delivery_payment.unscheduled_orders().count()
+        awaiting_fee = delivery_payment.orders_awaiting_delivery_fee().count()
+        ready = delivery_payment.orders_ready_to_ship().count()
+
+        if unscheduled == 0 and ready == 0:
+            logger.info("remind_admins_pending_deliveries: nothing admin-actionable")
+            return {"status": "success", "notified": False, "unscheduled": unscheduled,
+                    "awaiting_fee": awaiting_fee, "ready_to_ship": ready}
+
+        parts = []
+        if unscheduled:
+            parts.append(f"{unscheduled} order(s) awaiting a delivery window and fee")
+        if ready:
+            parts.append(f"{ready} order(s) with the fee paid and ready to ship")
+        if awaiting_fee:
+            parts.append(f"{awaiting_fee} awaiting the customer's fee payment")
+
+        notify_admin(
+            "Orders need delivery attention",
+            "; ".join(parts) + ". Open the delivery queue to act on them.",
+            action_url="/admin/orders?filter=delivery-attention",
+        )
+        logger.info(
+            f"remind_admins_pending_deliveries: notified admins "
+            f"({unscheduled} unscheduled, {ready} ready, {awaiting_fee} awaiting fee)"
+        )
+        return {"status": "success", "notified": True, "unscheduled": unscheduled,
+                "awaiting_fee": awaiting_fee, "ready_to_ship": ready}
+    except Exception as e:
+        logger.error(f"Error in remind_admins_pending_deliveries task: {str(e)}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
 # Keep old task name for backward compatibility
 notify_vendors_order_paid = notify_stakeholders_order_paid

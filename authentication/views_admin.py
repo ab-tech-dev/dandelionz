@@ -570,6 +570,39 @@ class AdminSetOrderDeliveryView(generics.GenericAPIView):
         )
 
 
+class AdminDeliveryAttentionView(generics.GenericAPIView):
+    """
+    Orders needing delivery attention, so the admin is nudged rather than left to notice.
+
+    Three buckets: unscheduled (no window/fee set yet - the customer is stuck until the admin
+    acts), awaiting_fee (scheduled, waiting on the customer to pay), and ready_to_ship (fee
+    settled - the admin can ship). Counts drive a dashboard badge; the lists drive a filter.
+    """
+    permission_classes = [IsAuthenticated, IsBusinessAdmin]
+
+    def get(self, request):
+        from transactions import delivery_payment
+
+        unscheduled = delivery_payment.unscheduled_orders().select_related('customer').order_by('ordered_at')
+        awaiting_fee = delivery_payment.orders_awaiting_delivery_fee().select_related('customer').order_by('ordered_at')
+        ready = delivery_payment.orders_ready_to_ship().select_related('customer').order_by('ordered_at')
+
+        def brief(qs, limit=50):
+            return AdminDashboardOrderListSerializer(qs[:limit], many=True).data
+
+        data = {
+            "counts": {
+                "unscheduled": unscheduled.count(),
+                "awaiting_fee": awaiting_fee.count(),
+                "ready_to_ship": ready.count(),
+            },
+            "unscheduled": brief(unscheduled),
+            "awaiting_fee": brief(awaiting_fee),
+            "ready_to_ship": brief(ready),
+        }
+        return Response(standardized_response(data=data))
+
+
 class AdminOrderCancelView(generics.GenericAPIView):
     """
     Cancel an order (admin-initiated).
