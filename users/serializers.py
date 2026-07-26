@@ -5,6 +5,7 @@ import uuid
 import io
 import cloudinary.uploader
 import logging
+from decimal import Decimal
 
 from .models import (
     Vendor,
@@ -662,13 +663,11 @@ class CommissionRateSerializer(serializers.Serializer):
     is the platform maximum, so a rate can only ever lower a party's cut. null clears the
     override so the next level up (vendor, then platform default) applies.
     """
-    from decimal import Decimal as _Decimal
-
     commission_rate = serializers.DecimalField(
         max_digits=4,
         decimal_places=3,
-        min_value=_Decimal("0"),
-        max_value=_Decimal("0.10"),
+        min_value=Decimal("0"),
+        max_value=Decimal("0.10"),
         allow_null=True,
         help_text="Commission as a decimal 0-0.10 (e.g. 0.08 = 8%). null clears the override.",
     )
