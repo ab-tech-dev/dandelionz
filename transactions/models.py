@@ -744,9 +744,15 @@ class InstallmentPlan(models.Model):
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     installment_amount = models.DecimalField(max_digits=10, decimal_places=2)
     number_of_installments = models.PositiveIntegerField()
+    # Running total actually paid across all charges - the source of truth for the balance.
+    # The per-installment rows below are an advisory schedule reconciled from this figure.
+    amount_paid = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     start_date = models.DateTimeField(auto_now_add=True)
     status = models.CharField(max_length=20, default='ACTIVE')  # ACTIVE, COMPLETED, CANCELLED
     vendors_credited = models.BooleanField(default=False)  # Track if vendors have been credited
+    # Set once the plan crosses the ship threshold and the order was made fulfillment-eligible,
+    # so we do it exactly once even as further payments land.
+    fulfillment_released = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -762,35 +768,170 @@ class InstallmentPlan(models.Model):
         """Get count of pending installments"""
         return self.installments.filter(status='PENDING').count()
 
+    @property
+    def balance_remaining(self):
+        """What is still owed on the plan."""
+        return money(self.total_amount - self.amount_paid)
+
+    @property
+    def paid_fraction(self):
+        """Share of the total paid so far, 0..1."""
+        if self.total_amount <= 0:
+            return Decimal('1')
+        return money(self.amount_paid) / money(self.total_amount)
+
+    def cumulative_due_by(self, when=None):
+        """
+        The total that should have been paid by `when` per the advisory schedule - the sum of
+        every scheduled installment whose due date has passed. This drives the minimum on/after
+        a due date; before any due date it is zero, so any positive amount is accepted.
+        """
+        when = when or timezone.now()
+        total = Decimal('0.00')
+        for row in self.installments.all():
+            if row.due_date <= when:
+                total += row.amount
+        return money(min(total, self.total_amount))
+
+    def minimum_due_now(self, when=None):
+        """
+        The least a payment may be right now: the scheduled-to-date amount not yet covered.
+        Zero before the first due date. Never more than the outstanding balance.
+        """
+        outstanding_scheduled = money(self.cumulative_due_by(when) - self.amount_paid)
+        return money(max(Decimal('0.00'), min(outstanding_scheduled, self.balance_remaining)))
+
+    def next_due_date(self):
+        """The due date of the earliest scheduled installment not yet covered by amount_paid."""
+        cumulative = Decimal('0.00')
+        for row in self.installments.order_by('payment_number'):
+            cumulative += row.amount
+            if self.amount_paid < cumulative:
+                return row.due_date
+        return None
+
+    def reconcile_schedule(self):
+        """
+        Mark advisory schedule rows PAID/OVERDUE/PENDING from amount_paid, so the schedule the
+        customer sees always matches the running balance regardless of how payments were sized.
+        A row is covered once amount_paid reaches its cumulative total.
+        """
+        now = timezone.now()
+        cumulative = Decimal('0.00')
+        for row in self.installments.order_by('payment_number'):
+            cumulative += row.amount
+            if self.amount_paid >= cumulative:
+                target = InstallmentPayment.PaymentStatus.PAID
+            elif row.due_date < now:
+                target = InstallmentPayment.PaymentStatus.OVERDUE
+            else:
+                target = InstallmentPayment.PaymentStatus.PENDING
+            if row.status != target:
+                row.status = target
+                if target == InstallmentPayment.PaymentStatus.PAID and not row.paid_at:
+                    row.verified = True
+                    row.paid_at = now
+                    row.payment_date = now
+                row.save(update_fields=['status', 'verified', 'paid_at', 'payment_date', 'updated_at'])
+
+    def apply_payment(self, amount):
+        """
+        Record `amount` against the plan: bump the running total, reconcile the schedule, release
+        the order for fulfillment once the ship threshold is crossed, and complete the plan when
+        the balance reaches zero. The single place amount_paid ever moves.
+        """
+        amount = money(amount)
+        if amount <= 0:
+            return
+        self.amount_paid = money(self.amount_paid + amount)
+        self.save(update_fields=['amount_paid', 'updated_at'])
+        self.reconcile_schedule()
+        self._maybe_release_for_fulfillment()
+        if self.amount_paid >= self.total_amount:
+            self.mark_as_completed()
+
+    def _maybe_release_for_fulfillment(self):
+        """
+        Once enough of the plan is paid, make the order fulfillment-eligible so it enters the
+        admin delivery flow - while installments keep running. Threshold is a settings constant.
+        """
+        if self.fulfillment_released:
+            return
+        from django.conf import settings
+        threshold = Decimal(str(getattr(settings, 'INSTALLMENT_SHIP_THRESHOLD', '0.50')))
+        if self.paid_fraction < threshold:
+            return
+        order = self.order
+        if order.status == Order.Status.PENDING:
+            order.status = Order.Status.PAID
+            order.payment_status = 'PAID'
+            order.save(update_fields=['status', 'payment_status', 'updated_at'])
+        self.fulfillment_released = True
+        self.save(update_fields=['fulfillment_released', 'updated_at'])
+
     def is_fully_paid(self):
-        """Check if all installments are paid"""
-        return self.get_paid_installments_count() == self.number_of_installments
+        """The plan is settled once the running total covers the whole amount."""
+        return money(self.amount_paid) >= money(self.total_amount)
 
     def mark_as_completed(self):
-        """Mark installment plan as completed (idempotent - safe to call multiple times)"""
-        if self.is_fully_paid():
-            # Ensure a Payment record exists for installment orders
-            payment, created = Payment.objects.get_or_create(
-                order=self.order,
-                defaults={
-                    "amount": self.total_amount,
-                    "gateway": "Paystack",
-                },
-            )
+        """
+        Complete the plan once fully paid. Idempotent.
 
-            # Keep payment amount in sync with total_amount
-            if payment.amount != self.total_amount:
-                payment.amount = self.total_amount
-                payment.save(update_fields=["amount"])
+        Deliberately does NOT call Payment.mark_as_successful: that path settles an order-level
+        wallet hold and force-sets status to PAID, which is wrong for installments (there is no
+        order hold) and would regress a ship-at-threshold order that is already SHIPPED/DELIVERED.
+        It settles the plan directly instead, advancing status only when it hasn't moved past PAID.
+        """
+        if not self.is_fully_paid() or self.status == 'COMPLETED':
+            return False
 
-            # Mark payment successful (will update order status and notify stakeholders)
-            if not payment.verified:
-                payment.mark_as_successful()
+        order = self.order
 
-            self.status = 'COMPLETED'
-            self.save(update_fields=['status', 'updated_at', 'vendors_credited'])
-            return True
-        return False
+        # Keep a Payment record on the order for its records, marked settled.
+        payment, _ = Payment.objects.get_or_create(
+            order=order, defaults={"amount": self.total_amount, "gateway": "Paystack"},
+        )
+        pfields = []
+        if payment.amount != self.total_amount:
+            payment.amount = self.total_amount
+            pfields.append('amount')
+        if not payment.verified:
+            payment.status = 'SUCCESS'
+            payment.verified = True
+            if not payment.paid_at:
+                payment.paid_at = timezone.now()
+            pfields += ['status', 'verified', 'paid_at']
+        if pfields:
+            payment.save(update_fields=list(set(pfields)))
+
+        # Fully paid now: flip payment_status, but only advance status to PAID if it has not
+        # already moved further (a ship-at-threshold order may be SHIPPED or DELIVERED already).
+        ofields = []
+        if order.payment_status != 'PAID':
+            order.payment_status = 'PAID'
+            ofields.append('payment_status')
+        if order.status == Order.Status.PENDING:
+            order.status = Order.Status.PAID
+            ofields.append('status')
+        if ofields:
+            order.save(update_fields=ofields + ['updated_at'])
+
+        self.status = 'COMPLETED'
+        self.save(update_fields=['status', 'updated_at'])
+
+        # Vendors are paid only now (100% collected) and only if the goods are delivered. If not
+        # yet delivered, the DELIVERED signal credits them then - the plan is COMPLETED, so its
+        # installment guard allows it.
+        if order.status == Order.Status.DELIVERED and not order.vendors_credited:
+            from transactions.views import credit_vendors_for_order
+            credit_vendors_for_order(order, source_prefix="Installment")
+            order.vendors_credited = True
+            order.save(update_fields=['vendors_credited'])
+
+        from .tasks import notify_stakeholders_order_paid
+        order_id = str(order.order_id)
+        transaction.on_commit(lambda: notify_stakeholders_order_paid.delay(order_id))
+        return True
 
     def __str__(self):
         return f"Installment Plan - {self.order.order_id} ({self.duration})"
@@ -850,6 +991,44 @@ class InstallmentPayment(models.Model):
             models.Index(fields=['status']),
             models.Index(fields=['reference']),
         ]
+
+
+class InstallmentCharge(models.Model):
+    """
+    One actual payment toward an installment plan, of an arbitrary amount - the running-balance
+    unit, distinct from the advisory InstallmentPayment schedule. Payable from the wallet (a
+    simple atomic debit, no hold) or by card via Paystack. On success it is applied to the
+    plan's amount_paid exactly once. Mirrors DeliveryCharge.
+    """
+    class Status(models.TextChoices):
+        PENDING = 'PENDING', 'Pending'
+        PAID = 'PAID', 'Paid'
+        CANCELLED = 'CANCELLED', 'Cancelled'
+        REFUNDED = 'REFUNDED', 'Refunded'
+
+    class Method(models.TextChoices):
+        WALLET = 'WALLET', 'Wallet'
+        CARD = 'CARD', 'Card'
+
+    plan = models.ForeignKey(InstallmentPlan, on_delete=models.CASCADE, related_name='charges')
+    reference = models.CharField(max_length=100, unique=True, db_index=True)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    method = models.CharField(max_length=10, choices=Method.choices, default=Method.CARD)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
+    gateway = models.CharField(max_length=50, default='Paystack')
+    paystack_transaction_id = models.CharField(max_length=100, blank=True, default='')
+    paystack_refund_id = models.CharField(max_length=100, blank=True, default='')
+    verified = models.BooleanField(default=False)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['plan', 'status'])]
+
+    def __str__(self):
+        return f"InstallmentCharge {self.reference} - {self.amount} ({self.status})"
 
 
 from django.contrib.auth import get_user_model

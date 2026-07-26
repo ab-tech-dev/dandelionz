@@ -540,6 +540,11 @@ DELIVERY_ETA_MAX_DAYS = int(os.getenv('DELIVERY_ETA_MAX_DAYS', '14'))
 REFUND_FLAG_MIN_ORDERS = int(os.getenv('REFUND_FLAG_MIN_ORDERS', '4'))
 REFUND_FLAG_MIN_REFUNDS = int(os.getenv('REFUND_FLAG_MIN_REFUNDS', '3'))
 REFUND_FLAG_RATE = Decimal(os.getenv('REFUND_FLAG_RATE', '0.5'))
+
+# Fraction of an installment plan's total that must be paid before the order becomes
+# fulfillment-eligible (enters the admin delivery flow). CDcare ships at half; kept as a
+# constant so it can be moved without a code change. Vendors are still paid only at 100%.
+INSTALLMENT_SHIP_THRESHOLD = Decimal(os.getenv('INSTALLMENT_SHIP_THRESHOLD', '0.50'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

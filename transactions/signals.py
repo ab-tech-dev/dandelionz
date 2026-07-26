@@ -73,8 +73,19 @@ def track_order_status_changes(sender, instance, update_fields, **kwargs):
 
                     logger.info(f"[signals.track_order_status_changes] Order {instance.order_id} status changed to {current_status}")
 
-                # Auto-credit vendors if order just moved to DELIVERED and not yet credited
-                if current_status == Order.Status.DELIVERED and not previous_credited and not instance.vendors_credited:
+                # Auto-credit vendors if order just moved to DELIVERED and not yet credited.
+                # Installment orders are the exception: they can ship at the ship threshold with
+                # the balance still outstanding, and vendors must never be paid from money not yet
+                # collected. Skip them here while the plan is incomplete - the plan credits the
+                # vendors itself when it reaches 100% (InstallmentPlan.mark_as_completed).
+                plan = getattr(instance, 'installment_plan', None)
+                installment_incomplete = plan is not None and plan.status != 'COMPLETED'
+                if (
+                    current_status == Order.Status.DELIVERED
+                    and not previous_credited
+                    and not instance.vendors_credited
+                    and not installment_incomplete
+                ):
                     from transactions.views import credit_vendors_for_order
                     try:
                         credit_vendors_for_order(instance, source_prefix="Delivery")

@@ -23,7 +23,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, InstallmentCharge, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
 from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
@@ -1255,13 +1255,20 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                         reference=f"{order.order_id}-installment-{i}"
                     )
 
-                # 7. Initialize payment for first installment
-                first_installment = installment_plan.installments.first()
+                # 7. Initialize the first payment as a charge against the plan's running balance.
+                # The advisory schedule rows above just describe the plan; the money moves through
+                # InstallmentCharge, applied to amount_paid on verify.
+                first_charge = InstallmentCharge.objects.create(
+                    plan=installment_plan,
+                    reference=references.new_installment_reference(installment_plan.id),
+                    amount=base_amount,
+                    method=InstallmentCharge.Method.CARD,
+                )
                 paystack = Paystack()
                 response = paystack.initialize_payment(
                     email=user.email,
-                    amount=first_installment.amount,
-                    reference=first_installment.reference,
+                    amount=first_charge.amount,
+                    reference=first_charge.reference,
                     callback_url=_get_paystack_callback_url(request)
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
@@ -1270,7 +1277,7 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                     order=order,
                     user=user,
                     cart_items=cart_items,
-                    payment_reference=first_installment.reference,
+                    payment_reference=first_charge.reference,
                     is_installment=True,
                     installment_plan=installment_plan,
                 )
@@ -1288,7 +1295,7 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                         "total_amount": float(order.total_price),
                         "number_of_installments": num_installments,
                         "installment_amount": float(base_amount),
-                        "first_installment_reference": first_installment.reference,
+                        "first_installment_reference": first_charge.reference,
                         "authorization_url": response["data"]["authorization_url"],
                         "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
@@ -1425,70 +1432,49 @@ Only works for PENDING installments that haven't been paid yet.""",
         },
     )
     def post(self, request):
-        # Validate request data using serializer
-        serializer = InitializeInstallmentPaymentSerializer(data=request.data)
-        if not serializer.is_valid():
+        """
+        Pay any amount toward an installment plan's running balance, from wallet or card.
+
+        Body: {plan_id, amount?, clear_balance?, use_wallet?}. Omit amount (or set clear_balance)
+        to pay off the whole balance. The service enforces the min (scheduled-to-date shortfall
+        once a due date has passed) and the max (the outstanding balance).
+        """
+        plan_id = request.data.get('plan_id')
+        if not plan_id:
             return Response(
-                standardized_response(success=False, error=serializer.errors),
+                standardized_response(success=False, error="plan_id is required"),
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        plan_id = serializer.validated_data['plan_id']
-        payment_number = serializer.validated_data['payment_number']
 
-        try:
-            installment = InstallmentPayment.objects.select_related(
-                'installment_plan__order'
-            ).get(
-                installment_plan_id=plan_id,
-                payment_number=payment_number
-            )
-        except InstallmentPayment.DoesNotExist:
+        plan = InstallmentPlan.objects.select_related('order').filter(id=plan_id).first()
+        if plan is None:
             return Response(
-                standardized_response(success=False, error="Installment not found"),
+                standardized_response(success=False, error="Installment plan not found"),
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        # Verify user owns this plan
-        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
+        if plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Check if already paid
-        if installment.status == InstallmentPayment.PaymentStatus.PAID:
-            return Response(
-                standardized_response(success=False, error="This installment is already paid"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Initialize Paystack payment
-        paystack = Paystack()
+        from transactions import installment_payment as inst_pay
         try:
-            response = paystack.initialize_payment(
-                email=request.user.email,
-                amount=installment.amount,
-                reference=installment.reference,
-                callback_url=_get_paystack_callback_url(request)
+            result = inst_pay.initialize_installment_payment(
+                plan,
+                callback_url=_get_paystack_callback_url(request),
+                amount=request.data.get('amount'),
+                clear_balance=bool(request.data.get('clear_balance', False)),
+                use_wallet=bool(request.data.get('use_wallet', False)),
             )
-        except Exception as e:
+        except (inst_pay.InstallmentPaymentError, wallet_checkout.WalletPaymentError) as exc:
             return Response(
-                standardized_response(success=False, error=f"Paystack error: {str(e)}"),
+                standardized_response(success=False, error=str(exc)),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         return Response(
-            standardized_response(
-                data={
-                    "authorization_url": response["data"]["authorization_url"],
-                    "amount": float(installment.amount),
-                    "reference": installment.reference,
-                    "payment_number": payment_number,
-                    "installment_plan_id": plan_id
-                },
-                message="Installment payment initialized successfully"
-            ),
+            standardized_response(data=result, message="Installment payment initialized"),
             status=status.HTTP_201_CREATED
         )
 
@@ -1524,65 +1510,40 @@ If all installments are paid, automatically credits vendor wallets.""",
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            installment = InstallmentPayment.objects.select_related(
-                "installment_plan__order"
-            ).get(reference=reference)
-        except InstallmentPayment.DoesNotExist:
+        charge = InstallmentCharge.objects.filter(reference=reference).select_related('plan__order').first()
+        if charge is None:
             return Response(
                 standardized_response(success=False, error="Payment not found"),
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
+        if charge.plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        paystack = Paystack()
-        resp = paystack.verify_payment(reference)
-        data = resp.get("data", {})
-
-        if data.get("status") != "success":
+        from transactions import installment_payment as inst_pay
+        try:
+            charge = inst_pay.verify_installment_payment(reference)
+        except inst_pay.InstallmentPaymentError as exc:
             return Response(
-                standardized_response(success=False, error="Payment not successful"),
+                standardized_response(success=False, error=str(exc)),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if data.get("currency") != EXPECTED_CURRENCY:
-            return Response(
-                standardized_response(success=False, error="Invalid currency"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        paid_amount = Decimal(data["amount"]) / Decimal(100)
-        if paid_amount != installment.amount:
-            return Response(
-                standardized_response(success=False, error="Amount mismatch"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        with transaction.atomic():
-            installment = InstallmentPayment.objects.select_for_update().get(pk=installment.pk)
-            
-            if installment.status == InstallmentPayment.PaymentStatus.PAID:
-                return Response(
-                    standardized_response(
-                        data=InstallmentPaymentSerializer(installment).data,
-                        message="Payment already verified"
-                    )
-                )
-
-            # Mark installment as paid
-            installment.mark_as_paid()
-            
-            # InstallmentPlan.mark_as_completed handles order/payment status and notifications
-
+        plan = charge.plan
         return Response(
             standardized_response(
-                data=InstallmentPaymentSerializer(installment).data,
-                message="Installment payment verified successfully"
+                data={
+                    "reference": charge.reference,
+                    "status": charge.status,
+                    "plan_id": plan.id,
+                    "order_id": str(plan.order.order_id),
+                    "amount_paid": float(plan.amount_paid),
+                    "balance_remaining": float(plan.balance_remaining),
+                    "plan_status": plan.status,
+                },
+                message="Installment payment verified"
             )
         )
 
@@ -1626,31 +1587,25 @@ No authentication required (webhook signature validation instead)""",
         if not reference:
             return Response({"status": "ok"})
 
-        with transaction.atomic():
-            try:
-                installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
-            except InstallmentPayment.DoesNotExist:
-                return Response({"status": "ok"})
+        # Re-verify against Paystack rather than trusting the webhook body, then settle the
+        # charge against the plan's running balance (the backstop for a closed payment page).
+        try:
+            verify = Paystack().verify_payment(reference)
+        except Exception as e:
+            logger.error(f"Installment webhook verify failed for {reference}: {e}", exc_info=True)
+            return Response({"status": "ok", "detail": "verification deferred"})
 
-            paystack = Paystack()
-            verify = paystack.verify_payment(reference)
-            pdata = verify.get("data", {})
+        pdata = verify.get("data", {})
+        if pdata.get("status") != "success":
+            return Response({"status": "ok", "detail": "payment not successful"})
+        if pdata.get("currency") and pdata.get("currency") != EXPECTED_CURRENCY:
+            return Response({"status": "ok", "detail": "unexpected currency"})
 
-            if pdata.get("status") != "success":
-                return Response({"status": "ok"})
-
-            if pdata.get("currency") != EXPECTED_CURRENCY:
-                return Response({"status": "ok"})
-
-            paid_amount = Decimal(pdata["amount"]) / Decimal(100)
-            if paid_amount != installment.amount:
-                return Response({"status": "ok"})
-
-            if installment.status != InstallmentPayment.PaymentStatus.PAID:
-                installment.mark_as_paid()
-                
-                # InstallmentPlan.mark_as_completed handles order/payment status and notifications
-
+        from transactions import installment_payment as inst_pay
+        handled, detail = inst_pay.settle_installment_webhook(pdata)
+        if not handled:
+            logger.warning(f"Installment charge {reference} not settled at webhook: {detail}")
+            return Response({"status": "ok", "detail": detail or "not settled"})
         return Response({"status": "ok"})
 
 
