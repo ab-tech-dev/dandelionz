@@ -131,6 +131,10 @@ class Customer(models.Model):
     shipping_latitude = models.FloatField(null=True, blank=True, help_text="Shipping address latitude for delivery calculations")
     shipping_longitude = models.FloatField(null=True, blank=True, help_text="Shipping address longitude for delivery calculations")
     loyalty_points = models.PositiveIntegerField(default=0)
+    # Refund-abuse review snooze: the refund count at which an admin last reviewed this
+    # customer and judged them fine. The flag re-raises only once their refund count exceeds
+    # this, so a reviewed customer does not keep re-appearing until their behaviour worsens.
+    refund_flag_reviewed_count = models.PositiveIntegerField(default=0)
 
     # Payout details, mirroring Vendor and AdminPayoutProfile.
     # Customers receive refunds into their wallet and need somewhere to withdraw them to.

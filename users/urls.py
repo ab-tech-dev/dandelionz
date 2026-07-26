@@ -19,6 +19,11 @@ from .views import (
     AdminSettlementsViewSet,
     PaymentUtilityViewSet,
 )
+from transactions.refund_flag_views import (
+    AdminFlaggedCustomersView,
+    AdminCustomerRefundProfileView,
+    AdminReviewRefundFlagView,
+)
 from authentication.views_admin import (
     AdminUserListView,
     AdminUserDetailView,
@@ -202,6 +207,9 @@ urlpatterns = [
     path("admin/vendors/<uuid:vendor_uuid>/commission/", admin_set_vendor_commission, name="admin-set-vendor-commission"),
     path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
     path("admin/customers/activate/", admin_activate_customer, name="admin-activate-customer"),
+    path("admin/customers/refund-flags/", AdminFlaggedCustomersView.as_view(), name="admin-customer-refund-flags"),
+    path("admin/customers/<uuid:uuid>/refund-profile/", AdminCustomerRefundProfileView.as_view(), name="admin-customer-refund-profile"),
+    path("admin/customers/<uuid:uuid>/refund-flag/review/", AdminReviewRefundFlagView.as_view(), name="admin-customer-refund-flag-review"),
     path("admin/customers/<uuid:customer_uuid>/activate/", admin_activate_customer, name="admin-activate-customer-by-uuid"),
     re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
 

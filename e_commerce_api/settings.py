@@ -532,6 +532,14 @@ PLATFORM_COMMISSION_RATE = Decimal(os.getenv('PLATFORM_COMMISSION_RATE', '0.10')
 # sets the window (and the fee) by hand - hence a sensible default rather than an empty field.
 DELIVERY_ETA_MIN_DAYS = int(os.getenv('DELIVERY_ETA_MIN_DAYS', '7'))
 DELIVERY_ETA_MAX_DAYS = int(os.getenv('DELIVERY_ETA_MAX_DAYS', '14'))
+
+# Refund-abuse flagging. A customer is flagged for admin *review* (never auto-blocked) when
+# they have enough order history AND a high enough share of it has been refunded. All three
+# gates must be met, so occasional refunds and brand-new accounts are never flagged; tune per
+# environment. Industry rule-of-thumb: serial returners sit around a 50%+ return rate.
+REFUND_FLAG_MIN_ORDERS = int(os.getenv('REFUND_FLAG_MIN_ORDERS', '4'))
+REFUND_FLAG_MIN_REFUNDS = int(os.getenv('REFUND_FLAG_MIN_REFUNDS', '3'))
+REFUND_FLAG_RATE = Decimal(os.getenv('REFUND_FLAG_RATE', '0.5'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 
