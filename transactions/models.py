@@ -387,6 +387,26 @@ class Order(models.Model):
     delivery_duration = models.CharField(max_length=50, blank=True, help_text="Estimated delivery time")
     delivery_distance_miles = models.FloatField(null=True, blank=True, help_text="Distance in miles")
 
+    # Expected-delivery window (a RANGE, not a fixed day). Set by the admin - who runs the
+    # logistics - together with the delivery fee, since there is no logistics API to compute
+    # either at checkout. Blank until the admin schedules the order.
+    expected_delivery_earliest = models.DateTimeField(null=True, blank=True, help_text="Earliest expected delivery date")
+    expected_delivery_latest = models.DateTimeField(null=True, blank=True, help_text="Latest expected delivery date")
+    # The delivery fee is collected as a SECOND payment, after the goods are paid. An order
+    # cannot ship until this is true (or the fee is zero). Set true when the fee is paid, or
+    # immediately by the admin when the fee is set to zero.
+    delivery_fee_paid = models.BooleanField(default=False, help_text="Whether the customer has paid the delivery fee")
+
+    def default_delivery_window(self):
+        """The default expected-delivery range (earliest, latest) from now, per settings."""
+        from django.conf import settings
+        from datetime import timedelta
+        now = timezone.now()
+        return (
+            now + timedelta(days=settings.DELIVERY_ETA_MIN_DAYS),
+            now + timedelta(days=settings.DELIVERY_ETA_MAX_DAYS),
+        )
+
     def calculate_total(self):
         items = self.order_items.all()
         subtotal = sum(item.item_subtotal for item in items)

@@ -518,6 +518,13 @@ MAX_DEPOSIT_NGN = Decimal(os.getenv('MAX_DEPOSIT_NGN', '500000'))
 # negotiated rate but never a higher one (see transactions/commission.py). Delivery fees are
 # not subject to this - the platform keeps 100% of the delivery fee, since it runs logistics.
 PLATFORM_COMMISSION_RATE = Decimal(os.getenv('PLATFORM_COMMISSION_RATE', '0.10'))
+
+# Default expected-delivery window, as a RANGE of days from when it is set (never a single
+# fixed day). Applied when an admin picks "use default"; the admin can override with an
+# explicit earliest/latest. There is no logistics API to compute a real ETA, so the admin
+# sets the window (and the fee) by hand - hence a sensible default rather than an empty field.
+DELIVERY_ETA_MIN_DAYS = int(os.getenv('DELIVERY_ETA_MIN_DAYS', '7'))
+DELIVERY_ETA_MAX_DAYS = int(os.getenv('DELIVERY_ETA_MAX_DAYS', '14'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

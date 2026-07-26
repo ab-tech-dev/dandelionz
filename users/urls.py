@@ -27,6 +27,7 @@ from authentication.views_admin import (
     AdminOrderListView,
     AdminOrderDetailView,
     AdminOrderCancelView,
+    AdminSetOrderDeliveryView,
     AdminProfileView,
     AdminPhotoUploadView,
     AdminPasswordVerifyView,
@@ -282,6 +283,7 @@ urlpatterns = [
     path("admin/orders/list/", AdminOrderListView.as_view(), name="admin-orders-list"),
     path("admin/orders/<uuid:order_id>/", AdminOrderDetailView.as_view(), name="admin-orders-detail"),
     path("admin/orders/<uuid:order_id>/cancel/", AdminOrderCancelView.as_view(), name="admin-orders-cancel"),
+    path("admin/orders/<uuid:order_id>/delivery/", AdminSetOrderDeliveryView.as_view(), name="admin-orders-set-delivery"),
     
     # Admin Profile Management
     path("admin/account/profile/", AdminProfileView.as_view(), name="admin-account-profile"),

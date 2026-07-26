@@ -268,18 +268,20 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_id', 'customer', 'customer_email', 'status', 'payment_status',
-            'total_price', 'delivery_fee', 'discount', 'subtotal', 'total_with_delivery',
-            'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at', 
+            'total_price', 'delivery_fee', 'delivery_fee_paid', 'discount', 'subtotal', 'total_with_delivery',
+            'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at',
+            'expected_delivery_earliest', 'expected_delivery_latest',
             'updated_at', 'is_paid', 'is_delivered',
             'order_items', 'shipping_address', 'payment', 'installment_plan', 'logs', 'timeline',
             'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng',
             'delivery_distance', 'delivery_duration', 'delivery_distance_miles'
         ]
         read_only_fields = [
-            'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered', 
-            'ordered_at', 'updated_at', 'order_items', 'payment', 'installment_plan', 'logs', 'shipped_at', 
-            'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration', 
-            'delivery_distance_miles'
+            'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered',
+            'ordered_at', 'updated_at', 'order_items', 'payment', 'installment_plan', 'logs', 'shipped_at',
+            'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration',
+            'delivery_distance_miles', 'delivery_fee_paid', 'expected_delivery_earliest',
+            'expected_delivery_latest'
         ]
 
     def get_logs(self, obj):
