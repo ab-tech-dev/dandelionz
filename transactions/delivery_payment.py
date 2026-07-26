@@ -31,6 +31,15 @@ class DeliveryPaymentError(Exception):
     """A delivery-fee payment that cannot be honoured. The message is safe to show the user."""
 
 
+class DeliverySettlementBlocked(Exception):
+    """
+    A delivery card leg arrived but the charge can no longer be settled - its wallet hold was
+    released (swept on expiry) while the card leg was still payable, so the card portion alone
+    does not cover the fee. Raised rather than swallowed, mirroring the order flow's
+    SettlementBlocked, so a partial payment can never be marked as a full one.
+    """
+
+
 # ---------------------------------------------------------------------------
 # "Needs attention" queries - shared by the admin endpoint and the daily reminder
 # so the badge on screen and the email an admin gets can never describe different sets.
@@ -77,6 +86,11 @@ def initialize_delivery_payment(order, callback_url, use_wallet=False, requested
 
     if str(order.payment_status).upper() != 'PAID':
         raise DeliveryPaymentError("The order's goods must be paid before its delivery fee.")
+
+    # Guard against a cancelled or already-shipped order: its goods payment_status may still
+    # read PAID, but collecting a delivery fee for it would take money for nothing.
+    if order.status != Order.Status.PAID:
+        raise DeliveryPaymentError("This order can no longer take a delivery payment.")
 
     fee = money(order.delivery_fee)
     if order.delivery_fee_paid or fee <= 0:
@@ -141,7 +155,13 @@ def initialize_delivery_payment(order, callback_url, use_wallet=False, requested
 
 
 def settle_delivery_charge(charge, paystack_transaction_id=''):
-    """Capture the wallet leg (if any), mark the charge paid, and let the order ship. Idempotent."""
+    """
+    Capture the wallet leg (if any), mark the charge paid, and let the order ship. Idempotent.
+
+    Raises DeliverySettlementBlocked if a wallet portion was expected but its hold is gone
+    (released by the expiry sweeper) - only the card leg was actually collected, so settling
+    would mark a partial payment as full. The caller returns the card leg to source.
+    """
     order = charge.order
     with transaction.atomic():
         charge = DeliveryCharge.objects.select_for_update().get(pk=charge.pk)
@@ -149,7 +169,14 @@ def settle_delivery_charge(charge, paystack_transaction_id=''):
             return charge
 
         if charge.wallet_amount > 0:
-            wallet_checkout.capture_for_order(order, purpose=WalletHold.Purpose.DELIVERY)
+            captured = wallet_checkout.capture_for_order(order, purpose=WalletHold.Purpose.DELIVERY)
+            if not captured:
+                # The hold was swept before the card leg landed; the wallet money is already
+                # back with the customer and the card portion alone is short of the fee.
+                raise DeliverySettlementBlocked(
+                    f"delivery hold for {charge.reference} was released; card leg does not "
+                    f"cover the fee"
+                )
 
         charge.status = DeliveryCharge.Status.PAID
         charge.verified = True
@@ -241,7 +268,16 @@ def verify_delivery_payment(reference):
 
     # No card leg to verify (wallet-only that never settled): settle straight away.
     if money(charge.card_amount) <= 0:
-        return settle_delivery_charge(charge)
+        try:
+            return settle_delivery_charge(charge)
+        except DeliverySettlementBlocked:
+            # Its wallet hold expired before this ran (only reachable after a crash mid-init).
+            charge.status = DeliveryCharge.Status.CANCELLED
+            charge.save(update_fields=['status', 'updated_at'])
+            raise DeliveryPaymentError(
+                "Your wallet payment expired before it was confirmed. "
+                "Please start the delivery payment again."
+            )
 
     data = Paystack().verify_payment(reference).get('data') or {}
     if data.get('status') != 'success':
@@ -253,7 +289,16 @@ def verify_delivery_payment(reference):
     if paid != money(charge.card_amount):
         raise DeliveryPaymentError("The amount paid does not match the delivery fee due.")
 
-    return settle_delivery_charge(charge, paystack_transaction_id=data.get('id') or '')
+    try:
+        return settle_delivery_charge(charge, paystack_transaction_id=data.get('id') or '')
+    except DeliverySettlementBlocked:
+        # The wallet leg expired before the card leg landed. Return the card money to source
+        # rather than mark a partial payment as full.
+        _refund_stranded_delivery(charge, data, "wallet portion expired before the card leg was paid")
+        raise DeliveryPaymentError(
+            "Your wallet portion expired before the card payment completed, so the card "
+            "payment has been refunded. Please start the delivery payment again."
+        )
 
 
 def settle_delivery_webhook(data):
@@ -278,5 +323,9 @@ def settle_delivery_webhook(data):
         if paid != money(charge.card_amount):
             return False, f"delivery charge amount mismatch for {reference}"
 
-    settle_delivery_charge(charge, paystack_transaction_id=data.get('id') or '')
+    try:
+        settle_delivery_charge(charge, paystack_transaction_id=data.get('id') or '')
+    except DeliverySettlementBlocked:
+        _refund_stranded_delivery(charge, data, "wallet portion expired before the card leg was paid")
+        return True, f"delivery {reference}: wallet leg expired, card leg refunded"
     return True, None

@@ -180,6 +180,37 @@ class DeliveryPaymentTests(TestCase):
         vresp = self.client.get(self._verify_url(), {'reference': reference})
         self.assertEqual(vresp.status_code, 404)
 
+    def test_split_whose_wallet_hold_expired_refunds_the_card_leg(self, Paystack):
+        """If the wallet hold is swept before the card leg is paid, settling on the card alone
+        would lose the wallet portion - so the card leg is refunded and the order stays unpaid."""
+        self._fund(spendable=Decimal('1000'))
+        self._mock_init(Paystack)
+        resp = self.client.post(self._init_url(), {'use_wallet': True}, format='json')
+        reference = resp.data['data']['reference']  # wallet 1000 held, card 1500
+
+        # The sweeper releases the delivery hold (customer waited past the TTL).
+        hold = WalletHold.objects.get(order=self.order, purpose=WalletHold.Purpose.DELIVERY)
+        hold.release("Checkout abandoned")
+        self.assertEqual(hold.status, WalletHold.Status.RELEASED)
+
+        # Customer now pays the card leg: settlement is blocked and the card money refunded.
+        self._mock_verify(Paystack, Decimal('1500'))
+        Paystack.return_value.refund.return_value = {'data': {'id': 8001}}
+        vresp = self.client.get(self._verify_url(), {'reference': reference})
+
+        self.assertEqual(vresp.status_code, 400)
+        Paystack.return_value.refund.assert_called_once()
+        self.order.refresh_from_db()
+        self.assertFalse(self.order.delivery_fee_paid)
+        charge = DeliveryCharge.objects.get(reference=reference)
+        self.assertEqual(charge.status, DeliveryCharge.Status.REFUNDED)
+
+    def test_cannot_pay_delivery_fee_on_a_cancelled_order(self, Paystack):
+        self.order.status = Order.Status.CANCELED
+        self.order.save(update_fields=['status'])
+        resp = self.client.post(self._init_url(), {}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
     def test_paying_a_replaced_link_refunds_to_source(self, Paystack):
         """Restart cancels the old charge; paying its stale link is refunded, not stranded."""
         self._mock_init(Paystack)
