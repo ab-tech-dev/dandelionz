@@ -1796,6 +1796,7 @@ Use the 'reference' or 'trxref' query parameter.""",
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        settlement_blocked = None
         with transaction.atomic():
             payment = Payment.objects.select_for_update().get(pk=payment.pk)
             if payment.verified:
@@ -1807,44 +1808,49 @@ Use the 'reference' or 'trxref' query parameter.""",
                 )
 
             # Capture Paystack's transaction id before settling, so a card leg that turns
-            # out to be unsettleable can still be refunded to source.
+            # out to be unsettleable can still be refunded to source. This commits with the
+            # block even on the blocked path below.
             _capture_paystack_transaction_id(payment, data)
 
             try:
                 payment.mark_as_successful()
             except wallet_checkout.SettlementBlocked as exc:
-                # The card leg was paid for an order that must not be settled - the wallet
-                # half has already gone back to the customer. Refund the card money to
-                # source automatically rather than fulfilling a half-paid order.
-                logger.error(
-                    f"Refusing to settle payment {reference}: {exc}", exc_info=True
-                )
-                refund = wallet_checkout.refund_stranded_card_leg(payment, reason=str(exc))
-                TransactionLog.objects.create(
-                    order=payment.order,
-                    action=TransactionLog.Action.PAYMENT_FAILED,
-                    level=TransactionLog.Level.ERROR,
-                    message=(
-                        f"Card payment {reference} received but not settled: {exc}. "
-                        f"Refund {getattr(refund, 'reference', 'not-created')} issued."
-                    ),
-                    related_user=payment.order.customer,
-                    amount=payment.amount,
-                    metadata={"reference": reference, "reason": str(exc)},
-                )
-                return Response(
-                    standardized_response(
-                        success=False,
-                        error=(
-                            "This order can no longer be completed and your card payment "
-                            "is being refunded. It will appear on your card in a few days."
-                        ),
-                    ),
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Note: Vendors are credited when order is DELIVERED, not when payment is received
-            # This maintains the available vs pending balance flow
+                # Recorded, not handled here: the refund issues money via Paystack, and that
+                # network call must not run inside this open transaction. Handled after the
+                # block commits, so the captured transaction id is durable first.
+                settlement_blocked = str(exc)
 
+        if settlement_blocked is not None:
+            # The card leg was paid for an order that must not be settled - the wallet half
+            # has already gone back to the customer. Refund the card money to source
+            # automatically rather than fulfilling a half-paid order.
+            logger.error(f"Refusing to settle payment {reference}: {settlement_blocked}")
+            refund = wallet_checkout.refund_stranded_card_leg(payment, reason=settlement_blocked)
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.PAYMENT_FAILED,
+                level=TransactionLog.Level.ERROR,
+                message=(
+                    f"Card payment {reference} received but not settled: {settlement_blocked}. "
+                    f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+                ),
+                related_user=payment.order.customer,
+                amount=payment.amount,
+                metadata={"reference": reference, "reason": settlement_blocked},
+            )
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=(
+                        "This order can no longer be completed and your card payment "
+                        "is being refunded. It will appear on your card in a few days."
+                    ),
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Vendors are credited when the order is DELIVERED, not when payment is received,
+        # which keeps the available vs pending balance flow intact.
         return Response(
             standardized_response(
                 data=PaymentSerializer(payment).data,
@@ -2081,6 +2087,7 @@ No authentication required (webhook signature validation instead)""",
             logger.info(f"Installment reference {reference} received on the order webhook")
             return Response({"status": "ok", "detail": "installment handled elsewhere"})
 
+        settlement_blocked = None
         with transaction.atomic():
             try:
                 payment = Payment.objects.select_for_update().get(reference=reference)
@@ -2153,43 +2160,47 @@ No authentication required (webhook signature validation instead)""",
 
             if not payment.verified:
                 # Capture Paystack's transaction id before settling, so an unsettleable
-                # card leg can still be refunded to source.
+                # card leg can still be refunded to source. Commits with the block.
                 _capture_paystack_transaction_id(payment, pdata)
 
                 try:
                     payment.mark_as_successful()
                 except wallet_checkout.SettlementBlocked as exc:
-                    # Same guard as the verify endpoint. Refund the card money to source
-                    # automatically; the failed-payments screen still records it.
-                    logger.error(f"Refusing to settle payment {reference}: {exc}")
-                    refund = wallet_checkout.refund_stranded_card_leg(payment, reason=str(exc))
+                    # Recorded, refunded after the block commits: the refund is a Paystack
+                    # network call and must not run inside this open transaction.
+                    settlement_blocked = str(exc)
+                else:
+                    # Log successful payment
                     TransactionLog.objects.create(
                         order=payment.order,
-                        action=TransactionLog.Action.PAYMENT_FAILED,
-                        level=TransactionLog.Level.ERROR,
-                        message=(
-                            f"Card payment {reference} received but not settled: {exc}. "
-                            f"Refund {getattr(refund, 'reference', 'not-created')} issued."
-                        ),
+                        action=TransactionLog.Action.PAYMENT_RECEIVED,
+                        level=TransactionLog.Level.SUCCESS,
+                        message=f"Payment {reference} received and verified (₦{paid_amount})",
                         related_user=payment.order.customer,
-                        amount=payment.amount,
-                        metadata={"reference": reference, "reason": str(exc)},
+                        amount=paid_amount,
+                        metadata={"reference": reference, "paystack_status": pdata.get('status')}
                     )
-                    return Response({"status": "ok", "detail": f"not settled: {exc}"})
+                    logger.info(f"Payment verified successfully: {reference} (Amount: ₦{paid_amount})")
+                    # Vendors are credited when the order is DELIVERED, not on payment.
 
-                # Log successful payment
-                TransactionLog.objects.create(
-                    order=payment.order,
-                    action=TransactionLog.Action.PAYMENT_RECEIVED,
-                    level=TransactionLog.Level.SUCCESS,
-                    message=f"Payment {reference} received and verified (₦{paid_amount})",
-                    related_user=payment.order.customer,
-                    amount=paid_amount,
-                    metadata={"reference": reference, "paystack_status": pdata.get('status')}
-                )
-                logger.info(f"Payment verified successfully: {reference} (Amount: ₦{paid_amount})")
-                # Note: Vendors are credited when order is DELIVERED, not when payment is received
-                # This maintains the available vs pending balance flow
+        if settlement_blocked is not None:
+            # Same guard as the verify endpoint. Refund the card money to source
+            # automatically; the failed-payments screen still records it.
+            logger.error(f"Refusing to settle payment {reference}: {settlement_blocked}")
+            refund = wallet_checkout.refund_stranded_card_leg(payment, reason=settlement_blocked)
+            TransactionLog.objects.create(
+                order=payment.order,
+                action=TransactionLog.Action.PAYMENT_FAILED,
+                level=TransactionLog.Level.ERROR,
+                message=(
+                    f"Card payment {reference} received but not settled: {settlement_blocked}. "
+                    f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+                ),
+                related_user=payment.order.customer,
+                amount=payment.amount,
+                metadata={"reference": reference, "reason": settlement_blocked},
+            )
+            return Response({"status": "ok", "detail": f"not settled: {settlement_blocked}"})
 
         return Response({"status": "ok"})
 

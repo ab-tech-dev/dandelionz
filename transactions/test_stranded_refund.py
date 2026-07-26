@@ -150,6 +150,37 @@ class StrandedCardLegRefundTests(TestCase):
         self.assertIn('Paystack down', refund.failure_reason)
 
     @patch('transactions.paystack.Paystack.refund')
+    def test_a_failed_refund_can_be_retried_but_a_live_one_cannot_double(
+        self, mock_refund, mock_init, _notify, _task
+    ):
+        """
+        The partial unique constraint allows a fresh attempt after a failure, but never two
+        live refunds for one charge.
+        """
+        order = self._paid_then_stranded(mock_init)
+
+        mock_refund.side_effect = Exception('down')
+        first = wallet_checkout.refund_stranded_card_leg(order.payment)
+        self.assertEqual(first.status, OrderPaymentRefund.Status.FAILED)
+
+        # Retry after the failure: a new row is created and succeeds.
+        mock_refund.side_effect = None
+        mock_refund.return_value = PAYSTACK_REFUND_OK
+        second = wallet_checkout.refund_stranded_card_leg(order.payment)
+        self.assertNotEqual(first.pk, second.pk)
+        self.assertEqual(second.status, OrderPaymentRefund.Status.PROCESSING)
+
+        # A further call with a live refund present short-circuits to it.
+        third = wallet_checkout.refund_stranded_card_leg(order.payment)
+        self.assertEqual(third.pk, second.pk)
+        self.assertEqual(
+            OrderPaymentRefund.objects.filter(
+                payment=order.payment
+            ).exclude(status=OrderPaymentRefund.Status.FAILED).count(),
+            1,
+        )
+
+    @patch('transactions.paystack.Paystack.refund')
     def test_refund_settles_on_the_refund_processed_webhook(
         self, mock_refund, mock_init, _notify, _task
     ):

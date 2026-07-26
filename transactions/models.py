@@ -1449,6 +1449,17 @@ class OrderPaymentRefund(models.Model):
             models.Index(fields=['status', '-created_at']),
             models.Index(fields=['reference']),
         ]
+        constraints = [
+            # At most one live refund per payment, enforced by the database rather than by
+            # caller discipline: a failed refund can be retried (a new row), but a card
+            # charge can never have two active refunds against it. This is what keeps the
+            # refund idempotent once the issuing code no longer holds the Payment row lock.
+            models.UniqueConstraint(
+                fields=['payment'],
+                condition=~models.Q(status='FAILED'),
+                name='one_active_order_payment_refund',
+            ),
+        ]
 
     def __str__(self):
         return f"Order payment refund {self.reference} - {self.amount} ({self.status})"

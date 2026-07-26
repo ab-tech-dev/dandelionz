@@ -225,13 +225,16 @@ def refund_stranded_card_leg(payment, reason="Order could not be completed"):
     for an order that will never ship, so it goes back to the card. This money never entered
     the wallet, so there is no ledger movement - the OrderPaymentRefund row is the record.
 
-    Idempotent: an existing non-FAILED refund for this payment short-circuits, so a webhook
-    retry or a verify/webhook race cannot refund the same charge twice.
+    Idempotent: an existing non-FAILED refund for this payment short-circuits, and a
+    partial unique constraint (one active refund per payment) makes that hold even against a
+    concurrent verify/webhook race, so the same charge cannot be refunded twice.
 
-    The record is created and committed before Paystack is called, so a row always exists to
-    retry against if the network call fails. Returns the OrderPaymentRefund, or None when
-    there is nothing to refund.
+    Must be called OUTSIDE any surrounding transaction. The record is committed in its own
+    transaction before Paystack is called, so a crash during the network call leaves a row
+    to retry against rather than issuing money with no trace. Returns the OrderPaymentRefund,
+    or None when there is nothing to refund.
     """
+    from django.db import IntegrityError
     from transactions import references
     from transactions.models import OrderPaymentRefund
     from transactions.paystack import Paystack
@@ -248,26 +251,36 @@ def refund_stranded_card_leg(payment, reason="Order could not be completed"):
         )
         return None
 
-    with transaction.atomic():
-        existing = (
+    def _active_refund():
+        return (
             OrderPaymentRefund.objects
-            .select_for_update()
             .filter(payment=payment)
             .exclude(status=OrderPaymentRefund.Status.FAILED)
             .first()
         )
+
+    existing = _active_refund()
+    if existing is not None:
+        return existing
+
+    try:
+        with transaction.atomic():
+            refund = OrderPaymentRefund.objects.create(
+                payment=payment,
+                order=payment.order,
+                reference=references.new_refund_reference(),
+                amount=amount,
+                reason=reason,
+            )
+    except IntegrityError:
+        # Another verify/webhook created the active refund between the check and the insert.
+        # The unique constraint is the real guard; fall back to whatever won the race.
+        existing = _active_refund()
         if existing is not None:
             return existing
+        raise
 
-        refund = OrderPaymentRefund.objects.create(
-            payment=payment,
-            order=payment.order,
-            reference=references.new_refund_reference(),
-            amount=amount,
-            reason=reason,
-        )
-
-    # Network call outside the row lock, once the record is durable.
+    # The row is committed. Now call Paystack, outside any transaction.
     try:
         resp = Paystack().refund(
             transaction=transaction_handle,
