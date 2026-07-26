@@ -62,6 +62,34 @@ def _capture_paystack_transaction_id(payment, paystack_data):
         payment.paystack_transaction_id = str(txn_id)
         payment.save(update_fields=["paystack_transaction_id"])
 
+
+def _refund_unsettleable_card_leg(payment, reference, reason):
+    """
+    Refund a card leg to source when its order cannot be settled, and record it.
+
+    Shared by the verify endpoint and the webhook so the two cannot drift. Must be called
+    outside any open transaction - refund_stranded_card_leg makes a Paystack network call.
+    Returns the OrderPaymentRefund (or None if there was nothing to refund).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.error(f"Refusing to settle payment {reference}: {reason}")
+    refund = wallet_checkout.refund_stranded_card_leg(payment, reason=reason)
+    TransactionLog.objects.create(
+        order=payment.order,
+        action=TransactionLog.Action.PAYMENT_FAILED,
+        level=TransactionLog.Level.ERROR,
+        message=(
+            f"Card payment {reference} received but not settled: {reason}. "
+            f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+        ),
+        related_user=payment.order.customer,
+        amount=payment.amount,
+        metadata={"reference": reference, "reason": reason},
+    )
+    return refund
+
 def _extract_coords(coords):
     if not isinstance(coords, (tuple, list)) or len(coords) != 2:
         return None
@@ -1822,22 +1850,9 @@ Use the 'reference' or 'trxref' query parameter.""",
 
         if settlement_blocked is not None:
             # The card leg was paid for an order that must not be settled - the wallet half
-            # has already gone back to the customer. Refund the card money to source
-            # automatically rather than fulfilling a half-paid order.
-            logger.error(f"Refusing to settle payment {reference}: {settlement_blocked}")
-            refund = wallet_checkout.refund_stranded_card_leg(payment, reason=settlement_blocked)
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.PAYMENT_FAILED,
-                level=TransactionLog.Level.ERROR,
-                message=(
-                    f"Card payment {reference} received but not settled: {settlement_blocked}. "
-                    f"Refund {getattr(refund, 'reference', 'not-created')} issued."
-                ),
-                related_user=payment.order.customer,
-                amount=payment.amount,
-                metadata={"reference": reference, "reason": settlement_blocked},
-            )
+            # has already gone back to the customer. Refund the card to source automatically
+            # rather than fulfilling a half-paid order. Runs outside the atomic block above.
+            _refund_unsettleable_card_leg(payment, reference, settlement_blocked)
             return Response(
                 standardized_response(
                     success=False,
@@ -2184,22 +2199,9 @@ No authentication required (webhook signature validation instead)""",
                     # Vendors are credited when the order is DELIVERED, not on payment.
 
         if settlement_blocked is not None:
-            # Same guard as the verify endpoint. Refund the card money to source
-            # automatically; the failed-payments screen still records it.
-            logger.error(f"Refusing to settle payment {reference}: {settlement_blocked}")
-            refund = wallet_checkout.refund_stranded_card_leg(payment, reason=settlement_blocked)
-            TransactionLog.objects.create(
-                order=payment.order,
-                action=TransactionLog.Action.PAYMENT_FAILED,
-                level=TransactionLog.Level.ERROR,
-                message=(
-                    f"Card payment {reference} received but not settled: {settlement_blocked}. "
-                    f"Refund {getattr(refund, 'reference', 'not-created')} issued."
-                ),
-                related_user=payment.order.customer,
-                amount=payment.amount,
-                metadata={"reference": reference, "reason": settlement_blocked},
-            )
+            # Same guard as the verify endpoint. Refund the card to source; the
+            # failed-payments screen still records it. Runs outside the atomic block above.
+            _refund_unsettleable_card_leg(payment, reference, settlement_blocked)
             return Response({"status": "ok", "detail": f"not settled: {settlement_blocked}"})
 
         return Response({"status": "ok"})

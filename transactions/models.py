@@ -596,10 +596,17 @@ class Payment(models.Model):
         self.order.status = Order.Status.PAID  # Mark order as paid when payment succeeds
         self.order.save(update_fields=['payment_status', 'status'])
         self.save(update_fields=['status', 'verified', 'paid_at'])
-        
-        # Trigger stakeholder notification task (async) - notifies vendors AND admins
+
+        # Trigger stakeholder notification task (async) - notifies vendors AND admins.
+        # Dispatched via on_commit so the worker cannot pick the order up before this
+        # transaction commits: the verify and webhook paths call this inside an atomic
+        # block, and a task that runs first would read the order as still unpaid (or not
+        # find the just-written rows). With no active transaction - the fully wallet-funded
+        # checkout settles after its own commit - on_commit runs the callback immediately,
+        # so that path is unchanged.
         from .tasks import notify_stakeholders_order_paid
-        notify_stakeholders_order_paid.delay(str(self.order.order_id))
+        order_id = str(self.order.order_id)
+        transaction.on_commit(lambda: notify_stakeholders_order_paid.delay(order_id))
 
     class Meta:
         constraints = [

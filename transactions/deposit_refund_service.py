@@ -263,4 +263,15 @@ def _settle_order_payment_refund(event, data, payment):
     if refund is None:
         return False, f"no unsettled refund for order payment {payment.reference}"
 
+    # We only ever issue a full refund of the card leg, so the webhook amount should equal
+    # what we recorded. Guard it like the deposit path does rather than settling blindly: a
+    # mismatch means a partial or out-of-band refund we did not create, which an operator
+    # should see rather than have it silently mark our record PROCESSED.
+    amount = data.get("amount")
+    if amount is not None and money(Decimal(str(amount)) / 100) != money(refund.amount):
+        return False, (
+            f"refund amount mismatch for order payment {payment.reference}: "
+            f"webhook {amount} vs recorded {refund.amount}"
+        )
+
     return _apply_refund_event(event, data, refund)

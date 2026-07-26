@@ -222,6 +222,33 @@ class StrandedCardLegRefundTests(TestCase):
         self.assertEqual(refund.status, OrderPaymentRefund.Status.FAILED)
 
     @patch('transactions.views.Paystack.verify_payment')
+    def test_the_stakeholder_notification_fires_only_after_the_commit(
+        self, mock_verify, mock_init, _notify, _task
+    ):
+        """
+        mark_as_successful enqueues the notification via transaction.on_commit, so on the
+        card path (which settles inside an atomic block) the task must not dispatch until
+        the transaction commits - otherwise the worker could read the order as still unpaid.
+        Proven with captureOnCommitCallbacks: the delay only fires when the block commits.
+        """
+        mock_init.return_value = {'data': {'authorization_url': 'https://paystack.test/a'}}
+        CartItem.objects.create(cart=self.cart, product=self.product, quantity=5)
+        response = self.client.post('/transactions/checkout/', {}, format='json')
+        order = Order.objects.get(order_id=response.data['data']['order_id'])
+        mock_verify.return_value = {
+            'data': {'status': 'success', 'currency': 'NGN', 'amount': 500000, 'id': 999}
+        }
+        _task.reset_mock()
+
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            self.client.post('/transactions/verify-payment/',
+                             {'reference': order.payment.reference}, format='json')
+
+        # The enqueue was deferred to commit (a callback was registered) and then ran.
+        self.assertEqual(len(callbacks), 1)
+        _task.assert_called_once_with(str(order.order_id))
+
+    @patch('transactions.views.Paystack.verify_payment')
     def test_a_normal_card_leg_records_the_transaction_id_when_it_settles(
         self, mock_verify, mock_init, _notify, _task
     ):
