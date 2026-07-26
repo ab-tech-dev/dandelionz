@@ -279,10 +279,14 @@ from .serializers import (
     CheckoutOptionsSerializer
 )
 from transactions import wallet_checkout
+from transactions.commission import (
+    resolve_commission_rate,
+    platform_commission_rate,
+    format_rate_label,
+)
 from .paystack import Paystack
 from authentication.core.response import standardized_response
 
-PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
 
 # ----------------------
@@ -407,8 +411,12 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         if not vendor or not getattr(vendor, "user", None):
             continue
 
-        vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
-        commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+        # Layered rate: product override -> vendor rate -> platform default (see
+        # transactions/commission.py). Resolved per item because different items on one
+        # order can belong to different vendors with different negotiated rates.
+        rate = resolve_commission_rate(item)
+        vendor_share = item.item_subtotal * (Decimal("1.00") - rate)
+        commission_amount = item.item_subtotal * rate
 
         vendor_user = vendor.user
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
@@ -444,7 +452,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
                 "item_id": item.id,
                 "item_name": item.product.name,
                 "item_subtotal": str(item.item_subtotal),
-                "commission_rate": "10%",
+                "commission_rate": format_rate_label(rate),
                 "commission_amount": str(commission_amount),
             }
         )
@@ -463,7 +471,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
                     "vendor_email": vendor_user.email,
                     "item_id": item.id,
                     "item_subtotal": str(item.item_subtotal),
-                    "commission_rate": "10%",
+                    "commission_rate": format_rate_label(rate),
                 }
             )
 
@@ -2327,8 +2335,22 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                         vendor = item.product.store
                         if vendor:
                             vendor_user = getattr(vendor, "user", None) or vendor
-                            # Commission is 10% of item subtotal
-                            commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+                            # Reverse exactly what was credited - read it back from the
+                            # append-only ledger rather than recomputing. The vendor's or
+                            # product's commission rate may have changed since this order was
+                            # credited, so item_subtotal * current_rate could differ from the
+                            # real charge. The credit was keyed commission-<order>-<item>.
+                            # Legacy orders credited before per-item ledger keys existed have
+                            # no such row; those fall back to the resolved rate, which matches
+                            # how they were charged.
+                            credited = LedgerEntry.objects.filter(
+                                idempotency_key=f"commission-{order.order_id}-{item.id}",
+                                entry_type=LedgerEntry.EntryType.COMMISSION,
+                            ).first()
+                            if credited is not None:
+                                commission_amount = credited.amount
+                            else:
+                                commission_amount = item.item_subtotal * resolve_commission_rate(item)
                             commission_reversal_amount += commission_amount
                             
                             # Debit platform wallet to reverse previously credited commission
@@ -3226,7 +3248,10 @@ Metrics include:
             
             for order in delivered_orders:
                 for item in order.order_items.all():
-                    commission = item.item_subtotal * PLATFORM_COMMISSION
+                    # Reflects current configured rates (product/vendor/platform). The exact
+                    # amount charged for each delivered order is recorded in the ledger; this
+                    # dashboard figure is a current-rate estimate over the period.
+                    commission = item.item_subtotal * resolve_commission_rate(item)
                     total_commission += commission
                     
                     vendor = item.product.store
@@ -3284,7 +3309,7 @@ Metrics include:
             pending_commission = Decimal("0.00")
             for order in pending_orders:
                 for item in order.order_items.all():
-                    pending_commission += item.item_subtotal * PLATFORM_COMMISSION
+                    pending_commission += item.item_subtotal * resolve_commission_rate(item)
             
             # Get top vendors by commission
             top_vendors = sorted(
@@ -3310,7 +3335,9 @@ Metrics include:
                 },
                 "by_vendor": commission_by_vendor_list,
                 "top_vendors": top_vendors,
-                "commission_rate": "10%",
+                # Rates are now layered per vendor/product; this is the platform default and
+                # ceiling. Individual vendors/products may be on a lower negotiated rate.
+                "commission_rate": format_rate_label(platform_commission_rate()),
             }
             
             logger.info(

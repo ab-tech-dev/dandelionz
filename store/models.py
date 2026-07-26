@@ -1,5 +1,7 @@
 from django.db import models
 from django.db.models import Sum, Count
+from django.core.validators import MinValueValidator, MaxValueValidator
+from decimal import Decimal
 from authentication.models import CustomUser
 from users.models import Vendor
 from django.utils.text import slugify
@@ -85,6 +87,18 @@ class Product(models.Model):
         help_text="Discount percentage (0-100). Final price = price * (1 - discount/100)"
     )
     stock = models.PositiveIntegerField(null=True, blank=True)
+    # Per-product commission override, as a decimal fraction (0.05 = 5%). Blank means "fall
+    # back to the vendor's rate, then the platform default". Capped at the 0.10 platform
+    # ceiling - an override can only lower the cut for this product, never raise it.
+    commission_rate = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("0.10"))],
+        help_text="Overrides the vendor's commission for this product, as a decimal "
+                  "(e.g. 0.05 = 5%). Blank = use vendor/platform rate. Maximum 0.10.",
+    )
     brand = models.CharField(max_length=255, null=True, blank=True)
     tags = models.TextField(null=True, blank=True, help_text="Comma-separated tags or JSON array")
     variants = models.JSONField(

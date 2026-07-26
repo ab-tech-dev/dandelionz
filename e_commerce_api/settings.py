@@ -512,6 +512,12 @@ MIN_WITHDRAWAL_NGN = Decimal(os.getenv('MIN_WITHDRAWAL_NGN', '500'))
 # the platform until they are spent or refunded to source.
 MIN_DEPOSIT_NGN = Decimal(os.getenv('MIN_DEPOSIT_NGN', '100'))
 MAX_DEPOSIT_NGN = Decimal(os.getenv('MAX_DEPOSIT_NGN', '500000'))
+
+# Platform commission on vendor sales, as a decimal fraction of an item's subtotal. This is
+# both the default rate and the hard ceiling: a vendor or product may be given a lower
+# negotiated rate but never a higher one (see transactions/commission.py). Delivery fees are
+# not subject to this - the platform keeps 100% of the delivery fee, since it runs logistics.
+PLATFORM_COMMISSION_RATE = Decimal(os.getenv('PLATFORM_COMMISSION_RATE', '0.10'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

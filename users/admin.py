@@ -5,8 +5,9 @@ from .notification_models import Notification
 
 @admin.register(Vendor)
 class VendorAdmin(admin.ModelAdmin):
-    list_display = ('store_name', 'user', 'is_verified_vendor', 'business_registration_number')
+    list_display = ('store_name', 'user', 'is_verified_vendor', 'commission_rate', 'business_registration_number')
     list_filter = ('is_verified_vendor',)
+    list_editable = ('commission_rate',)
     search_fields = ('user__email', 'user__full_name', 'store_name')
     readonly_fields = ('user',)
     fieldsets = (
@@ -18,6 +19,12 @@ class VendorAdmin(admin.ModelAdmin):
         }),
         ('Business Information', {
             'fields': ('business_registration_number', 'address')
+        }),
+        ('Commission', {
+            'fields': ('commission_rate',),
+            'description': 'Platform commission on this vendor\'s sales as a decimal '
+                           '(e.g. 0.08 = 8%). Blank uses the platform default. Maximum 0.10. '
+                           'A per-product override beats this.'
         }),
         ('Banking Details', {
             'fields': ('bank_name', 'account_number', 'recipient_code')

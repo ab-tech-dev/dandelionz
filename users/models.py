@@ -1,6 +1,8 @@
 from django.db import models
 from django.conf import settings
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
+from decimal import Decimal
 
 User = settings.AUTH_USER_MODEL
 
@@ -26,10 +28,23 @@ class Vendor(models.Model):
     recipient_code = models.CharField(max_length=100, blank=True)
     is_verified_vendor = models.BooleanField(default=False)
     vendor_status = models.CharField(
-        max_length=20, 
-        choices=VENDOR_STATUS_CHOICES, 
+        max_length=20,
+        choices=VENDOR_STATUS_CHOICES,
         default='pending',
         help_text="Approval status of the vendor account"
+    )
+    # Negotiated platform commission for this vendor's sales, as a decimal fraction
+    # (0.08 = 8%). Blank means "use the platform default" (see settings.PLATFORM_COMMISSION_RATE).
+    # Capped at 0.10: the platform ceiling is the maximum, so this can only ever lower a
+    # vendor's cut, never raise it. A per-product override on Product.commission_rate beats this.
+    commission_rate = models.DecimalField(
+        max_digits=4,
+        decimal_places=3,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(Decimal("0")), MaxValueValidator(Decimal("0.10"))],
+        help_text="Commission on this vendor's sales as a decimal (e.g. 0.08 = 8%). "
+                  "Blank = platform default. Maximum 0.10.",
     )
 
     def get_wallet_balance(self):
@@ -71,20 +86,21 @@ class Vendor(models.Model):
         These funds are NOT yet available for withdrawal.
         """
         from transactions.models import Order
+        from transactions.commission import vendor_share_rate
         from decimal import Decimal
-        
+
         # Get all paid but undelivered orders for this vendor
         pending_orders = Order.objects.filter(
             order_items__product__store=self,
             payment_status='PAID',
             status__in=['PAID', 'SHIPPED']  # Paid but not yet delivered
         ).distinct()
-        
+
         pending_amount = Decimal('0.00')
         for order in pending_orders:
             for item in order.order_items.filter(product__store=self):
-                # Calculate vendor's share (90% after 10% platform commission)
-                vendor_share = item.item_subtotal * Decimal('0.90')
+                # Vendor's share after the platform commission for this item (layered rate).
+                vendor_share = item.item_subtotal * vendor_share_rate(item)
                 pending_amount += vendor_share
         
         return pending_amount

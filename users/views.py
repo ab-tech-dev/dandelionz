@@ -5589,9 +5589,10 @@ class AdminWalletViewSet(AdminBaseViewSet):
             if existing_order_credit:
                 continue
 
+            from transactions.commission import resolve_commission_rate
             commission_amount = Decimal('0.00')
             for item in order.order_items.all():
-                commission_amount += item.item_subtotal * Decimal('0.10')
+                commission_amount += item.item_subtotal * resolve_commission_rate(item)
 
             # The source__icontains checks above and below stay as the primary guard: they
             # are the only thing that recognises credits made before the ledger existed,

@@ -60,7 +60,10 @@ class ProductAdmin(admin.ModelAdmin):
             'fields': ('name', 'slug', 'store', 'category', 'brand')
         }),
         ('Details', {
-            'fields': ('description', 'price', 'discount', 'stock')
+            'fields': ('description', 'price', 'discount', 'stock', 'commission_rate'),
+            'description': 'Commission rate overrides the vendor\'s rate for this product only, '
+                           'as a decimal (e.g. 0.05 = 5%). Blank uses the vendor/platform rate. '
+                           'Maximum 0.10.'
         }),
         ('Product Attributes', {
             'fields': ('tags', 'variants'),
