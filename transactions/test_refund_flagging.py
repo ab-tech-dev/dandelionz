@@ -95,10 +95,23 @@ class RefundFlagEndpointTests(TestCase):
         self.client.force_authenticate(user=self.admin)
 
     def test_flagged_list_contains_the_serial_refunder(self):
+        # A second customer below the rate threshold must NOT appear.
+        clean = User.objects.create_user(email='clean@test.com', password='pass12345', role='CUSTOMER')
+        Customer.objects.get_or_create(user=clean)
+        for _ in range(9):
+            _paid_order(clean)
+        _paid_order(clean, refunded=True)  # 10 paid, 1 refund -> rate 0.1
+
         resp = self.client.get(reverse('admin-customer-refund-flags'))
         self.assertEqual(resp.status_code, 200)
-        emails = [r['email'] for r in resp.data['data']['results']]
-        self.assertIn('flagged@test.com', emails)
+        rows = {r['email']: r for r in resp.data['data']['results']}
+        self.assertIn('flagged@test.com', rows)
+        self.assertNotIn('clean@test.com', rows)
+        # Guard the annotated counts directly, so dropping distinct=True (which would inflate
+        # them via the order->payment->refund join fan-out) fails here.
+        row = rows['flagged@test.com']
+        self.assertEqual(row['paid_orders'], 4)
+        self.assertEqual(row['refund_count'], 3)
 
     def test_profile_endpoint(self):
         url = reverse('admin-customer-refund-profile', kwargs={'uuid': self.customer.uuid})
