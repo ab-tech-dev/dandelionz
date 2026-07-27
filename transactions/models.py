@@ -812,23 +812,22 @@ class InstallmentPlan(models.Model):
 
     def reconcile_schedule(self):
         """
-        Mark advisory schedule rows PAID/OVERDUE/PENDING from amount_paid, so the schedule the
-        customer sees always matches the running balance regardless of how payments were sized.
-        A row is covered once amount_paid reaches its cumulative total.
+        Mark advisory schedule rows PAID from amount_paid, so the schedule the customer sees
+        matches the running balance regardless of how payments were sized. A row is covered once
+        amount_paid reaches its cumulative total.
+
+        Deliberately only sets PAID and never touches uncovered rows: the OVERDUE transition (and
+        the reminder it triggers) is owned by the check_installment_payments_due task, and the UI
+        derives "overdue" on the fly via is_overdue(). Flipping uncovered rows to OVERDUE here
+        would let a partial payment silence that reminder (the task only notifies PENDING rows).
         """
         now = timezone.now()
         cumulative = Decimal('0.00')
         for row in self.installments.order_by('payment_number'):
             cumulative += row.amount
-            if self.amount_paid >= cumulative:
-                target = InstallmentPayment.PaymentStatus.PAID
-            elif row.due_date < now:
-                target = InstallmentPayment.PaymentStatus.OVERDUE
-            else:
-                target = InstallmentPayment.PaymentStatus.PENDING
-            if row.status != target:
-                row.status = target
-                if target == InstallmentPayment.PaymentStatus.PAID and not row.paid_at:
+            if self.amount_paid >= cumulative and row.status != InstallmentPayment.PaymentStatus.PAID:
+                row.status = InstallmentPayment.PaymentStatus.PAID
+                if not row.paid_at:
                     row.verified = True
                     row.paid_at = now
                     row.payment_date = now
@@ -862,10 +861,20 @@ class InstallmentPlan(models.Model):
         if self.paid_fraction < threshold:
             return
         order = self.order
+        # Mark the order fulfillment-eligible so it satisfies the delivery flow's gates
+        # (payment_status == 'PAID' AND status == PAID). payment_status is set unconditionally
+        # - it is what the admin set-delivery and the customer fee-payment both check - while
+        # status only advances from PENDING, so a ship-at-threshold order that later moves to
+        # SHIPPED/DELIVERED is never regressed. Installments keep running toward 100%.
+        fields = []
+        if order.payment_status != 'PAID':
+            order.payment_status = 'PAID'
+            fields.append('payment_status')
         if order.status == Order.Status.PENDING:
             order.status = Order.Status.PAID
-            order.payment_status = 'PAID'
-            order.save(update_fields=['status', 'payment_status', 'updated_at'])
+            fields.append('status')
+        if fields:
+            order.save(update_fields=fields + ['updated_at'])
         self.fulfillment_released = True
         self.save(update_fields=['fulfillment_released', 'updated_at'])
 

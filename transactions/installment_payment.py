@@ -87,31 +87,40 @@ def initialize_installment_payment(plan, callback_url, amount=None, clear_balanc
     reference = references.new_installment_reference(plan.id)
 
     if use_wallet:
-        # Wallet must cover the whole amount - no split. Debit and settle atomically.
+        # Wallet must cover the whole amount - no split. Lock the PLAN first and re-read the
+        # balance under that lock, then the wallet: this serializes payments per plan, so two
+        # concurrent wallet payments (a double-submit) cannot both pass the balance check and
+        # overpay. The amount is clamped to the fresh balance for the same reason.
         with transaction.atomic():
+            plan_locked = InstallmentPlan.objects.select_for_update().select_related('order').get(pk=plan.id)
+            balance = plan_locked.balance_remaining
+            if balance <= 0:
+                raise InstallmentPaymentError("This plan is already fully paid.")
+            pay = min(charge_amount, balance)
+
             wallet, _ = Wallet.objects.select_for_update().get_or_create(user=user)
             available = money(wallet.spendable_balance + wallet.withdrawable_balance)
-            if available < charge_amount:
+            if available < pay:
                 raise InstallmentPaymentError(
                     f"Your wallet balance is ₦{available:,.2f}. Pay a smaller amount or use a card."
                 )
             charge = InstallmentCharge.objects.create(
-                plan=plan, reference=reference, amount=charge_amount,
+                plan=plan_locked, reference=reference, amount=pay,
                 method=InstallmentCharge.Method.WALLET,
             )
             wallet.debit(
-                charge_amount,
-                source=f"Installment payment {plan.order.order_id}",
+                pay,
+                source=f"Installment payment {plan_locked.order.order_id}",
                 entry_type=LedgerEntry.EntryType.ORDER_PAYMENT,
                 idempotency_key=f"installment-charge-{reference}",
-                order=plan.order,
+                order=plan_locked.order,
             )
             _settle_locked(charge)
         return {
             'requires_payment': False,
             'reference': reference,
             'method': 'WALLET',
-            'amount': float(charge_amount),
+            'amount': float(pay),
             'plan_id': plan.id,
             'order_id': str(plan.order.order_id),
         }
@@ -135,12 +144,17 @@ def initialize_installment_payment(plan, callback_url, amount=None, clear_balanc
 
 
 def _settle_locked(charge):
-    """Apply an already-locked charge to its plan. Caller holds the row lock / transaction."""
+    """
+    Mark an already-locked charge paid and apply it to its plan. Locks the plan row so
+    amount_paid moves under serialization - concurrent settles/payments for one plan can never
+    lose an update or push the total past the balance. Caller must be inside a transaction.
+    """
     charge.status = InstallmentCharge.Status.PAID
     charge.verified = True
     charge.paid_at = timezone.now()
     charge.save(update_fields=['status', 'verified', 'paid_at', 'paystack_transaction_id', 'updated_at'])
-    charge.plan.apply_payment(charge.amount)
+    plan = InstallmentPlan.objects.select_for_update().get(pk=charge.plan_id)
+    plan.apply_payment(charge.amount)
 
 
 def settle_installment_charge(charge, paystack_transaction_id=''):

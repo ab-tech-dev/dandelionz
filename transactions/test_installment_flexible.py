@@ -142,6 +142,50 @@ class FlexibleInstallmentTests(TestCase):
         plan.order.refresh_from_db()
         self.assertEqual(plan.order.status, Order.Status.PAID)
 
+    def test_paying_a_fully_paid_plan_is_rejected(self, Paystack):
+        plan = self._make_plan()
+        self._fund(Decimal('6000'))
+        self._init(plan, clear_balance=True, use_wallet=True)  # pays it all off from wallet
+        plan.refresh_from_db()
+        self.assertEqual(plan.status, 'COMPLETED')
+        # A further payment attempt must be refused (plan no longer ACTIVE / nothing owed).
+        resp = self._init(plan, amount='1000')
+        self.assertEqual(resp.status_code, 400)
+
+    @patch('authentication.views_admin.send_order_notification', lambda *a, **k: True)
+    @patch('transactions.delivery_payment.Paystack')
+    def test_installment_order_enters_the_delivery_flow_at_50_percent(self, DeliveryPaystack, Paystack):
+        """At 50% the order must satisfy the delivery flow's payment_status/status gates so the
+        admin can schedule delivery and the customer can pay the fee - while installments run."""
+        plan = self._make_plan()  # total 6000, threshold 0.5 -> 3000
+        self._mock_init(Paystack)
+        r = self._init(plan, amount='3000')
+        self._mock_verify(Paystack, Decimal('3000'))
+        self.client.get(reverse('verify-installment-payment'), {'reference': r.data['data']['reference']})
+
+        order = plan.order
+        order.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.PAID)
+        self.assertEqual(order.payment_status, 'PAID')
+
+        # Admin can now schedule delivery on the half-paid installment order.
+        admin = User.objects.create_user(email='dadm@test.com', password='pass12345', role=User.Role.BUSINESS_ADMIN)
+        self.client.force_authenticate(user=admin)
+        dresp = self.client.patch(
+            reverse('admin-orders-set-delivery', kwargs={'order_id': order.order_id}),
+            {'use_default': True, 'delivery_fee': '1500.00'}, format='json',
+        )
+        self.assertEqual(dresp.status_code, 200)
+
+        # And the customer can pay that delivery fee (the gate that worried us).
+        self.client.force_authenticate(user=self.customer)
+        DeliveryPaystack.return_value.initialize_payment.return_value = {'data': {'authorization_url': 'https://p.test/d'}}
+        presp = self.client.post(
+            reverse('init-delivery-payment', kwargs={'order_id': order.order_id}), {}, format='json',
+        )
+        self.assertEqual(presp.status_code, 200)
+        self.assertTrue(presp.data['data']['requires_payment'])
+
     def test_wallet_insufficient_is_rejected(self, Paystack):
         plan = self._make_plan()
         self._fund(Decimal('1000'))
