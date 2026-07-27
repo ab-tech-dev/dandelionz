@@ -268,18 +268,20 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'id', 'order_id', 'customer', 'customer_email', 'status', 'payment_status',
-            'total_price', 'delivery_fee', 'discount', 'subtotal', 'total_with_delivery',
-            'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at', 
+            'total_price', 'delivery_fee', 'delivery_fee_paid', 'discount', 'subtotal', 'total_with_delivery',
+            'tracking_number', 'ordered_at', 'shipped_at', 'delivered_at', 'returned_at',
+            'expected_delivery_earliest', 'expected_delivery_latest',
             'updated_at', 'is_paid', 'is_delivered',
             'order_items', 'shipping_address', 'payment', 'installment_plan', 'logs', 'timeline',
             'restaurant_lat', 'restaurant_lng', 'customer_lat', 'customer_lng',
             'delivery_distance', 'delivery_duration', 'delivery_distance_miles'
         ]
         read_only_fields = [
-            'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered', 
-            'ordered_at', 'updated_at', 'order_items', 'payment', 'installment_plan', 'logs', 'shipped_at', 
-            'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration', 
-            'delivery_distance_miles'
+            'id', 'order_id', 'subtotal', 'total_with_delivery', 'is_paid', 'is_delivered',
+            'ordered_at', 'updated_at', 'order_items', 'payment', 'installment_plan', 'logs', 'shipped_at',
+            'delivered_at', 'returned_at', 'timeline', 'delivery_distance', 'delivery_duration',
+            'delivery_distance_miles', 'delivery_fee_paid', 'expected_delivery_earliest',
+            'expected_delivery_latest'
         ]
 
     def get_logs(self, obj):
@@ -388,19 +390,51 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
     paid_installments_count = serializers.SerializerMethodField()
     pending_installments_count = serializers.SerializerMethodField()
     is_fully_paid = serializers.SerializerMethodField()
+    # Running-balance view (source of truth), for both the customer and the admin plan screen.
+    balance_remaining = serializers.SerializerMethodField()
+    paid_fraction = serializers.SerializerMethodField()
+    minimum_due_now = serializers.SerializerMethodField()
+    next_due_date = serializers.SerializerMethodField()
 
     class Meta:
         model = InstallmentPlan
         fields = [
             'id', 'order_id', 'duration', 'total_amount', 'installment_amount',
             'number_of_installments', 'paid_installments_count', 'pending_installments_count',
+            'amount_paid', 'balance_remaining', 'paid_fraction', 'minimum_due_now', 'next_due_date',
             'status', 'is_fully_paid', 'start_date', 'created_at', 'updated_at', 'installments'
         ]
         read_only_fields = [
             'id', 'order_id', 'installment_amount', 'number_of_installments',
+            'amount_paid', 'balance_remaining', 'paid_fraction', 'minimum_due_now', 'next_due_date',
             'start_date', 'created_at', 'updated_at', 'installments',
             'paid_installments_count', 'pending_installments_count', 'is_fully_paid'
         ]
+
+    def get_balance_remaining(self, obj):
+        try:
+            return float(obj.balance_remaining)
+        except Exception:
+            return None
+
+    def get_paid_fraction(self, obj):
+        try:
+            return float(round(obj.paid_fraction, 4))
+        except Exception:
+            return 0.0
+
+    def get_minimum_due_now(self, obj):
+        try:
+            return float(obj.minimum_due_now())
+        except Exception:
+            return None
+
+    def get_next_due_date(self, obj):
+        try:
+            due = obj.next_due_date()
+            return due.isoformat() if due else None
+        except Exception:
+            return None
 
     def get_paid_installments_count(self, obj):
         try:

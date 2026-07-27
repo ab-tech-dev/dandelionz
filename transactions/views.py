@@ -23,7 +23,7 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, InstallmentCharge, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
 from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
@@ -48,6 +48,47 @@ def _country_code_from_profile(profile):
 
 def _has_coords(lat, lng):
     return lat is not None and lng is not None
+
+def _capture_paystack_transaction_id(payment, paystack_data):
+    """
+    Record Paystack's transaction id on the payment from a verified response.
+
+    Kept for the refund-to-source path: if this card leg later cannot be settled, the
+    transaction id is what its refund is issued against. Written only when present and not
+    already stored, so a webhook/verify race does not overwrite it.
+    """
+    txn_id = (paystack_data or {}).get("id")
+    if txn_id and not payment.paystack_transaction_id:
+        payment.paystack_transaction_id = str(txn_id)
+        payment.save(update_fields=["paystack_transaction_id"])
+
+
+def _refund_unsettleable_card_leg(payment, reference, reason):
+    """
+    Refund a card leg to source when its order cannot be settled, and record it.
+
+    Shared by the verify endpoint and the webhook so the two cannot drift. Must be called
+    outside any open transaction - refund_stranded_card_leg makes a Paystack network call.
+    Returns the OrderPaymentRefund (or None if there was nothing to refund).
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    logger.error(f"Refusing to settle payment {reference}: {reason}")
+    refund = wallet_checkout.refund_stranded_card_leg(payment, reason=reason)
+    TransactionLog.objects.create(
+        order=payment.order,
+        action=TransactionLog.Action.PAYMENT_FAILED,
+        level=TransactionLog.Level.ERROR,
+        message=(
+            f"Card payment {reference} received but not settled: {reason}. "
+            f"Refund {getattr(refund, 'reference', 'not-created')} issued."
+        ),
+        related_user=payment.order.customer,
+        amount=payment.amount,
+        metadata={"reference": reference, "reason": reason},
+    )
+    return refund
 
 def _extract_coords(coords):
     if not isinstance(coords, (tuple, list)) or len(coords) != 2:
@@ -238,10 +279,14 @@ from .serializers import (
     CheckoutOptionsSerializer
 )
 from transactions import wallet_checkout
+from transactions.commission import (
+    resolve_commission_rate,
+    platform_commission_rate,
+    format_rate_label,
+)
 from .paystack import Paystack
 from authentication.core.response import standardized_response
 
-PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
 
 # ----------------------
@@ -366,8 +411,12 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         if not vendor or not getattr(vendor, "user", None):
             continue
 
-        vendor_share = item.item_subtotal * (Decimal("1.00") - PLATFORM_COMMISSION)
-        commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+        # Layered rate: product override -> vendor rate -> platform default (see
+        # transactions/commission.py). Resolved per item because different items on one
+        # order can belong to different vendors with different negotiated rates.
+        rate = resolve_commission_rate(item)
+        vendor_share = item.item_subtotal * (Decimal("1.00") - rate)
+        commission_amount = item.item_subtotal * rate
 
         vendor_user = vendor.user
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
@@ -403,7 +452,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
                 "item_id": item.id,
                 "item_name": item.product.name,
                 "item_subtotal": str(item.item_subtotal),
-                "commission_rate": "10%",
+                "commission_rate": format_rate_label(rate),
                 "commission_amount": str(commission_amount),
             }
         )
@@ -422,7 +471,7 @@ def credit_vendors_for_order(order, source_prefix="Order"):
                     "vendor_email": vendor_user.email,
                     "item_id": item.id,
                     "item_subtotal": str(item.item_subtotal),
-                    "commission_rate": "10%",
+                    "commission_rate": format_rate_label(rate),
                 }
             )
 
@@ -1206,13 +1255,20 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                         reference=f"{order.order_id}-installment-{i}"
                     )
 
-                # 7. Initialize payment for first installment
-                first_installment = installment_plan.installments.first()
+                # 7. Initialize the first payment as a charge against the plan's running balance.
+                # The advisory schedule rows above just describe the plan; the money moves through
+                # InstallmentCharge, applied to amount_paid on verify.
+                first_charge = InstallmentCharge.objects.create(
+                    plan=installment_plan,
+                    reference=references.new_installment_reference(installment_plan.id),
+                    amount=base_amount,
+                    method=InstallmentCharge.Method.CARD,
+                )
                 paystack = Paystack()
                 response = paystack.initialize_payment(
                     email=user.email,
-                    amount=first_installment.amount,
-                    reference=first_installment.reference,
+                    amount=first_charge.amount,
+                    reference=first_charge.reference,
                     callback_url=_get_paystack_callback_url(request)
                 )
                 logger.info(f"Paystack payment initialized for installment plan {installment_plan.id}")
@@ -1221,7 +1277,7 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                     order=order,
                     user=user,
                     cart_items=cart_items,
-                    payment_reference=first_installment.reference,
+                    payment_reference=first_charge.reference,
                     is_installment=True,
                     installment_plan=installment_plan,
                 )
@@ -1239,7 +1295,7 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
                         "total_amount": float(order.total_price),
                         "number_of_installments": num_installments,
                         "installment_amount": float(base_amount),
-                        "first_installment_reference": first_installment.reference,
+                        "first_installment_reference": first_charge.reference,
                         "authorization_url": response["data"]["authorization_url"],
                         "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
@@ -1376,70 +1432,49 @@ Only works for PENDING installments that haven't been paid yet.""",
         },
     )
     def post(self, request):
-        # Validate request data using serializer
-        serializer = InitializeInstallmentPaymentSerializer(data=request.data)
-        if not serializer.is_valid():
+        """
+        Pay any amount toward an installment plan's running balance, from wallet or card.
+
+        Body: {plan_id, amount?, clear_balance?, use_wallet?}. Omit amount (or set clear_balance)
+        to pay off the whole balance. The service enforces the min (scheduled-to-date shortfall
+        once a due date has passed) and the max (the outstanding balance).
+        """
+        plan_id = request.data.get('plan_id')
+        if not plan_id:
             return Response(
-                standardized_response(success=False, error=serializer.errors),
+                standardized_response(success=False, error="plan_id is required"),
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        plan_id = serializer.validated_data['plan_id']
-        payment_number = serializer.validated_data['payment_number']
 
-        try:
-            installment = InstallmentPayment.objects.select_related(
-                'installment_plan__order'
-            ).get(
-                installment_plan_id=plan_id,
-                payment_number=payment_number
-            )
-        except InstallmentPayment.DoesNotExist:
+        plan = InstallmentPlan.objects.select_related('order').filter(id=plan_id).first()
+        if plan is None:
             return Response(
-                standardized_response(success=False, error="Installment not found"),
+                standardized_response(success=False, error="Installment plan not found"),
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        # Verify user owns this plan
-        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
+        if plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Check if already paid
-        if installment.status == InstallmentPayment.PaymentStatus.PAID:
-            return Response(
-                standardized_response(success=False, error="This installment is already paid"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Initialize Paystack payment
-        paystack = Paystack()
+        from transactions import installment_payment as inst_pay
         try:
-            response = paystack.initialize_payment(
-                email=request.user.email,
-                amount=installment.amount,
-                reference=installment.reference,
-                callback_url=_get_paystack_callback_url(request)
+            result = inst_pay.initialize_installment_payment(
+                plan,
+                callback_url=_get_paystack_callback_url(request),
+                amount=request.data.get('amount'),
+                clear_balance=bool(request.data.get('clear_balance', False)),
+                use_wallet=bool(request.data.get('use_wallet', False)),
             )
-        except Exception as e:
+        except (inst_pay.InstallmentPaymentError, wallet_checkout.WalletPaymentError) as exc:
             return Response(
-                standardized_response(success=False, error=f"Paystack error: {str(e)}"),
+                standardized_response(success=False, error=str(exc)),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         return Response(
-            standardized_response(
-                data={
-                    "authorization_url": response["data"]["authorization_url"],
-                    "amount": float(installment.amount),
-                    "reference": installment.reference,
-                    "payment_number": payment_number,
-                    "installment_plan_id": plan_id
-                },
-                message="Installment payment initialized successfully"
-            ),
+            standardized_response(data=result, message="Installment payment initialized"),
             status=status.HTTP_201_CREATED
         )
 
@@ -1475,65 +1510,40 @@ If all installments are paid, automatically credits vendor wallets.""",
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        try:
-            installment = InstallmentPayment.objects.select_related(
-                "installment_plan__order"
-            ).get(reference=reference)
-        except InstallmentPayment.DoesNotExist:
+        charge = InstallmentCharge.objects.filter(reference=reference).select_related('plan__order').first()
+        if charge is None:
             return Response(
                 standardized_response(success=False, error="Payment not found"),
                 status=status.HTTP_404_NOT_FOUND
             )
-
-        if installment.installment_plan.order.customer != request.user and not _is_platform_admin(request.user):
+        if charge.plan.order.customer != request.user and not _is_platform_admin(request.user):
             return Response(
                 standardized_response(success=False, error="Forbidden"),
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        paystack = Paystack()
-        resp = paystack.verify_payment(reference)
-        data = resp.get("data", {})
-
-        if data.get("status") != "success":
+        from transactions import installment_payment as inst_pay
+        try:
+            charge = inst_pay.verify_installment_payment(reference)
+        except inst_pay.InstallmentPaymentError as exc:
             return Response(
-                standardized_response(success=False, error="Payment not successful"),
+                standardized_response(success=False, error=str(exc)),
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        if data.get("currency") != EXPECTED_CURRENCY:
-            return Response(
-                standardized_response(success=False, error="Invalid currency"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        paid_amount = Decimal(data["amount"]) / Decimal(100)
-        if paid_amount != installment.amount:
-            return Response(
-                standardized_response(success=False, error="Amount mismatch"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        with transaction.atomic():
-            installment = InstallmentPayment.objects.select_for_update().get(pk=installment.pk)
-            
-            if installment.status == InstallmentPayment.PaymentStatus.PAID:
-                return Response(
-                    standardized_response(
-                        data=InstallmentPaymentSerializer(installment).data,
-                        message="Payment already verified"
-                    )
-                )
-
-            # Mark installment as paid
-            installment.mark_as_paid()
-            
-            # InstallmentPlan.mark_as_completed handles order/payment status and notifications
-
+        plan = charge.plan
         return Response(
             standardized_response(
-                data=InstallmentPaymentSerializer(installment).data,
-                message="Installment payment verified successfully"
+                data={
+                    "reference": charge.reference,
+                    "status": charge.status,
+                    "plan_id": plan.id,
+                    "order_id": str(plan.order.order_id),
+                    "amount_paid": float(plan.amount_paid),
+                    "balance_remaining": float(plan.balance_remaining),
+                    "plan_status": plan.status,
+                },
+                message="Installment payment verified"
             )
         )
 
@@ -1577,31 +1587,25 @@ No authentication required (webhook signature validation instead)""",
         if not reference:
             return Response({"status": "ok"})
 
-        with transaction.atomic():
-            try:
-                installment = InstallmentPayment.objects.select_for_update().get(reference=reference)
-            except InstallmentPayment.DoesNotExist:
-                return Response({"status": "ok"})
+        # Re-verify against Paystack rather than trusting the webhook body, then settle the
+        # charge against the plan's running balance (the backstop for a closed payment page).
+        try:
+            verify = Paystack().verify_payment(reference)
+        except Exception as e:
+            logger.error(f"Installment webhook verify failed for {reference}: {e}", exc_info=True)
+            return Response({"status": "ok", "detail": "verification deferred"})
 
-            paystack = Paystack()
-            verify = paystack.verify_payment(reference)
-            pdata = verify.get("data", {})
+        pdata = verify.get("data", {})
+        if pdata.get("status") != "success":
+            return Response({"status": "ok", "detail": "payment not successful"})
+        if pdata.get("currency") and pdata.get("currency") != EXPECTED_CURRENCY:
+            return Response({"status": "ok", "detail": "unexpected currency"})
 
-            if pdata.get("status") != "success":
-                return Response({"status": "ok"})
-
-            if pdata.get("currency") != EXPECTED_CURRENCY:
-                return Response({"status": "ok"})
-
-            paid_amount = Decimal(pdata["amount"]) / Decimal(100)
-            if paid_amount != installment.amount:
-                return Response({"status": "ok"})
-
-            if installment.status != InstallmentPayment.PaymentStatus.PAID:
-                installment.mark_as_paid()
-                
-                # InstallmentPlan.mark_as_completed handles order/payment status and notifications
-
+        from transactions import installment_payment as inst_pay
+        handled, detail = inst_pay.settle_installment_webhook(pdata)
+        if not handled:
+            logger.warning(f"Installment charge {reference} not settled at webhook: {detail}")
+            return Response({"status": "ok", "detail": detail or "not settled"})
         return Response({"status": "ok"})
 
 
@@ -1783,6 +1787,7 @@ Use the 'reference' or 'trxref' query parameter.""",
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        settlement_blocked = None
         with transaction.atomic():
             payment = Payment.objects.select_for_update().get(pk=payment.pk)
             if payment.verified:
@@ -1793,38 +1798,37 @@ Use the 'reference' or 'trxref' query parameter.""",
                     )
                 )
 
+            # Capture Paystack's transaction id before settling, so a card leg that turns
+            # out to be unsettleable can still be refunded to source. This commits with the
+            # block even on the blocked path below.
+            _capture_paystack_transaction_id(payment, data)
+
             try:
                 payment.mark_as_successful()
             except wallet_checkout.SettlementBlocked as exc:
-                # The card leg was paid for an order that must not be settled - the wallet
-                # half has already gone back to the customer. Log loudly and refuse rather
-                # than fulfilling an order that is only half paid for; the card money needs
-                # an operator to return it.
-                logger.error(
-                    f"Refusing to settle payment {reference}: {exc}", exc_info=True
-                )
-                TransactionLog.objects.create(
-                    order=payment.order,
-                    action=TransactionLog.Action.PAYMENT_FAILED,
-                    level=TransactionLog.Level.ERROR,
-                    message=f"Card payment {reference} received but not settled: {exc}",
-                    related_user=payment.order.customer,
-                    amount=payment.amount,
-                    metadata={"reference": reference, "reason": str(exc)},
-                )
-                return Response(
-                    standardized_response(
-                        success=False,
-                        error=(
-                            "This order can no longer be completed and your card payment "
-                            "will be refunded. Please contact support."
-                        ),
-                    ),
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            # Note: Vendors are credited when order is DELIVERED, not when payment is received
-            # This maintains the available vs pending balance flow
+                # Recorded, not handled here: the refund issues money via Paystack, and that
+                # network call must not run inside this open transaction. Handled after the
+                # block commits, so the captured transaction id is durable first.
+                settlement_blocked = str(exc)
 
+        if settlement_blocked is not None:
+            # The card leg was paid for an order that must not be settled - the wallet half
+            # has already gone back to the customer. Refund the card to source automatically
+            # rather than fulfilling a half-paid order. Runs outside the atomic block above.
+            _refund_unsettleable_card_leg(payment, reference, settlement_blocked)
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=(
+                        "This order can no longer be completed and your card payment "
+                        "is being refunded. It will appear on your card in a few days."
+                    ),
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Vendors are credited when the order is DELIVERED, not when payment is received,
+        # which keeps the available vs pending balance flow intact.
         return Response(
             standardized_response(
                 data=PaymentSerializer(payment).data,
@@ -2061,6 +2065,28 @@ No authentication required (webhook signature validation instead)""",
             logger.info(f"Installment reference {reference} received on the order webhook")
             return Response({"status": "ok", "detail": "installment handled elsewhere"})
 
+        if kind == references.DELIVERY:
+            # An order's delivery-fee card leg. Re-verify against Paystack, then settle - the
+            # webhook is the backstop for a customer who closes the page before verify runs.
+            try:
+                verify = Paystack().verify_payment(reference)
+            except Exception as e:
+                logger.error(f"Delivery webhook verify failed for {reference}: {e}", exc_info=True)
+                return Response({"status": "ok", "detail": "verification deferred"})
+
+            data = verify.get("data", {})
+            if data.get("status") != "success":
+                return Response({"status": "ok", "detail": "delivery payment not successful"})
+
+            from transactions import delivery_payment
+            handled, detail = delivery_payment.settle_delivery_webhook(data)
+            if not handled:
+                logger.warning(f"Delivery charge {reference} not settled at webhook: {detail}")
+                return Response({"status": "ok", "detail": detail or "delivery not settled"})
+            logger.info(f"Delivery charge {reference} settled via webhook")
+            return Response({"status": "ok"})
+
+        settlement_blocked = None
         with transaction.atomic():
             try:
                 payment = Payment.objects.select_for_update().get(reference=reference)
@@ -2132,37 +2158,35 @@ No authentication required (webhook signature validation instead)""",
                 return Response({"status": "ok"})
 
             if not payment.verified:
+                # Capture Paystack's transaction id before settling, so an unsettleable
+                # card leg can still be refunded to source. Commits with the block.
+                _capture_paystack_transaction_id(payment, pdata)
+
                 try:
                     payment.mark_as_successful()
                 except wallet_checkout.SettlementBlocked as exc:
-                    # Same guard as the verify endpoint. Raising out of _dispatch would
-                    # mark the PaystackEvent FAILED, which is what puts it on the admin
-                    # failed-payments screen for someone to refund.
-                    logger.error(f"Refusing to settle payment {reference}: {exc}")
+                    # Recorded, refunded after the block commits: the refund is a Paystack
+                    # network call and must not run inside this open transaction.
+                    settlement_blocked = str(exc)
+                else:
+                    # Log successful payment
                     TransactionLog.objects.create(
                         order=payment.order,
-                        action=TransactionLog.Action.PAYMENT_FAILED,
-                        level=TransactionLog.Level.ERROR,
-                        message=f"Card payment {reference} received but not settled: {exc}",
+                        action=TransactionLog.Action.PAYMENT_RECEIVED,
+                        level=TransactionLog.Level.SUCCESS,
+                        message=f"Payment {reference} received and verified (₦{paid_amount})",
                         related_user=payment.order.customer,
-                        amount=payment.amount,
-                        metadata={"reference": reference, "reason": str(exc)},
+                        amount=paid_amount,
+                        metadata={"reference": reference, "paystack_status": pdata.get('status')}
                     )
-                    return Response({"status": "ok", "detail": f"not settled: {exc}"})
+                    logger.info(f"Payment verified successfully: {reference} (Amount: ₦{paid_amount})")
+                    # Vendors are credited when the order is DELIVERED, not on payment.
 
-                # Log successful payment
-                TransactionLog.objects.create(
-                    order=payment.order,
-                    action=TransactionLog.Action.PAYMENT_RECEIVED,
-                    level=TransactionLog.Level.SUCCESS,
-                    message=f"Payment {reference} received and verified (₦{paid_amount})",
-                    related_user=payment.order.customer,
-                    amount=paid_amount,
-                    metadata={"reference": reference, "paystack_status": pdata.get('status')}
-                )
-                logger.info(f"Payment verified successfully: {reference} (Amount: ₦{paid_amount})")
-                # Note: Vendors are credited when order is DELIVERED, not when payment is received
-                # This maintains the available vs pending balance flow
+        if settlement_blocked is not None:
+            # Same guard as the verify endpoint. Refund the card to source; the
+            # failed-payments screen still records it. Runs outside the atomic block above.
+            _refund_unsettleable_card_leg(payment, reference, settlement_blocked)
+            return Response({"status": "ok", "detail": f"not settled: {settlement_blocked}"})
 
         return Response({"status": "ok"})
 
@@ -2287,8 +2311,22 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                         vendor = item.product.store
                         if vendor:
                             vendor_user = getattr(vendor, "user", None) or vendor
-                            # Commission is 10% of item subtotal
-                            commission_amount = item.item_subtotal * PLATFORM_COMMISSION
+                            # Reverse exactly what was credited - read it back from the
+                            # append-only ledger rather than recomputing. The vendor's or
+                            # product's commission rate may have changed since this order was
+                            # credited, so item_subtotal * current_rate could differ from the
+                            # real charge. The credit was keyed commission-<order>-<item>.
+                            # Legacy orders credited before per-item ledger keys existed have
+                            # no such row; those fall back to the resolved rate, which matches
+                            # how they were charged.
+                            credited = LedgerEntry.objects.filter(
+                                idempotency_key=f"commission-{order.order_id}-{item.id}",
+                                entry_type=LedgerEntry.EntryType.COMMISSION,
+                            ).first()
+                            if credited is not None:
+                                commission_amount = credited.amount
+                            else:
+                                commission_amount = item.item_subtotal * resolve_commission_rate(item)
                             commission_reversal_amount += commission_amount
                             
                             # Debit platform wallet to reverse previously credited commission
@@ -3186,7 +3224,10 @@ Metrics include:
             
             for order in delivered_orders:
                 for item in order.order_items.all():
-                    commission = item.item_subtotal * PLATFORM_COMMISSION
+                    # Reflects current configured rates (product/vendor/platform). The exact
+                    # amount charged for each delivered order is recorded in the ledger; this
+                    # dashboard figure is a current-rate estimate over the period.
+                    commission = item.item_subtotal * resolve_commission_rate(item)
                     total_commission += commission
                     
                     vendor = item.product.store
@@ -3244,7 +3285,7 @@ Metrics include:
             pending_commission = Decimal("0.00")
             for order in pending_orders:
                 for item in order.order_items.all():
-                    pending_commission += item.item_subtotal * PLATFORM_COMMISSION
+                    pending_commission += item.item_subtotal * resolve_commission_rate(item)
             
             # Get top vendors by commission
             top_vendors = sorted(
@@ -3270,7 +3311,9 @@ Metrics include:
                 },
                 "by_vendor": commission_by_vendor_list,
                 "top_vendors": top_vendors,
-                "commission_rate": "10%",
+                # Rates are now layered per vendor/product; this is the platform default and
+                # ceiling. Individual vendors/products may be on a lower negotiated rate.
+                "commission_rate": format_rate_label(platform_commission_rate()),
             }
             
             logger.info(

@@ -28,6 +28,7 @@ from authentication.serializers_admin import (
     AdminDashboardOrderDetailSerializer,
     AdminDashboardOrderCancelSerializer,
     AdminDashboardOrderStatusUpdateSerializer,
+    AdminSetDeliverySerializer,
     AdminDashboardProfileSerializer,
     AdminDashboardProfileUpdateSerializer,
     AdminDashboardPasswordVerifySerializer,
@@ -36,7 +37,7 @@ from authentication.serializers_admin import (
     AdminDashboardAuditLogSerializer,
 )
 from transactions.models import Order, OrderStatusHistory
-from users.notification_helpers import send_user_notification
+from users.notification_helpers import send_user_notification, send_order_notification
 
 CustomUser = get_user_model()
 
@@ -407,6 +408,21 @@ class AdminOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
         serializer.is_valid(raise_exception=True)
 
         new_status = serializer.validated_data['status']
+
+        # An order cannot ship until its delivery fee is settled. delivery_fee_paid is set
+        # true when the customer pays the fee, or immediately by the admin when the fee is
+        # zero - so this also forces the admin to schedule delivery (set the window + fee)
+        # before shipping. A zero fee that was scheduled already has the flag set.
+        if new_status == Order.Status.SHIPPED and not order.delivery_fee_paid:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="The delivery fee has not been paid yet. Set the delivery window "
+                          "and fee, and have the customer pay it, before shipping."
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         if new_status != order.status:
             order.status = new_status
             order.save(update_fields=['status'])
@@ -461,6 +477,141 @@ class AdminOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
             standardized_response(message=f"Order {order_id} deleted successfully"),
             status=status.HTTP_200_OK
         )
+
+
+class AdminSetOrderDeliveryView(generics.GenericAPIView):
+    """
+    Set an order's expected-delivery window (a range) and its delivery fee in one action.
+
+    Dandelionz runs the logistics, so the admin - not a logistics API - decides when an order
+    will arrive and what it costs to deliver. Doing so "sends" the fee to the customer: a
+    positive fee becomes due as a second payment, and the order cannot ship until it is paid.
+    A zero fee is marked paid immediately. The customer is notified either way.
+    """
+    permission_classes = [IsAuthenticated, IsBusinessAdmin]
+    queryset = Order.objects.all()
+    lookup_field = 'order_id'
+    serializer_class = AdminSetDeliverySerializer
+
+    @swagger_auto_schema(
+        operation_id="admin_set_order_delivery",
+        operation_summary="Set Order Delivery Window & Fee",
+        operation_description="Set the expected-delivery date range and the delivery fee. "
+                              "Only allowed for PAID orders.",
+        tags=["Order Management"],
+        responses={
+            200: openapi.Response("Delivery window and fee set", AdminDashboardOrderDetailSerializer()),
+            400: openapi.Response("Invalid request or order not paid"),
+            404: openapi.Response("Order not found"),
+            403: openapi.Response("Admin access only"),
+        },
+        security=[{"Bearer": []}],
+    )
+    def patch(self, request, *args, **kwargs):
+        order = self.get_object()
+
+        # Must be paid for (goods) and not yet shipped: scheduling a shipped/delivered order is
+        # meaningless and could reset delivery_fee_paid on an order already on its way.
+        if str(order.payment_status).upper() != "PAID" or order.status != Order.Status.PAID:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Only paid orders that have not yet shipped can be scheduled for delivery",
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        if data.get('use_default'):
+            earliest, latest = order.default_delivery_window()
+        else:
+            earliest = data['expected_delivery_earliest']
+            latest = data['expected_delivery_latest']
+
+        fee = data['delivery_fee']
+        fee_changed = fee != order.delivery_fee
+        order.expected_delivery_earliest = earliest
+        order.expected_delivery_latest = latest
+        order.delivery_fee = fee
+        # A zero fee needs no second payment - it can ship straight away. A new or changed
+        # positive fee (re)opens the charge and must be paid before shipping. But re-saving an
+        # UNCHANGED positive fee (e.g. the admin only nudged the window) must NOT un-pay a fee
+        # the customer already settled, or the order would silently become unshippable again.
+        if fee <= 0:
+            order.delivery_fee_paid = True
+        elif fee_changed:
+            order.delivery_fee_paid = False
+        order.save(update_fields=[
+            'expected_delivery_earliest', 'expected_delivery_latest',
+            'delivery_fee', 'delivery_fee_paid', 'updated_at',
+        ])
+
+        OrderStatusHistory.objects.create(
+            order=order,
+            status=order.status,
+            changed_by='ADMIN',
+            admin=request.user,
+            reason="Delivery window and fee set by admin",
+        )
+
+        try:
+            window = f"{earliest:%d %b} and {latest:%d %b}"
+            if fee > 0:
+                title = "Delivery fee ready to pay"
+                message = (
+                    f"Your order is scheduled to arrive between {window}. A delivery fee of "
+                    f"NGN {fee:,.2f} is now due - pay it to start shipping."
+                )
+            else:
+                title = "Delivery scheduled"
+                message = f"Your order is scheduled to arrive between {window}. No delivery fee applies."
+            send_order_notification(order.customer, title, message, order_id=str(order.order_id))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to send delivery notification for order %s", order.order_id
+            )
+
+        response_serializer = AdminDashboardOrderDetailSerializer(order)
+        return Response(
+            standardized_response(data=response_serializer.data, message="Delivery window and fee set")
+        )
+
+
+class AdminDeliveryAttentionView(generics.GenericAPIView):
+    """
+    Orders needing delivery attention, so the admin is nudged rather than left to notice.
+
+    Three buckets: unscheduled (no window/fee set yet - the customer is stuck until the admin
+    acts), awaiting_fee (scheduled, waiting on the customer to pay), and ready_to_ship (fee
+    settled - the admin can ship). Counts drive a dashboard badge; the lists drive a filter.
+    """
+    permission_classes = [IsAuthenticated, IsBusinessAdmin]
+
+    def get(self, request):
+        from transactions import delivery_payment
+
+        unscheduled = delivery_payment.unscheduled_orders().select_related('customer').order_by('ordered_at')
+        awaiting_fee = delivery_payment.orders_awaiting_delivery_fee().select_related('customer').order_by('ordered_at')
+        ready = delivery_payment.orders_ready_to_ship().select_related('customer').order_by('ordered_at')
+
+        def brief(qs, limit=50):
+            return AdminDashboardOrderListSerializer(qs[:limit], many=True).data
+
+        data = {
+            "counts": {
+                "unscheduled": unscheduled.count(),
+                "awaiting_fee": awaiting_fee.count(),
+                "ready_to_ship": ready.count(),
+            },
+            "unscheduled": brief(unscheduled),
+            "awaiting_fee": brief(awaiting_fee),
+            "ready_to_ship": brief(ready),
+        }
+        return Response(standardized_response(data=data))
 
 
 class AdminOrderCancelView(generics.GenericAPIView):

@@ -19,6 +19,7 @@ DEPOSIT = 'DEPOSIT'
 INSTALLMENT = 'INSTALLMENT'
 TRANSFER = 'TRANSFER'
 REFUND = 'REFUND'
+DELIVERY = 'DELIVERY'
 
 PREFIXES = {
     'ORD-': ORDER,
@@ -27,6 +28,7 @@ PREFIXES = {
     'WTH-': TRANSFER,
     'ADM-': TRANSFER,
     'RFD-': REFUND,
+    'DLV-': DELIVERY,
 }
 
 
@@ -56,6 +58,11 @@ def new_order_reference(order_id):
 
 def new_installment_reference(plan_id):
     return f"INS-{plan_id}-{uuid.uuid4().hex[:10]}"
+
+
+def new_delivery_reference(order_id):
+    """The card leg of an order's delivery-fee payment. Embeds the order id like order refs."""
+    return f"DLV-{order_id}-{uuid.uuid4().hex[:10]}"
 
 
 def new_refund_reference():

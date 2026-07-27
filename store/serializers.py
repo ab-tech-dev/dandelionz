@@ -250,6 +250,10 @@ class ProductSerializer(CloudinarySerializer):
     image = serializers.SerializerMethodField()
     uploaded_date = serializers.DateTimeField(source='created_at', read_only=True)
     rating = serializers.SerializerMethodField()
+    # NB: commission_rate is deliberately NOT exposed here. This serializer feeds the public
+    # AllowAny product list/detail (store/views.py ProductListView), so surfacing it would
+    # leak the platform's per-product margin to customers and competing vendors. It is shown
+    # only on the admin serializers (AdminVendorDetailSerializer, VendorAdminProductDetailSerializer).
 
     class Meta:
         model = Product
@@ -1087,7 +1091,8 @@ class VendorAdminProductDetailSerializer(CloudinarySerializer):
         model = Product
         fields = [
             'id', 'slug', 'name', 'description', 'price', 'category', 'category_slug',
-            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate', 'vendor', 'status', 'rating'
+            'category_name', 'stock', 'in_stock', 'image', 'images', 'videos', 'uploadDate',
+            'vendor', 'status', 'rating', 'commission_rate'
         ]
         read_only_fields = fields
 

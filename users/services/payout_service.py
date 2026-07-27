@@ -269,7 +269,7 @@ class PayoutService:
         Ensure vendor withdrawal amount is backed by verified, delivered orders.
         """
         from transactions.models import Order, OrderItem
-        from django.db.models import F, Sum, DecimalField, ExpressionWrapper
+        from transactions.commission import vendor_share_rate
 
         # Block if any delivered, credited orders are tied to unverified payments
         unverified_orders = Order.objects.filter(
@@ -281,19 +281,20 @@ class PayoutService:
         if unverified_orders.exists():
             return False, "Withdrawal blocked: some delivered orders have unverified payments."
 
-        subtotal_expr = ExpressionWrapper(
-            F('price_at_purchase') * F('quantity'),
-            output_field=DecimalField(max_digits=12, decimal_places=2)
-        )
-        subtotal = OrderItem.objects.filter(
+        # Sum the vendor's share per item, not a flat 90% of the aggregate: commission is now
+        # layered per product/vendor, so different items can carry different rates and no single
+        # multiplier is correct. Iterated rather than aggregated in SQL because the rate lives on
+        # the product/vendor rows, not in the query; withdrawal validation is not a hot path.
+        verified_items = OrderItem.objects.filter(
             product__store=vendor,
             order__status=Order.Status.DELIVERED,
             order__vendors_credited=True,
             order__payment__verified=True,
-        ).aggregate(total=Sum(subtotal_expr))['total'] or Decimal("0")
+        ).select_related('product', 'product__store')
 
-        # Vendor share is 90% after 10% commission
-        verified_earnings = subtotal * Decimal("0.90")
+        verified_earnings = Decimal("0")
+        for item in verified_items:
+            verified_earnings += item.item_subtotal * vendor_share_rate(item)
 
         if Decimal(str(amount)) > verified_earnings:
             return False, "Withdrawal amount exceeds verified earnings."

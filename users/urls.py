@@ -19,6 +19,11 @@ from .views import (
     AdminSettlementsViewSet,
     PaymentUtilityViewSet,
 )
+from transactions.refund_flag_views import (
+    AdminFlaggedCustomersView,
+    AdminCustomerRefundProfileView,
+    AdminReviewRefundFlagView,
+)
 from authentication.views_admin import (
     AdminUserListView,
     AdminUserDetailView,
@@ -27,6 +32,8 @@ from authentication.views_admin import (
     AdminOrderListView,
     AdminOrderDetailView,
     AdminOrderCancelView,
+    AdminSetOrderDeliveryView,
+    AdminDeliveryAttentionView,
     AdminProfileView,
     AdminPhotoUploadView,
     AdminPasswordVerifyView,
@@ -70,9 +77,11 @@ admin_approve_vendor = AdminVendorViewSet.as_view({"post": "approve_vendor", "pu
 admin_suspend_user = AdminVendorViewSet.as_view({"post": "suspend_user", "put": "suspend_user"})
 admin_activate_customer = AdminVendorViewSet.as_view({"post": "activate_customer", "put": "activate_customer"})
 admin_verify_kyc = AdminVendorViewSet.as_view({"post": "verify_kyc", "put": "verify_kyc"})
+admin_set_vendor_commission = AdminVendorViewSet.as_view({"patch": "set_vendor_commission"})
 
 admin_list_products = AdminMarketplaceViewSet.as_view({"get": "list_products"})
 admin_update_product = AdminMarketplaceViewSet.as_view({"put": "update_product", "patch": "update_product"})
+admin_set_product_commission = AdminMarketplaceViewSet.as_view({"patch": "set_product_commission"})
 
 admin_orders_summary = AdminOrdersViewSet.as_view({"get": "summary"})
 admin_assign_logistics = AdminOrdersViewSet.as_view({"post": "assign_logistics"})
@@ -195,14 +204,19 @@ urlpatterns = [
     path("admin/vendors/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc"),
     path("admin/vendors/<uuid:vendor_uuid>/verify-kyc/", admin_verify_kyc, name="admin-verify-kyc-by-uuid"),
     path("admin/vendors/<uuid:vendor_uuid>/suspend/", admin_suspend_user, name="admin-vendor-suspend"),
+    path("admin/vendors/<uuid:vendor_uuid>/commission/", admin_set_vendor_commission, name="admin-set-vendor-commission"),
     path("admin/users/suspend/", admin_suspend_user, name="admin-suspend-user"),
     path("admin/customers/activate/", admin_activate_customer, name="admin-activate-customer"),
+    path("admin/customers/refund-flags/", AdminFlaggedCustomersView.as_view(), name="admin-customer-refund-flags"),
+    path("admin/customers/<uuid:uuid>/refund-profile/", AdminCustomerRefundProfileView.as_view(), name="admin-customer-refund-profile"),
+    path("admin/customers/<uuid:uuid>/refund-flag/review/", AdminReviewRefundFlagView.as_view(), name="admin-customer-refund-flag-review"),
     path("admin/customers/<uuid:customer_uuid>/activate/", admin_activate_customer, name="admin-activate-customer-by-uuid"),
     re_path(r"^admin/vendors/(?P<vendor_uuid>[^/]+)/$", admin_vendor_details, name="admin-vendor-details"),
 
     # ADMIN MARKETPLACE
     path("admin/products/", admin_list_products, name="admin-list-products"),
     path("admin/products/update/", admin_update_product, name="admin-update-product"),
+    path("admin/products/<slug:slug>/commission/", admin_set_product_commission, name="admin-set-product-commission"),
     path("admin/products/<slug:slug>/delete/", AdminMarketplaceViewSet.as_view({"delete": "delete_product"}), name="admin-delete-product"),
     # ADMIN ORDERS
     path("admin/orders/", AdminOrderListView.as_view(), name="admin-orders"),
@@ -278,6 +292,8 @@ urlpatterns = [
     path("admin/orders/list/", AdminOrderListView.as_view(), name="admin-orders-list"),
     path("admin/orders/<uuid:order_id>/", AdminOrderDetailView.as_view(), name="admin-orders-detail"),
     path("admin/orders/<uuid:order_id>/cancel/", AdminOrderCancelView.as_view(), name="admin-orders-cancel"),
+    path("admin/orders/<uuid:order_id>/delivery/", AdminSetOrderDeliveryView.as_view(), name="admin-orders-set-delivery"),
+    path("admin/orders/delivery/attention/", AdminDeliveryAttentionView.as_view(), name="admin-orders-delivery-attention"),
     
     # Admin Profile Management
     path("admin/account/profile/", AdminProfileView.as_view(), name="admin-account-profile"),

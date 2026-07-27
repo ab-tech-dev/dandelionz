@@ -3,6 +3,8 @@ Admin-specific serializers for user management, order management, and admin prof
 These serializers enforce strict data validation and expose only necessary fields for admin operations.
 """
 
+from decimal import Decimal
+
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from authentication.models import AdminAuditLog, UserSuspension
@@ -134,7 +136,8 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
         model = Order
         fields = [
             'order_id', 'customer', 'current_status',
-            'total_price', 'delivery_fee', 'discount', 'payment_status',
+            'total_price', 'delivery_fee', 'delivery_fee_paid', 'discount', 'payment_status',
+            'expected_delivery_earliest', 'expected_delivery_latest',
             'tracking_number', 'ordered_at', 'updated_at', 'status',
             'order_items', 'status_history'
         ]
@@ -183,6 +186,41 @@ class AdminDashboardOrderStatusUpdateSerializer(serializers.Serializer):
             )
 
         return normalized
+
+
+class AdminSetDeliverySerializer(serializers.Serializer):
+    """
+    Admin sets the expected-delivery window (a RANGE) and the delivery fee in one action.
+
+    Either pass use_default to apply the platform's default window, or provide both an
+    earliest and a latest date. The fee may be zero (free delivery), which needs no second
+    payment; a positive fee becomes due before the order can ship.
+    """
+    use_default = serializers.BooleanField(
+        required=False, default=False,
+        help_text="Apply the default delivery window instead of explicit dates.",
+    )
+    expected_delivery_earliest = serializers.DateTimeField(required=False, allow_null=True)
+    expected_delivery_latest = serializers.DateTimeField(required=False, allow_null=True)
+    delivery_fee = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal("0"),
+        help_text="Delivery fee to charge the customer (0 for free delivery).",
+    )
+
+    def validate(self, data):
+        if not data.get('use_default'):
+            earliest = data.get('expected_delivery_earliest')
+            latest = data.get('expected_delivery_latest')
+            if earliest is None or latest is None:
+                raise serializers.ValidationError(
+                    "Provide both expected_delivery_earliest and expected_delivery_latest, "
+                    "or set use_default to true."
+                )
+            if earliest > latest:
+                raise serializers.ValidationError(
+                    "expected_delivery_earliest must be on or before expected_delivery_latest."
+                )
+        return data
 
 
 # =====================================================

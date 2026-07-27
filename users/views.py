@@ -1593,7 +1593,7 @@ from users.serializers import VendorApprovalSerializer
 from django.contrib.auth import get_user_model
 User = get_user_model()
 from authentication.models import CustomUser
-from users.serializers import TriggerPayoutSerializer, OrderActionSerializer, AdminProductUpdateSerializer, VendorKYCSerializer, SuspendUserSerializer, BusinessAdminProfileSerializer
+from users.serializers import TriggerPayoutSerializer, OrderActionSerializer, AdminProductUpdateSerializer, VendorKYCSerializer, SuspendUserSerializer, BusinessAdminProfileSerializer, CommissionRateSerializer
 from users.services.payout_service import PayoutService
 
 from rest_framework import viewsets
@@ -2203,6 +2203,37 @@ class AdminVendorViewSet(AdminBaseViewSet):
         except Vendor.DoesNotExist:
             return Response({"message": "Vendor not found"}, status=404)
 
+    def set_vendor_commission(self, request, vendor_uuid=None):
+        """Set or clear a vendor's commission-rate override. Admin only, capped at 0.10."""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        if not vendor_uuid:
+            return Response({"message": "Vendor UUID is required"}, status=400)
+
+        vendor = Vendor.objects.select_related("user").filter(user__uuid=vendor_uuid).first()
+        if not vendor:
+            return Response({"message": "Vendor not found"}, status=404)
+
+        serializer = CommissionRateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        vendor.commission_rate = serializer.validated_data["commission_rate"]
+        vendor.save(update_fields=["commission_rate"])
+
+        from transactions.commission import format_rate_label, platform_commission_rate
+        effective = vendor.commission_rate if vendor.commission_rate is not None else platform_commission_rate()
+        return Response({
+            "success": True,
+            "data": {
+                "vendor_uuid": str(vendor.user.uuid),
+                "commission_rate": vendor.commission_rate,
+                "effective_rate": effective,
+                "effective_rate_label": format_rate_label(effective),
+            },
+        }, status=200)
+
     @swagger_auto_schema(
         method="post",
         operation_id="admin_approve_vendor",
@@ -2782,6 +2813,34 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
         )
 
         return Response({"success": success, "data": data}, status=200 if success else 400)
+
+    def set_product_commission(self, request, slug=None):
+        """Set or clear a product's commission-rate override. Admin only, capped at 0.10."""
+        admin = self.get_admin(request)
+        if not admin:
+            return Response({"message": "Access denied"}, status=403)
+
+        product = Product.objects.filter(slug=slug).first()
+        if not product:
+            return Response({"success": False, "message": "Product not found"}, status=404)
+
+        serializer = CommissionRateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        product.commission_rate = serializer.validated_data["commission_rate"]
+        product.save(update_fields=["commission_rate", "updated_at"])
+
+        from transactions.commission import resolve_commission_rate, format_rate_label
+        effective = resolve_commission_rate(product=product)
+        return Response({
+            "success": True,
+            "data": {
+                "slug": product.slug,
+                "commission_rate": product.commission_rate,
+                "effective_rate": effective,
+                "effective_rate_label": format_rate_label(effective),
+            },
+        }, status=200)
 
     @swagger_auto_schema(
         operation_id="admin_delete_product",
@@ -5589,9 +5648,10 @@ class AdminWalletViewSet(AdminBaseViewSet):
             if existing_order_credit:
                 continue
 
+            from transactions.commission import resolve_commission_rate
             commission_amount = Decimal('0.00')
             for item in order.order_items.all():
-                commission_amount += item.item_subtotal * Decimal('0.10')
+                commission_amount += item.item_subtotal * resolve_commission_rate(item)
 
             # The source__icontains checks above and below stay as the primary guard: they
             # are the only thing that recognises credits made before the ledger existed,

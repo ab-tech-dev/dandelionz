@@ -284,6 +284,20 @@ CELERY_BEAT_SCHEDULE = {
         'schedule': crontab(hour=0, minute=0),  # Daily at midnight
         'options': {'queue': 'notifications'}
     },
+    'release-expired-wallet-holds': {
+        # Returns wallet money from abandoned split-payment checkouts. Frequent because a
+        # customer whose hold has not cleared is locked out of that balance until it does.
+        'task': 'transactions.release_expired_wallet_holds',
+        'schedule': crontab(minute='*/10'),  # Every 10 minutes
+        'options': {'queue': 'maintenance'}
+    },
+    'remind-admins-pending-deliveries': {
+        # Daily nudge so paid orders do not sit unscheduled (blocking the customer) or
+        # fee-paid-but-unshipped without anyone noticing.
+        'task': 'transactions.remind_admins_pending_deliveries',
+        'schedule': crontab(hour=8, minute=30),  # Daily at 8:30 AM
+        'options': {'queue': 'notifications'}
+    },
 }
 
 # Celery Queues
@@ -505,6 +519,32 @@ MIN_WITHDRAWAL_NGN = Decimal(os.getenv('MIN_WITHDRAWAL_NGN', '500'))
 # the platform until they are spent or refunded to source.
 MIN_DEPOSIT_NGN = Decimal(os.getenv('MIN_DEPOSIT_NGN', '100'))
 MAX_DEPOSIT_NGN = Decimal(os.getenv('MAX_DEPOSIT_NGN', '500000'))
+
+# Platform commission on vendor sales, as a decimal fraction of an item's subtotal. This is
+# both the default rate and the hard ceiling: a vendor or product may be given a lower
+# negotiated rate but never a higher one (see transactions/commission.py). Delivery fees are
+# not subject to this - the platform keeps 100% of the delivery fee, since it runs logistics.
+PLATFORM_COMMISSION_RATE = Decimal(os.getenv('PLATFORM_COMMISSION_RATE', '0.10'))
+
+# Default expected-delivery window, as a RANGE of days from when it is set (never a single
+# fixed day). Applied when an admin picks "use default"; the admin can override with an
+# explicit earliest/latest. There is no logistics API to compute a real ETA, so the admin
+# sets the window (and the fee) by hand - hence a sensible default rather than an empty field.
+DELIVERY_ETA_MIN_DAYS = int(os.getenv('DELIVERY_ETA_MIN_DAYS', '7'))
+DELIVERY_ETA_MAX_DAYS = int(os.getenv('DELIVERY_ETA_MAX_DAYS', '14'))
+
+# Refund-abuse flagging. A customer is flagged for admin *review* (never auto-blocked) when
+# they have enough order history AND a high enough share of it has been refunded. All three
+# gates must be met, so occasional refunds and brand-new accounts are never flagged; tune per
+# environment. Industry rule-of-thumb: serial returners sit around a 50%+ return rate.
+REFUND_FLAG_MIN_ORDERS = int(os.getenv('REFUND_FLAG_MIN_ORDERS', '4'))
+REFUND_FLAG_MIN_REFUNDS = int(os.getenv('REFUND_FLAG_MIN_REFUNDS', '3'))
+REFUND_FLAG_RATE = Decimal(os.getenv('REFUND_FLAG_RATE', '0.5'))
+
+# Fraction of an installment plan's total that must be paid before the order becomes
+# fulfillment-eligible (enters the admin delivery flow). CDcare ships at half; kept as a
+# constant so it can be moved without a code change. Vendors are still paid only at 100%.
+INSTALLMENT_SHIP_THRESHOLD = Decimal(os.getenv('INSTALLMENT_SHIP_THRESHOLD', '0.50'))
 # Optional average delivery speed to estimate duration (km/h)
 DELIVERY_AVG_SPEED_KMPH = float(os.getenv('DELIVERY_AVG_SPEED_KMPH', '30'))
 

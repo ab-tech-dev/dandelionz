@@ -13,9 +13,8 @@ Intended to run on a schedule (every 10 minutes or so). Safe to run by hand.
 """
 
 from django.core.management.base import BaseCommand
-from django.utils import timezone
 
-from transactions.models import WalletHold
+from transactions import wallet_checkout
 
 
 class Command(BaseCommand):
@@ -30,54 +29,34 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
-        now = timezone.now()
 
-        expired = (
-            WalletHold.objects
-            .filter(status=WalletHold.Status.HELD, expires_at__lt=now)
-            .select_related('wallet', 'wallet__user', 'order')
-            .order_by('expires_at')
-        )
+        def on_event(kind, hold, detail=''):
+            label = (
+                f"{hold.reference} {hold.amount} for {hold.wallet.user.email} "
+                f"(expired {hold.expires_at:%Y-%m-%d %H:%M})"
+            )
+            if kind == 'would_release':
+                self.stdout.write(f"  would release {label}")
+            elif kind == 'released':
+                self.stdout.write(self.style.SUCCESS(f"  released {label}"))
+            elif kind == 'failed':
+                self.stderr.write(self.style.ERROR(f"  FAILED {hold.reference}: {detail}"))
 
-        total = expired.count()
-        if total == 0:
+        # The sweep itself lives in wallet_checkout so the Celery task runs identical logic.
+        result = wallet_checkout.sweep_expired_holds(dry_run=dry_run, on_event=on_event)
+
+        if result['total'] == 0:
             self.stdout.write("No expired holds.")
             return
 
-        self.stdout.write(f"Found {total} expired hold(s).")
-
-        released = 0
-        failed = 0
-        for hold in expired.iterator():
-            label = (
-                f"  {hold.reference} {hold.amount} for {hold.wallet.user.email} "
-                f"(expired {hold.expires_at:%Y-%m-%d %H:%M})"
-            )
-
-            if dry_run:
-                self.stdout.write(f"  would release {label.strip()}")
-                continue
-
-            try:
-                if hold.release("Checkout abandoned"):
-                    released += 1
-                    self.stdout.write(self.style.SUCCESS(f"  released {label.strip()}"))
-            except Exception as exc:
-                # One bad hold must not strand the rest. Report and continue: the next run
-                # picks this one up again, since a failed release leaves it HELD.
-                failed += 1
-                self.stderr.write(self.style.ERROR(
-                    f"  FAILED {hold.reference}: {exc}"
-                ))
-
         if dry_run:
-            self.stdout.write(f"\nDry run: {total} hold(s) would be released.")
+            self.stdout.write(f"\nDry run: {result['total']} hold(s) would be released.")
             return
 
-        self.stdout.write(f"\nReleased {released} hold(s).")
-        if failed:
+        self.stdout.write(f"\nReleased {result['released']} hold(s).")
+        if result['failed']:
             self.stderr.write(self.style.ERROR(
-                f"{failed} hold(s) could not be released and remain held. "
+                f"{result['failed']} hold(s) could not be released and remain held. "
                 f"They will be retried on the next run."
             ))
             raise SystemExit(1)
