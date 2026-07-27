@@ -53,7 +53,7 @@ class ProfileResolverTestCase(TestCase):
         Customer.objects.filter(user=self.customer_user).delete()
         
         # Verify profile is missing
-        self.assertFalse(hasattr(self.customer_user, 'customer_profile'))
+        self.assertFalse(Customer.objects.filter(user=self.customer_user).exists())
         
         # Resolve should create the profile
         customer_profile = ProfileResolver.resolve_customer(self.customer_user)
@@ -73,7 +73,7 @@ class ProfileResolverTestCase(TestCase):
         Vendor.objects.filter(user=self.vendor_user).delete()
         
         # Verify profile is missing
-        self.assertFalse(hasattr(self.vendor_user, 'vendor_profile'))
+        self.assertFalse(Vendor.objects.filter(user=self.vendor_user).exists())
         
         # Resolve should create the profile
         vendor_profile = ProfileResolver.resolve_vendor(self.vendor_user)
@@ -93,7 +93,7 @@ class ProfileResolverTestCase(TestCase):
         BusinessAdmin.objects.filter(user=self.admin_user).delete()
         
         # Verify profile is missing
-        self.assertFalse(hasattr(self.admin_user, 'business_admin_profile'))
+        self.assertFalse(BusinessAdmin.objects.filter(user=self.admin_user).exists())
         
         # Resolve should create the profile
         admin_profile = ProfileResolver.resolve_admin(self.admin_user)

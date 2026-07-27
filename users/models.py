@@ -224,7 +224,15 @@ class PayoutRequest(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     processed_at = models.DateTimeField(null=True, blank=True)
     failure_reason = models.TextField(blank=True, null=True)
-    
+
+    def save(self, *args, **kwargs):
+        # Stamp when the request was first acted on - the moment it leaves 'pending'. Guarded on
+        # None so it records the start of processing and is not overwritten as it moves through
+        # processing -> successful/failed.
+        if self.status != 'pending' and self.processed_at is None:
+            self.processed_at = timezone.now()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         if self.vendor:
             return f"Payout {self.id} - {self.vendor.store_name} - {self.status}"

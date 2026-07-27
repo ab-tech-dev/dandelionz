@@ -12,7 +12,12 @@ class AddToCartPatchTests(APITestCase):
         self.customer = User.objects.create_user(email='cust@example.com', password='pass123')
         # Vendor and product
         self.vendor_user = User.objects.create_user(email='vendor@example.com', password='pass123', role='VENDOR')
-        self.vendor = Vendor.objects.create(user=self.vendor_user, store_name='Test Shop', is_verified_vendor=True)
+        # The create_role_profile signal already made a Vendor for this VENDOR user, so adopt and
+        # update it rather than creating a second (OneToOne -> IntegrityError).
+        self.vendor = Vendor.objects.update_or_create(
+            user=self.vendor_user,
+            defaults={'store_name': 'Test Shop', 'is_verified_vendor': True},
+        )[0]
         self.product = Product.objects.create(store=self.vendor, name='Test Product', price='10.00', stock=100)
         self.client.force_authenticate(user=self.customer)
 
@@ -39,9 +44,15 @@ class ProductDeletePermissionTests(APITestCase):
     def setUp(self):
         User = get_user_model()
         self.vendor_user = User.objects.create_user(email='vendor@example.com', password='pass123', role='VENDOR')
-        self.vendor = Vendor.objects.create(user=self.vendor_user, store_name='Test Shop 1', is_verified_vendor=True)
+        self.vendor = Vendor.objects.update_or_create(
+            user=self.vendor_user,
+            defaults={'store_name': 'Test Shop 1', 'is_verified_vendor': True},
+        )[0]
         self.other_vendor_user = User.objects.create_user(email='other_vendor@example.com', password='pass123', role='VENDOR')
-        self.other_vendor = Vendor.objects.create(user=self.other_vendor_user, store_name='Test Shop 2', is_verified_vendor=True)
+        self.other_vendor = Vendor.objects.update_or_create(
+            user=self.other_vendor_user,
+            defaults={'store_name': 'Test Shop 2', 'is_verified_vendor': True},
+        )[0]
 
         self.admin_user = User.objects.create_user(email='admin@example.com', password='pass123', role='ADMIN', is_staff=True, is_superuser=True)
 

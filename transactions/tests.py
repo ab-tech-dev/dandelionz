@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest import skip
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -54,6 +55,10 @@ class CheckoutShippingFeeTests(TestCase):
         self.cart = Cart.objects.create(customer=self.customer_user)
         self.client.force_authenticate(user=self.customer_user)
 
+    @skip(
+        "Distance-based delivery fees are disabled: delivery is free at checkout and the fee is "
+        "set later by the admin (delivery ETA + fee flow). Restore if distance pricing returns."
+    )
     @patch("transactions.views._notify_checkout")
     @patch("transactions.views.Paystack.initialize_payment")
     @patch("transactions.delivery_service.DeliveryFeeCalculator.calculate_fee")
