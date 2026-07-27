@@ -9,6 +9,7 @@ from users.models import Customer
 import base64
 from PIL import Image
 import io
+from unittest.mock import patch
 
 User = get_user_model()
 
@@ -28,14 +29,17 @@ class Base64ImageUploadTestCase(APITestCase):
             role=User.Role.CUSTOMER
         )
         
-        # Create customer profile
-        self.customer = Customer.objects.create(
+        # The create_role_profile signal already made a Customer for this user; adopt and update
+        # it rather than creating a second (OneToOne -> IntegrityError).
+        self.customer = Customer.objects.update_or_create(
             user=self.user,
-            shipping_address='123 Test St',
-            city='Test City',
-            country='Test Country',
-            postal_code='12345'
-        )
+            defaults={
+                'shipping_address': '123 Test St',
+                'city': 'Test City',
+                'country': 'Test Country',
+                'postal_code': '12345',
+            },
+        )[0]
         
         self.client.force_authenticate(user=self.user)
 
@@ -53,10 +57,14 @@ class Base64ImageUploadTestCase(APITestCase):
         # Return as data URL
         return f'data:image/{format};base64,{base64_data}'
 
-    def test_profile_patch_with_base64_image(self):
-        """Test PATCH profile endpoint with base64 encoded image"""
+    @patch('cloudinary.uploader.upload', return_value={
+        'public_id': 'dandelionz/profiles/test_profile',
+        'secure_url': 'https://res.cloudinary.com/test/dandelionz/profiles/test_profile.jpg',
+    })
+    def test_profile_patch_with_base64_image(self, mock_upload):
+        """Test PATCH profile endpoint with base64 encoded image (Cloudinary upload mocked)."""
         base64_image = self.create_test_image_base64()
-        
+
         payload = {
             'full_name': 'Updated Name',
             'profile_picture': base64_image,
@@ -64,7 +72,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )
@@ -95,7 +103,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )
@@ -110,7 +118,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )
@@ -126,7 +134,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )
@@ -142,7 +150,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )
@@ -159,7 +167,7 @@ class Base64ImageUploadTestCase(APITestCase):
         }
         
         response = self.client.patch(
-            '/api/customer/profile/',
+            '/user/customer/profile/',
             payload,
             format='json'
         )

@@ -506,7 +506,7 @@ class WithdrawalReferenceTests(TestCase):
         )
         
         self.assertTrue(payout.reference.startswith('WTH-'))
-        self.assertEqual(len(payout.reference), 19)  # WTH- + 12 hex chars
+        self.assertEqual(len(payout.reference), 16)  # 'WTH-' (4) + 12 hex chars
     
     def test_withdrawal_references_unique(self):
         """Test that each withdrawal gets unique reference"""

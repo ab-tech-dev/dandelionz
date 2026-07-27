@@ -36,7 +36,7 @@ class AdminVendorApprovalTests(TestCase):
             vendor_status="pending",
         )
 
-    @patch("users.views.send_user_notification")
+    @patch("users.notification_helpers.send_user_notification")
     def test_approve_vendor_persists_is_active_and_user_role(self, mock_send_user_notification):
         response = self.client.post(
             "/user/admin/vendors/approve/",
@@ -57,7 +57,7 @@ class AdminVendorApprovalTests(TestCase):
         self.assertEqual(self.vendor_profile.vendor_status, "approved")
         mock_send_user_notification.assert_called_once()
 
-    @patch("users.views.send_user_notification")
+    @patch("users.notification_helpers.send_user_notification")
     def test_verify_kyc_can_approve_and_reject_using_is_verified_vendor(self, mock_send_user_notification):
         approve_response = self.client.post(
             "/user/admin/vendors/verify-kyc/",
@@ -112,14 +112,18 @@ class AdminCustomerActivationTests(TestCase):
             role=User.Role.VENDOR,
             is_active=False,
         )
-        Vendor.objects.create(
+        # The create_role_profile signal already made a Vendor for this VENDOR user; adopt and
+        # update it rather than creating a second (OneToOne -> IntegrityError).
+        Vendor.objects.update_or_create(
             user=self.vendor_user,
-            store_name="Vendor Store",
-            is_verified_vendor=False,
-            vendor_status="pending",
+            defaults={
+                "store_name": "Vendor Store",
+                "is_verified_vendor": False,
+                "vendor_status": "pending",
+            },
         )
 
-    @patch("users.views.send_user_notification")
+    @patch("users.notification_helpers.send_user_notification")
     def test_activate_customer_endpoint_activates_only_customers(self, mock_send_user_notification):
         response = self.client.post(
             "/user/admin/customers/activate/",
