@@ -74,9 +74,12 @@ class ReferralService:
                         # Credit bonus to referrer's wallet
                         referrer = referral.referrer
                         wallet, created = Wallet.objects.get_or_create(user=referrer)
+                        from transactions.models import LedgerEntry
                         wallet.credit(
                             referral.bonus_amount,
-                            source=f"Referral bonus for {user.email}"
+                            source=f"Referral bonus for {user.email}",
+                            entry_type=LedgerEntry.EntryType.REFERRAL_BONUS,
+                            idempotency_key=f"referral-bonus-{referral.id}",
                         )
                         logger.info(f"Credited {referral.bonus_amount} to {referrer.email}'s wallet")
                         

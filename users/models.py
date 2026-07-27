@@ -37,7 +37,8 @@ class Vendor(models.Model):
         from transactions.models import Wallet
         wallet, _ = Wallet.objects.get_or_create(user=self.user)
         return wallet.balance
-    
+
+
     def get_wallet_earnings(self):
         """Get vendor's total earnings from transactions"""
         from transactions.models import WalletTransaction
@@ -52,10 +53,16 @@ class Vendor(models.Model):
         Get vendor's available balance (withdrawable).
         This is the wallet balance that vendors can withdraw.
         Includes funds from DELIVERED orders only.
+
+        Reads the withdrawable bucket rather than the total. For vendors the two are
+        always equal - vendors have no checkout path, so they can never deposit and their
+        spendable bucket stays at zero. This reads the specific bucket anyway so that it
+        agrees with PayoutService.validate_withdrawal_request by construction rather than
+        by coincidence, and so the number stays correct if that ever changes.
         """
         from transactions.models import Wallet
         wallet, _ = Wallet.objects.get_or_create(user=self.user)
-        return wallet.balance
+        return wallet.withdrawable_balance
     
     def get_pending_balance(self):
         """
@@ -108,6 +115,18 @@ class Customer(models.Model):
     shipping_latitude = models.FloatField(null=True, blank=True, help_text="Shipping address latitude for delivery calculations")
     shipping_longitude = models.FloatField(null=True, blank=True, help_text="Shipping address longitude for delivery calculations")
     loyalty_points = models.PositiveIntegerField(default=0)
+
+    # Payout details, mirroring Vendor and AdminPayoutProfile.
+    # Customers receive refunds into their wallet and need somewhere to withdraw them to.
+    # Before these existed, the withdrawal endpoint took bank details inline on every
+    # request and had no recipient_code to cache, so PayoutService.process_external_transfer
+    # always failed with "No transfer recipient code available" - customer withdrawals
+    # could be requested but never actually completed.
+    bank_name = models.CharField(max_length=100, blank=True)
+    bank_code = models.CharField(max_length=10, blank=True)
+    account_number = models.CharField(max_length=20, blank=True)
+    account_name = models.CharField(max_length=200, blank=True, null=True, help_text="Name on the bank account")
+    recipient_code = models.CharField(max_length=100, blank=True)
 
 class BusinessAdmin(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="business_admin_profile")

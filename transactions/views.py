@@ -18,11 +18,13 @@ from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
+from rest_framework.pagination import PageNumberPagination
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
 from authentication.core.permissions import IsVendor, IsCustomer, IsAdmin
-from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment
+from transactions.models import Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, LedgerEntry, WalletHold, PaystackEvent, WalletDeposit, DepositRefund, money
+from transactions import references
 from users.services.geocoding_service import geocode_address
 from users.notification_helpers import (
     send_order_notification,
@@ -226,8 +228,16 @@ from .serializers import (
     InitializeInstallmentPaymentSerializer,
     VerifyPaymentSerializer,
     CommissionAnalyticsQuerySerializer,
-    CommissionAnalyticsResponseSerializer
+    CommissionAnalyticsResponseSerializer,
+    WalletDepositInitSerializer,
+    WalletDepositSerializer,
+    DepositRefundRequestSerializer,
+    DepositRefundSerializer,
+    LedgerEntrySerializer,
+    PaystackEventSerializer,
+    CheckoutOptionsSerializer
 )
+from transactions import wallet_checkout
 from .paystack import Paystack
 from authentication.core.response import standardized_response
 
@@ -235,8 +245,38 @@ PLATFORM_COMMISSION = Decimal("0.10")
 EXPECTED_CURRENCY = "NGN"
 
 # ----------------------
+# Pagination
+# ----------------------
+class FinancePagination(PageNumberPagination):
+    """
+    Pagination for the financial list endpoints.
+
+    This project sets no DEFAULT_PAGINATION_CLASS, so a ListAPIView without one returns a
+    bare JSON array and silently ignores ?page. For tables over LedgerEntry, WalletDeposit
+    and PaystackEvent that is not survivable: they grow with every transaction on the
+    platform, so an unpaginated view serialises the entire financial history into one
+    response, and any client reading `.results` gets undefined and renders nothing.
+
+    Defined up here rather than beside the admin views because the customer-facing deposit
+    and refund lists further up the file use it too.
+    """
+    page_size = 50
+    page_size_query_param = 'page_size'
+    max_page_size = 200
+
+
+# ----------------------
 # Custom Throttle Classes
 # ----------------------
+class LedgerExportThrottle(UserRateThrottle):
+    """
+    The ledger export is the most expensive endpoint in the app and hands over every
+    user's email alongside their complete transaction history in one file. The generic
+    1000/hour user rate is not a meaningful limit on that.
+    """
+    scope = 'ledger_export'
+
+
 class PaymentVerificationThrottle(UserRateThrottle):
     """
     Stricter rate limit for payment verification endpoints.
@@ -301,6 +341,11 @@ def credit_vendors_for_order(order, source_prefix="Order"):
         platform_wallet.credit(
             order.delivery_fee,
             source=f"{source_prefix} Delivery Fee {order.order_id}",
+            entry_type=LedgerEntry.EntryType.DELIVERY_FEE,
+            # Keyed per order: the Order.vendors_credited flag already guards the common
+            # case, but this makes a concurrent double-delivery signal harmless too.
+            idempotency_key=f"delivery-fee-{order.order_id}",
+            order=order,
         )
         TransactionLog.objects.create(
             order=order,
@@ -326,12 +371,23 @@ def credit_vendors_for_order(order, source_prefix="Order"):
 
         vendor_user = vendor.user
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=vendor_user)
-        wallet.credit(vendor_share, source=f"{source_prefix} {order.order_id}")
+        wallet.credit(
+            vendor_share,
+            source=f"{source_prefix} {order.order_id}",
+            entry_type=LedgerEntry.EntryType.VENDOR_EARNING,
+            # Per item, not per order: an order can contain several items from the same
+            # vendor, and each is a separate legitimate credit.
+            idempotency_key=f"vendor-earning-{order.order_id}-{item.id}",
+            order=order,
+        )
 
         if platform_wallet:
             platform_wallet.credit(
                 commission_amount,
                 source=f"{source_prefix} Commission {order.order_id}",
+                entry_type=LedgerEntry.EntryType.COMMISSION,
+                idempotency_key=f"commission-{order.order_id}-{item.id}",
+                order=order,
             )
 
         TransactionLog.objects.create(
@@ -725,7 +781,16 @@ class CheckoutView(APIView):
     def post(self, request):
         user = request.user
         logger.info(f"Checkout initiated for user: {user.uuid}")
-        
+
+        checkout_serializer = CheckoutOptionsSerializer(data=request.data or {})
+        if not checkout_serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=checkout_serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        use_wallet = checkout_serializer.validated_data.get('use_wallet', False)
+        requested_wallet_amount = checkout_serializer.validated_data.get('wallet_amount')
+
         cart = Cart.objects.filter(customer=user).first()
         if not cart:
             logger.warning(f"Checkout failed: No cart found for user {user.uuid}")
@@ -831,30 +896,60 @@ class CheckoutView(APIView):
                 order.update_total()
                 logger.info(f"Order total calculated: {order.total_price} for order {order.order_id}")
 
-                # 5. Create or reset Payment
+                # 4b. Decide the wallet/card split before anything is charged.
+                # The wallet is debited here rather than after Paystack succeeds: the two
+                # legs cannot be atomic, and holding the money up front is what stops the
+                # same balance being spent by two checkouts opened together.
+                wallet_amount = Decimal('0.00')
+                card_amount = order.total_price
+                if use_wallet:
+                    wallet_amount, card_amount = wallet_checkout.plan_split(
+                        order.total_price,
+                        wallet_checkout.available_balance(user),
+                        requested_wallet_amount,
+                    )
+                    wallet_checkout.place_hold(user, order, wallet_amount)
+
+                # 5. Create or reset Payment for the card leg only.
+                # payment.amount is what Paystack is asked to charge, which is the
+                # remainder after the wallet - verification compares the two directly, so
+                # putting the order total here would reject every split payment.
                 reference = f"{order.order_id}-{uuid.uuid4().hex[:10]}"
                 payment, _ = Payment.objects.get_or_create(
                     order=order,
                     defaults={
-                        "amount": order.total_price,
+                        "amount": card_amount,
                         "reference": reference,
                     }
                 )
-                payment.amount = order.total_price
+                payment.amount = card_amount
                 payment.reference = reference
                 payment.verified = False
                 payment.status = 'PENDING'
                 payment.save()
 
-                # 6. Initialize Paystack
-                paystack = Paystack()
-                response = paystack.initialize_payment(
-                    email=user.email,
-                    amount=payment.amount,
-                    reference=payment.reference,
-                    callback_url=_get_paystack_callback_url(request)
-                )
-                logger.info(f"Paystack payment initialized for order {order.order_id}")
+                # 6. Initialize Paystack, unless the wallet covered the whole order.
+                # Gated on use_wallet as well as the amount: an order whose total computes
+                # to zero any other way (a pricing bug, a fully discounted cart) must still
+                # fail loudly at Paystack rather than be silently marked paid and shipped.
+                wallet_settles_everything = use_wallet and card_amount <= 0
+                authorization_url = None
+                if not wallet_settles_everything:
+                    paystack = Paystack()
+                    response = paystack.initialize_payment(
+                        email=user.email,
+                        amount=payment.amount,
+                        reference=payment.reference,
+                        callback_url=_get_paystack_callback_url(request)
+                    )
+                    authorization_url = response["data"]["authorization_url"]
+                    logger.info(f"Paystack payment initialized for order {order.order_id}")
+                # A fully wallet-funded order is settled below, after this transaction
+                # commits. mark_as_successful() enqueues a Celery task, and enqueuing
+                # inside the transaction means the worker can pick the order up before the
+                # commit lands - and a broker outage would fail an otherwise valid
+                # checkout. Deferring also fails in the safe direction: if it never runs,
+                # the hold is still HELD and the sweeper returns the money.
 
                 _notify_checkout(
                     order=order,
@@ -868,18 +963,37 @@ class CheckoutView(APIView):
                 cart_items.delete()
                 logger.info(f"Cart cleared for user {user.uuid}")
 
+            # Committed. Settle a fully wallet-funded order now that the order, payment and
+            # hold are all durable. mark_as_successful captures the hold itself - it is the
+            # single choke point the webhook and verify endpoint already rely on - so there
+            # is no separate capture call here.
+            if wallet_settles_everything:
+                payment.mark_as_successful()
+                logger.info(f"Order {order.order_id} paid entirely from wallet")
+
             return Response(
                 standardized_response(
                     data={
                         "order_id": str(order.order_id),
-                        "authorization_url": response["data"]["authorization_url"],
+                        "authorization_url": authorization_url,
                         "reference": payment.reference,
                         "amount": float(payment.amount),
+                        "wallet_amount": float(wallet_amount),
+                        "total_amount": float(order.total_price),
+                        # False when the wallet covered everything: the client should go
+                        # straight to the success screen rather than open a payment page.
+                        "requires_payment": not wallet_settles_everything,
                         "delivery_fee": float(order.delivery_fee) if order.delivery_fee else 0
                     },
                     message="Checkout initialized successfully"
                 ),
                 status=status.HTTP_201_CREATED
+            )
+        except wallet_checkout.WalletPaymentError as e:
+            logger.info(f"Wallet payment refused for user {user.uuid}: {e}")
+            return Response(
+                standardized_response(success=False, error=str(e)),
+                status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
             logger.error(f"Checkout error for user {user.uuid}: {str(e)}", exc_info=True)
@@ -928,8 +1042,21 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
         user = request.user
         logger.info(f"Installment checkout initiated for user: {user.uuid}")
         
+        # Refuse rather than ignore. Wallet payment is not supported for installments -
+        # a wallet leg on the first instalment would make the plan's own schedule wrong -
+        # and silently dropping the flag would let a customer believe their balance had
+        # been applied until the next instalment was charged in full.
+        if request.data and request.data.get('use_wallet'):
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="Wallet balance cannot be used for installment plans. Pay in full to use your wallet.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         cart = Cart.objects.filter(customer=user).first()
-        
+
         if not cart:
             logger.warning(f"Installment checkout failed: No cart found for user {user.uuid}")
             return Response(
@@ -1602,6 +1729,30 @@ Use the 'reference' or 'trxref' query parameter.""",
                     status=status.HTTP_403_FORBIDDEN
                 )
 
+        # Short-circuit an already-settled payment before calling Paystack. An order paid
+        # entirely from the wallet has no Paystack transaction at all, so asking Paystack
+        # about its reference 404s and the customer lands on "we could not verify your
+        # payment" for an order that is genuinely paid. The already-verified check further
+        # down would have answered correctly - it just ran too late to be reached.
+        if payment.verified:
+            return Response(
+                standardized_response(
+                    data=PaymentSerializer(payment).data,
+                    message="Payment already verified"
+                )
+            )
+
+        # Nothing was charged to a card, so there is nothing at Paystack to verify. Reaching
+        # here with a zero card leg means the wallet settlement never completed.
+        if payment.amount <= 0:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="This order is still being confirmed. Please check your orders in a moment.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         paystack = Paystack()
         try:
             resp = paystack.verify_payment(reference)
@@ -1642,7 +1793,35 @@ Use the 'reference' or 'trxref' query parameter.""",
                     )
                 )
 
-            payment.mark_as_successful()
+            try:
+                payment.mark_as_successful()
+            except wallet_checkout.SettlementBlocked as exc:
+                # The card leg was paid for an order that must not be settled - the wallet
+                # half has already gone back to the customer. Log loudly and refuse rather
+                # than fulfilling an order that is only half paid for; the card money needs
+                # an operator to return it.
+                logger.error(
+                    f"Refusing to settle payment {reference}: {exc}", exc_info=True
+                )
+                TransactionLog.objects.create(
+                    order=payment.order,
+                    action=TransactionLog.Action.PAYMENT_FAILED,
+                    level=TransactionLog.Level.ERROR,
+                    message=f"Card payment {reference} received but not settled: {exc}",
+                    related_user=payment.order.customer,
+                    amount=payment.amount,
+                    metadata={"reference": reference, "reason": str(exc)},
+                )
+                return Response(
+                    standardized_response(
+                        success=False,
+                        error=(
+                            "This order can no longer be completed and your card payment "
+                            "will be refunded. Please contact support."
+                        ),
+                    ),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             # Note: Vendors are credited when order is DELIVERED, not when payment is received
             # This maintains the available vs pending balance flow
 
@@ -1689,9 +1868,11 @@ No authentication required (webhook signature validation instead)""",
         import logging
         logger = logging.getLogger(__name__)
         
+        from transactions.paystack import get_secret_key
+
         signature = request.headers.get("x-paystack-signature", "")
         computed = hmac.new(
-            settings.PAYSTACK_SECRET_KEY.encode(),
+            get_secret_key().encode(),
             request.body,
             hashlib.sha512
         ).hexdigest()
@@ -1705,9 +1886,91 @@ No authentication required (webhook signature validation instead)""",
         reference = data.get("reference")
 
         if not reference:
+            # Refund events carry no `reference` of their own - they quote the original
+            # transaction instead. Without this fallback every refund webhook was dropped
+            # at the guard below, so a refund could never be marked settled or failed.
+            reference = data.get("transaction_reference")
+            if not reference and isinstance(data.get("transaction"), dict):
+                reference = data["transaction"].get("reference")
+
+        if not reference:
             logger.warning("Webhook received without reference")
             return Response({"status": "ok"})
-            
+
+        # Record the event before acting on it. Paystack retries aggressively, and until now
+        # the only thing preventing a retry from being reprocessed was a boolean flag on
+        # Payment - which works for the charge path but nothing else. Recording first makes
+        # replay handling explicit, and gives the admin screens a record of every delivery.
+        # Paystack webhook payloads carry no unique event id - data["id"] is the id of the
+        # underlying object (transaction, transfer, refund), and those are separate id
+        # sequences that can collide numerically. Keying on the raw id alone would let a
+        # transfer.success be silently dropped as a duplicate of an unrelated charge.success
+        # that happened to share an id, stranding a payout in "processing" forever.
+        # Namespacing by event type makes the key unique per (event, object).
+        object_id = request.data.get("id") or data.get("id")
+        event_id = (
+            f"{event}:{object_id}"
+            if object_id
+            else hashlib.sha256(request.body).hexdigest()
+        )
+        paystack_event, is_new = PaystackEvent.objects.get_or_create(
+            event_id=event_id,
+            defaults={
+                "event_type": event or "",
+                "reference": reference,
+                "payload": request.data if isinstance(request.data, dict) else {},
+                "signature_valid": True,
+            },
+        )
+        if not is_new:
+            logger.info(f"Duplicate Paystack event {event_id} ({event}) ignored")
+            return Response({"status": "ok", "detail": "duplicate"})
+
+        try:
+            response = self._dispatch(request, event, data, reference)
+        except Exception as exc:
+            # Record the failure before re-raising, so a webhook that blew up is visible on
+            # the admin failed-payments screen instead of only in the logs.
+            paystack_event.mark(PaystackEvent.Status.FAILED, str(exc))
+            raise
+
+        # Distinguish "we acted on this" from "we returned 200 without doing anything".
+        # _dispatch returns a `detail` on every path where it declined to handle the event
+        # (unknown reference, deposit before deposits ship, installment sent to the wrong
+        # endpoint). Marking those PROCESSED would hide exactly the orphaned events an
+        # operator needs to find on the admin failed-payments screen.
+        detail = response.data.get("detail") if hasattr(response, "data") else None
+        if detail:
+            paystack_event.mark(PaystackEvent.Status.IGNORED, detail)
+        else:
+            paystack_event.mark(PaystackEvent.Status.PROCESSED)
+        return response
+
+    def _dispatch(self, request, event, data, reference):
+        """
+        Route a verified, de-duplicated webhook to the right handler.
+
+        Split out of post() so every exit path gets its PaystackEvent status recorded in one
+        place rather than being marked at each of the nine returns below.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # ---------------------------------------------------------
+        # Handle Refund Webhooks (Deposits returned to source)
+        # ---------------------------------------------------------
+        # Checked before the charge routing below: a refund event quotes the original
+        # deposit's DEP- reference, so classify() would send it down the deposit path and
+        # it would be read as a second top-up.
+        if event in ["refund.processed", "refund.failed", "refund.pending"]:
+            from transactions.deposit_refund_service import settle_refund_webhook
+
+            handled, detail = settle_refund_webhook(event, data)
+            if not handled:
+                logger.warning(f"Refund webhook not applied: {detail}")
+                return Response({"status": "ok", "detail": detail})
+            return Response({"status": "ok"})
+
         # ---------------------------------------------------------
         # Handle Transfer Webhooks (Payouts)
         # ---------------------------------------------------------
@@ -1740,24 +2003,70 @@ No authentication required (webhook signature validation instead)""",
                             wallet = None
                             
                         if wallet:
-                            wallet.credit(payout.amount, source=f"Refund for failed withdrawal {payout.reference}")
+                            # Same idempotency key as the admin-reject path: a withdrawal is
+                            # reversed at most once no matter how many times Paystack retries.
+                            wallet.credit(
+                                payout.amount,
+                                source=f"Refund for failed withdrawal {payout.reference}",
+                                bucket=LedgerEntry.Bucket.WITHDRAWABLE,
+                                entry_type=LedgerEntry.EntryType.WITHDRAWAL_REVERSAL,
+                                idempotency_key=f"withdrawal-reversal-{payout.reference}",
+                                payout_request=payout,
+                            )
                 
                 return Response({"status": "ok"})
                 
             except PayoutRequest.DoesNotExist:
                 logger.warning(f"PayoutRequest not found for transfer webhook reference: {reference}")
-                return Response({"status": "ok"})
+                return Response({"status": "ok", "detail": "payout request not found"})
 
         # ---------------------------------------------------------
         # Handle Payment Webhooks (Customer Charges)
         # ---------------------------------------------------------
+
+        # Route on the reference prefix rather than assuming every non-transfer event is an
+        # order payment. Legacy unprefixed references classify as ORDER, so payments already
+        # in flight when this deploys still resolve here.
+        kind = references.classify(reference)
+
+        if kind == references.DEPOSIT:
+            try:
+                deposit = WalletDeposit.objects.get(reference=reference)
+            except WalletDeposit.DoesNotExist:
+                logger.warning(f"WalletDeposit not found for reference: {reference}")
+                return Response({"status": "ok", "detail": "deposit not found"})
+
+            if deposit.verified:
+                return Response({"status": "ok", "detail": "deposit already verified"})
+
+            # Re-verify against Paystack rather than trusting the webhook body, matching
+            # how the order charge path below works.
+            try:
+                verify = Paystack().verify_payment(reference)
+            except Exception as e:
+                logger.error(f"Deposit webhook verify failed for {reference}: {e}", exc_info=True)
+                # Return 200 so Paystack retries later rather than hammering us now.
+                return Response({"status": "ok", "detail": "verification deferred"})
+
+            ok, error = _apply_verified_deposit(deposit, verify.get("data", {}))
+            if not ok:
+                logger.warning(f"Deposit {reference} rejected at webhook: {error}")
+                return Response({"status": "ok", "detail": f"deposit rejected: {error}"})
+
+            logger.info(f"Wallet deposit {reference} credited via webhook")
+            return Response({"status": "ok"})
+
+        if kind == references.INSTALLMENT:
+            # Installments have a dedicated webhook endpoint with its own verification.
+            logger.info(f"Installment reference {reference} received on the order webhook")
+            return Response({"status": "ok", "detail": "installment handled elsewhere"})
 
         with transaction.atomic():
             try:
                 payment = Payment.objects.select_for_update().get(reference=reference)
             except Payment.DoesNotExist:
                 logger.warning(f"Payment not found for reference: {reference}")
-                return Response({"status": "ok"})
+                return Response({"status": "ok", "detail": "payment not found"})
 
             try:
                 paystack = Paystack()
@@ -1780,6 +2089,13 @@ No authentication required (webhook signature validation instead)""",
             # Validate payment status
             if pdata.get("status") != "success":
                 logger.info(f"Payment {reference} not successful: {pdata.get('status')}")
+                # Paystack has told us this card leg will not succeed, so any wallet money
+                # held for the order goes back now. Leaving it for the expiry sweeper would
+                # keep the customer locked out of their own balance for half an hour after
+                # a failure we already know about.
+                wallet_checkout.release_for_order(
+                    payment.order, reason="Card payment failed"
+                )
                 TransactionLog.objects.create(
                     order=payment.order,
                     action=TransactionLog.Action.PAYMENT_FAILED,
@@ -1816,7 +2132,24 @@ No authentication required (webhook signature validation instead)""",
                 return Response({"status": "ok"})
 
             if not payment.verified:
-                payment.mark_as_successful()
+                try:
+                    payment.mark_as_successful()
+                except wallet_checkout.SettlementBlocked as exc:
+                    # Same guard as the verify endpoint. Raising out of _dispatch would
+                    # mark the PaystackEvent FAILED, which is what puts it on the admin
+                    # failed-payments screen for someone to refund.
+                    logger.error(f"Refusing to settle payment {reference}: {exc}")
+                    TransactionLog.objects.create(
+                        order=payment.order,
+                        action=TransactionLog.Action.PAYMENT_FAILED,
+                        level=TransactionLog.Level.ERROR,
+                        message=f"Card payment {reference} received but not settled: {exc}",
+                        related_user=payment.order.customer,
+                        amount=payment.amount,
+                        metadata={"reference": reference, "reason": str(exc)},
+                    )
+                    return Response({"status": "ok", "detail": f"not settled: {exc}"})
+
                 # Log successful payment
                 TransactionLog.objects.create(
                     order=payment.order,
@@ -1911,20 +2244,38 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
         import logging
         logger = logging.getLogger(__name__)
         
-        if refund.status != Refund.Status.PENDING:
-            return Response(
-                standardized_response(success=False, error="Already processed"),
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         with transaction.atomic():
+            # Re-read under a row lock. Checking status outside the transaction let two
+            # admins approving at the same moment both pass the guard: the wallet credits
+            # are saved by their deterministic idempotency keys, but the commission
+            # reversal below carries no such key and would run twice.
+            refund = Refund.objects.select_for_update().get(pk=refund.pk)
+            if refund.status != Refund.Status.PENDING:
+                return Response(
+                    standardized_response(success=False, error="Already processed"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             if action == "APPROVE":
                 order = refund.payment.order
                 customer = order.customer
                 
-                # Credit customer wallet with refund amount
+                # Credit customer wallet with refund amount, per originating bucket.
+                # Not a flat credit to WITHDRAWABLE: once an order can be paid from
+                # SPENDABLE, refunding the whole total as withdrawable would let a customer
+                # deposit, buy, cancel, and walk away with money they could send to a bank -
+                # converting funds that are spend-only by design into cash. The wallet-paid
+                # part goes back to the buckets it came from; the card part stays
+                # withdrawable, which is what it has always been.
                 wallet, _ = Wallet.objects.select_for_update().get_or_create(user=customer)
-                wallet.credit(refund.refunded_amount, source=f"Refund {refund.payment.reference}")
+                wallet_checkout.refund_to_source_buckets(
+                    wallet,
+                    order,
+                    refund.refunded_amount,
+                    source=f"Refund {refund.payment.reference}",
+                    idempotency_prefix=f"order-refund-{refund.payment.reference}",
+                    payment=refund.payment,
+                )
                 
                 # Reverse vendor commissions if order was delivered and vendors were credited
                 commission_reversal_amount = Decimal("0.00")
@@ -1946,7 +2297,14 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
                                 continue
                             platform_wallet, _ = Wallet.objects.select_for_update().get_or_create(user=platform_admin_user)
                             try:
-                                platform_wallet.debit(commission_amount, source=f"Commission Reversal - Refund {refund.payment.reference}")
+                                platform_wallet.debit(
+                                    commission_amount,
+                                    source=f"Commission Reversal - Refund {refund.payment.reference}",
+                                    entry_type=LedgerEntry.EntryType.COMMISSION_REVERSAL,
+                                    idempotency_key=f"commission-reversal-{refund.payment.reference}-{item.id}",
+                                    order=order,
+                                    payment=refund.payment,
+                                )
                                 vendors_affected.append({
                                     "admin_email": platform_admin_user.email,
                                     "vendor_id": vendor.id,
@@ -2090,6 +2448,328 @@ Request body: {"action": "APPROVE" or "REJECT", "rejection_reason": "optional"}"
             )
 
 # ----------------------
+# Wallet Deposits
+# ----------------------
+class InitializeWalletDepositView(APIView):
+    """
+    Start a wallet top-up: create a pending WalletDeposit and hand back a Paystack URL.
+
+    Nothing is credited here. The wallet only moves once the payment is verified, either
+    by the verify endpoint below or by the webhook - whichever arrives first.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'checkout'
+
+    @swagger_auto_schema(
+        operation_id="initialize_wallet_deposit",
+        operation_summary="Fund Wallet",
+        operation_description="Start a Paystack payment to top up the authenticated user's wallet.",
+        tags=["Wallet"],
+        request_body=WalletDepositInitSerializer,
+        responses={
+            201: openapi.Response("Deposit initialized"),
+            400: openapi.Response("Invalid amount"),
+        },
+    )
+    def post(self, request):
+        serializer = WalletDepositInitSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        amount = serializer.validated_data['amount']
+        reference = references.new_deposit_reference()
+
+        deposit = WalletDeposit.objects.create(
+            user=request.user,
+            reference=reference,
+            amount=amount,
+        )
+
+        try:
+            paystack = Paystack()
+            resp = paystack.initialize_payment(
+                email=request.user.email,
+                amount=amount,
+                reference=reference,
+                callback_url=_get_paystack_callback_url(request),
+            )
+        except Exception as e:
+            logger.error(f"Paystack init failed for deposit {reference}: {e}", exc_info=True)
+            deposit.mark_as_failed(f"Could not start payment: {e}")
+            return Response(
+                standardized_response(success=False, error="Could not start the payment. Please try again."),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        authorization_url = (resp.get("data") or {}).get("authorization_url", "")
+        deposit.authorization_url = authorization_url
+        deposit.save(update_fields=['authorization_url', 'updated_at'])
+
+        return Response(
+            standardized_response(
+                data={
+                    "reference": reference,
+                    "amount": str(amount),
+                    "authorization_url": authorization_url,
+                },
+                message="Deposit initialized",
+            ),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class VerifyWalletDepositView(APIView):
+    """
+    Verify a wallet top-up and credit the spendable bucket.
+
+    Re-verifies against Paystack rather than trusting the caller, and checks the amount
+    matches what we recorded - otherwise a client could initialise a 100 deposit, pay 100,
+    and have us credit whatever it claimed.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'payment_verification'
+
+    @swagger_auto_schema(
+        operation_id="verify_wallet_deposit",
+        operation_summary="Verify Wallet Deposit",
+        operation_description="Verify a wallet top-up by reference and credit the wallet.",
+        tags=["Wallet"],
+        manual_parameters=[
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING, required=True),
+        ],
+        responses={
+            200: openapi.Response("Deposit verified"),
+            400: openapi.Response("Verification failed"),
+            404: openapi.Response("Deposit not found"),
+        },
+    )
+    def get(self, request):
+        reference = request.query_params.get('reference')
+        if not reference:
+            return Response(
+                standardized_response(success=False, error="reference is required"),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            deposit = WalletDeposit.objects.get(reference=reference)
+        except WalletDeposit.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Deposit not found"),
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if deposit.user != request.user and not _is_platform_admin(request.user):
+            return Response(
+                standardized_response(success=False, error="Forbidden"),
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        if deposit.verified:
+            return Response(standardized_response(
+                data=WalletDepositSerializer(deposit).data,
+                message="Deposit already verified",
+            ))
+
+        try:
+            resp = Paystack().verify_payment(reference)
+        except Exception as e:
+            logger.error(f"Paystack verify failed for deposit {reference}: {e}", exc_info=True)
+            return Response(
+                standardized_response(success=False, error="Could not verify the payment. Please try again."),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ok, error = _apply_verified_deposit(deposit, resp.get("data", {}))
+        if not ok:
+            return Response(
+                standardized_response(success=False, error=error),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deposit.refresh_from_db()
+        return Response(standardized_response(
+            data=WalletDepositSerializer(deposit).data,
+            message="Wallet funded successfully",
+        ))
+
+
+def _apply_verified_deposit(deposit, pdata):
+    """
+    Shared by the verify endpoint and the webhook, which routinely race each other.
+
+    Returns (True, None) on success, (False, reason) otherwise. Safe to call twice -
+    mark_as_successful is idempotent at both the flag and the ledger level.
+    """
+    if pdata.get("status") != "success":
+        deposit.mark_as_failed(f"Paystack reported status {pdata.get('status')!r}")
+        return False, "Payment was not successful"
+
+    if pdata.get("currency") != EXPECTED_CURRENCY:
+        deposit.mark_as_failed(f"Unexpected currency {pdata.get('currency')!r}")
+        return False, "Invalid currency"
+
+    paid_amount = Decimal(str(pdata.get("amount", 0))) / Decimal(100)
+    if paid_amount != deposit.amount:
+        # Credit what was actually paid, never what was requested.
+        deposit.mark_as_failed(
+            f"Amount mismatch: paid {paid_amount}, expected {deposit.amount}"
+        )
+        return False, "Amount mismatch"
+
+    deposit.mark_as_successful(paystack_transaction_id=pdata.get("id", ""))
+
+    TransactionLog.objects.create(
+        order=None,
+        action=TransactionLog.Action.PAYMENT_RECEIVED,
+        level=TransactionLog.Level.SUCCESS,
+        message=f"Wallet funded with NGN {deposit.amount} ({deposit.reference})",
+        related_user=deposit.user,
+        amount=deposit.amount,
+        metadata={"reference": deposit.reference, "kind": "wallet_deposit"},
+    )
+    return True, None
+
+
+class WalletDepositListView(generics.ListAPIView):
+    """The authenticated user's top-up history."""
+    serializer_class = WalletDepositSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FinancePagination
+
+    @swagger_auto_schema(
+        operation_id="list_wallet_deposits",
+        operation_summary="List Wallet Deposits",
+        tags=["Wallet"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return WalletDeposit.objects.filter(user=self.request.user)
+
+
+class DepositRefundView(APIView):
+    """
+    Return deposited funds to the card they came from.
+
+    This is the only way deposited money leaves the wallet other than being spent.
+    Deposits are never withdrawable to a bank - that is what stops the wallet turning a
+    stolen card into a bank transfer - so a user who wants their top-up back, or who wants
+    to close an account holding one, has to come through here.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_scope = 'checkout'
+
+    @swagger_auto_schema(
+        operation_id="get_refundable_balance",
+        operation_summary="Refundable Deposit Balance",
+        operation_description=(
+            "How much of the authenticated user's deposited balance can be returned to "
+            "source, and the top-ups it would be taken from."
+        ),
+        tags=["Wallet"],
+        responses={200: openapi.Response("Refundable balance")},
+    )
+    def get(self, request):
+        from transactions.deposit_refund_service import refundable_deposits, total_refundable
+
+        wallet, _ = Wallet.objects.get_or_create(user=request.user)
+        deposits = refundable_deposits(request.user)
+
+        return Response(standardized_response(data={
+            "spendable_balance": str(wallet.spendable_balance),
+            "refundable_amount": str(total_refundable(request.user)),
+            "deposits": [
+                {
+                    "reference": d.reference,
+                    "amount": str(d.amount),
+                    "refundable_amount": str(d.refundable_amount),
+                    "paid_at": d.paid_at,
+                }
+                for d in deposits
+            ],
+        }))
+
+    @swagger_auto_schema(
+        operation_id="request_deposit_refund",
+        operation_summary="Refund Deposit to Card",
+        operation_description=(
+            "Debit the spendable balance and ask Paystack to return the money to the "
+            "original card. Settlement is confirmed asynchronously by webhook."
+        ),
+        tags=["Wallet"],
+        request_body=DepositRefundRequestSerializer,
+        responses={
+            201: openapi.Response("Refund requested"),
+            400: openapi.Response("Refund cannot be honoured"),
+        },
+    )
+    def post(self, request):
+        from transactions.deposit_refund_service import RefundError, request_refund
+
+        serializer = DepositRefundRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                standardized_response(success=False, error=serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            refunds, errors = request_refund(
+                request.user, serializer.validated_data['amount']
+            )
+        except RefundError as exc:
+            return Response(
+                standardized_response(success=False, error=str(exc)),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if errors and not any(r.status != DepositRefund.Status.FAILED for r in refunds):
+            # Every leg was rejected and each has already credited its debit back, so the
+            # balance is untouched. Say so rather than reporting a refund in progress.
+            return Response(
+                standardized_response(
+                    success=False,
+                    error="The refund could not be started. Your balance is unchanged.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            standardized_response(
+                data=DepositRefundSerializer(refunds, many=True).data,
+                message=(
+                    "Refund requested. It will appear on your card once your bank "
+                    "processes it, usually within a few working days."
+                ),
+            ),
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class DepositRefundListView(generics.ListAPIView):
+    """The authenticated user's refund history."""
+    serializer_class = DepositRefundSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    pagination_class = FinancePagination
+
+    @swagger_auto_schema(
+        operation_id="list_deposit_refunds",
+        operation_summary="List Deposit Refunds",
+        tags=["Wallet"],
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        return DepositRefund.objects.filter(user=self.request.user).select_related('deposit')
+
+
+# ----------------------
 # Wallet Management
 # ----------------------
 class CustomerWalletView(generics.RetrieveAPIView):
@@ -2140,6 +2820,197 @@ class WalletTransactionListView(generics.ListAPIView):
     def get_queryset(self):
         wallet = get_object_or_404(Wallet, user=self.request.user)
         return wallet.transactions.all().order_by('-created_at')
+
+
+class AdminLedgerView(generics.ListAPIView):
+    """
+    Every movement of money on the platform, filterable.
+
+    The ledger is append-only and is the source of truth: wallet balance columns are caches
+    derived from it. So this is the screen to reconcile against when a figure is disputed,
+    and it is deliberately read-only - there is no edit endpoint anywhere for these rows.
+
+    Filters (all optional, all combinable): date_from, date_to, entry_type (comma-separated),
+    direction, bucket, user (exact email), reference (contains), search (reference,
+    description, user email or name).
+    """
+    serializer_class = LedgerEntrySerializer
+    permission_classes = [IsAdmin]
+    pagination_class = FinancePagination
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger",
+        operation_summary="Finance Ledger",
+        operation_description=(
+            "Every credit and debit on the platform, filterable by date, type, direction, "
+            "bucket and user. Append-only and read-only."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('date_from', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='YYYY-MM-DD or YYYY-MM-DD HH:MM:SS'),
+            openapi.Parameter('date_to', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Inclusive; a bare date covers the whole day'),
+            openapi.Parameter('entry_type', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='One or more, comma-separated'),
+            openapi.Parameter('direction', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='CREDIT or DEBIT'),
+            openapi.Parameter('bucket', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='SPENDABLE or WITHDRAWABLE'),
+            openapi.Parameter('user', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Exact email'),
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter('search', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+        ],
+        responses={200: LedgerEntrySerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        from transactions.ledger_report import filtered_entries
+        return filtered_entries(self.request.query_params)
+
+
+class AdminLedgerSummaryView(APIView):
+    """
+    Totals for the same slice of the ledger the list endpoint would return.
+
+    Shares filtered_entries() with the list and the export, so the number on the summary
+    card and the rows beneath it can never disagree.
+    """
+    permission_classes = [IsAdmin]
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger_summary",
+        operation_summary="Finance Ledger Summary",
+        operation_description=(
+            "Credit, debit and net totals for a filtered slice of the ledger, broken down "
+            "by entry type and by bucket. Accepts the same filters as the ledger list."
+        ),
+        tags=["Admin Finance"],
+        responses={200: openapi.Response("Ledger totals")},
+    )
+    def get(self, request):
+        from transactions.ledger_report import applied_filters, filtered_entries, summarise
+
+        qs = filtered_entries(request.query_params)
+        return Response(standardized_response(data={
+            'filters': applied_filters(request.query_params),
+            **summarise(qs),
+        }))
+
+
+class AdminLedgerExportView(APIView):
+    """
+    Download the filtered ledger as CSV or XLSX.
+
+    Uses the same filter as the list and summary endpoints, so an export always contains
+    exactly the rows the operator was looking at. CSV streams and is unbounded; XLSX is
+    capped, because a spreadsheet is a zip finalised at the end and cannot be streamed.
+    """
+    permission_classes = [IsAdmin]
+    throttle_classes = [LedgerExportThrottle]
+
+    @swagger_auto_schema(
+        operation_id="admin_finance_ledger_export",
+        operation_summary="Export Finance Ledger",
+        operation_description=(
+            "Download the filtered ledger. `export_format=csv` (default) streams and has "
+            "no row limit; `export_format=xlsx` writes real numbers that sum in the sheet "
+            "but is capped."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('export_format', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='csv or xlsx'),
+        ],
+        responses={200: openapi.Response("Spreadsheet download")},
+    )
+    def get(self, request):
+        from transactions.ledger_report import export_csv, export_xlsx, filtered_entries
+
+        # Deliberately not `format`: DRF reserves that query parameter for content
+        # negotiation (URL_FORMAT_OVERRIDE), so ?format=csv never reaches this method -
+        # DRF looks for a renderer named "csv", finds none, and raises its own 404.
+        export_format = (request.query_params.get('export_format') or 'csv').lower()
+        if export_format not in ('csv', 'xlsx'):
+            return Response(
+                standardized_response(
+                    success=False, error="export_format must be csv or xlsx"
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = filtered_entries(request.query_params)
+        filename = f"dandelionz-ledger-{timezone.localtime().strftime('%Y%m%d-%H%M')}"
+
+        if export_format == 'xlsx':
+            return export_xlsx(qs, filename)
+        return export_csv(qs, filename)
+
+
+class AdminFailedPaymentsView(generics.ListAPIView):
+    """
+    Paystack events that never became a ledger entry.
+
+    Kept out of the ledger on purpose. The ledger records what actually happened to
+    balances; a failed or ignored webhook is money that Paystack told us about but which
+    landed nowhere, so including it would make every total on the finance screens wrong.
+    This is the list an operator works through to find payments that need chasing.
+
+    Defaults to the states worth attention - FAILED (the handler raised) and IGNORED (no
+    matching record, so nothing was applied) - since PROCESSED events are just the ledger
+    seen from the other side.
+    """
+    serializer_class = PaystackEventSerializer
+    permission_classes = [IsAdmin]
+    pagination_class = FinancePagination
+
+    @swagger_auto_schema(
+        operation_id="admin_failed_payments",
+        operation_summary="Failed & Unapplied Payments",
+        operation_description=(
+            "Paystack webhook deliveries that produced no ledger entry: handler failures "
+            "and events with no matching record. Filter with ?status= or ?event_type=."
+        ),
+        tags=["Admin Finance"],
+        manual_parameters=[
+            openapi.Parameter('status', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+                              description='Defaults to FAILED,IGNORED'),
+            openapi.Parameter('event_type', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+            openapi.Parameter('reference', openapi.IN_QUERY, type=openapi.TYPE_STRING),
+        ],
+        responses={200: PaystackEventSerializer(many=True)},
+    )
+    def get(self, request, *args, **kwargs):
+        return super().get(request, *args, **kwargs)
+
+    def get_queryset(self):
+        params = self.request.query_params
+        qs = PaystackEvent.objects.all().order_by('-received_at')
+
+        requested = params.get('status')
+        if requested:
+            wanted = [s.strip().upper() for s in requested.split(',') if s.strip()]
+            valid = [s for s in wanted if s in PaystackEvent.Status.values]
+            if valid:
+                qs = qs.filter(status__in=valid)
+        else:
+            qs = qs.filter(status__in=[
+                PaystackEvent.Status.FAILED,
+                PaystackEvent.Status.IGNORED,
+            ])
+
+        event_type = params.get('event_type')
+        if event_type:
+            qs = qs.filter(event_type__icontains=event_type.strip())
+
+        reference = params.get('reference')
+        if reference:
+            qs = qs.filter(reference__icontains=reference.strip())
+
+        return qs
 
 
 class AdminWalletListView(generics.ListAPIView):
@@ -2480,6 +3351,20 @@ class CustomerCancelOrderView(APIView):
                 reason="Cancelled by customer"
             )
 
+            # An order cancelled before it was paid may still be holding wallet money.
+            # Releasing here returns it immediately rather than leaving the customer
+            # locked out of their own balance until the sweeper runs.
+            wallet_checkout.release_for_order(order, reason="Order cancelled")
+
+            # Void the card leg too. Cancelling a PENDING split order hands the wallet half
+            # back, but the Paystack link stays live - paying it afterwards would settle an
+            # order that only ever collected the card half. Marking the payment CANCELLED
+            # is defence in depth behind settlement_blocker.
+            if previous_status == Order.Status.PENDING and hasattr(order, 'payment'):
+                if not order.payment.verified:
+                    order.payment.status = 'CANCELLED'
+                    order.payment.save(update_fields=['status'])
+
             # Create refund record only if order was paid
             refund = None
             needs_refund = (
@@ -2488,10 +3373,15 @@ class CustomerCancelOrderView(APIView):
                 and order.payment.verified
             )
             if needs_refund:
+                # payment.amount is only the card leg of a split payment, so refunding it
+                # alone would silently keep whatever the customer paid from their wallet.
+                refund_total = money(
+                    order.payment.amount + wallet_checkout.wallet_amount_paid(order)
+                )
                 refund = Refund.objects.create(
                     payment=order.payment,
                     reason="Customer cancelled order",
-                    refunded_amount=order.payment.amount,
+                    refunded_amount=refund_total,
                     status=Refund.Status.PENDING,
                 )
 
@@ -2501,7 +3391,7 @@ class CustomerCancelOrderView(APIView):
                     level=TransactionLog.Level.INFO,
                     message=f"Refund request created for cancelled order {order.order_id}",
                     related_user=request.user,
-                    amount=order.payment.amount,
+                    amount=refund_total,
                 )
 
                 # Notify all admins

@@ -30,8 +30,7 @@ class WithdrawalValidationTests(TestCase):
         
         # Create wallet with balance
         self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
-        self.wallet.balance = Decimal('100000.00')
-        self.wallet.save()
+        self.wallet.credit(Decimal('100000.00'), source='Test earnings')
         
         # Create vendor profile
         self.vendor = Vendor.objects.create(
@@ -173,8 +172,7 @@ class WithdrawalRequestCreationTests(TestCase):
         )
         
         self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
-        self.wallet.balance = Decimal('100000.00')
-        self.wallet.save()
+        self.wallet.credit(Decimal('100000.00'), source='Test earnings')
         
         self.vendor = Vendor.objects.create(
             user=self.user,
@@ -296,8 +294,7 @@ class WithdrawalApprovalTests(TestCase):
         )
         
         self.wallet, _ = Wallet.objects.get_or_create(user=self.vendor_user)
-        self.wallet.balance = Decimal('100000.00')
-        self.wallet.save()
+        self.wallet.credit(Decimal('100000.00'), source='Test earnings')
         
         self.vendor = Vendor.objects.create(
             user=self.vendor_user,
@@ -428,8 +425,7 @@ class WithdrawalEdgeCasesTests(TestCase):
             password='test123'
         )
         self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
-        self.wallet.balance = Decimal('1000.00')
-        self.wallet.save()
+        self.wallet.credit(Decimal('1000.00'), source='Test earnings')
         
         self.pin_obj = PaymentPIN()
         self.pin_obj.user = self.user
@@ -470,7 +466,9 @@ class WithdrawalEdgeCasesTests(TestCase):
     
     def test_withdrawal_with_many_decimal_places(self):
         """Test withdrawal with precise decimal amounts"""
-        amount = Decimal('123.45')
+        # Above the minimum withdrawal but within this fixture's 1,000 balance, while
+        # preserving the fractional part that is the thing under test.
+        amount = Decimal('623.45')
         
         payout, error = PayoutService.create_withdrawal_request(
             user=self.user,
@@ -491,8 +489,7 @@ class WithdrawalReferenceTests(TestCase):
         """Set up test fixtures"""
         self.user = User.objects.create_user(email='test@test.com', password='test123')
         self.wallet, _ = Wallet.objects.get_or_create(user=self.user)
-        self.wallet.balance = Decimal('100000.00')
-        self.wallet.save()
+        self.wallet.credit(Decimal('100000.00'), source='Test earnings')
         
         self.pin_obj = PaymentPIN()
         self.pin_obj.user = self.user
@@ -516,16 +513,18 @@ class WithdrawalReferenceTests(TestCase):
         refs = set()
         
         for i in range(5):
+            # Above settings.MIN_WITHDRAWAL_NGN; the amount is incidental to what this
+            # test checks, which is that each request gets a distinct reference.
             payout, _ = PayoutService.create_withdrawal_request(
                 user=self.user,
-                amount=Decimal('100.00'),
+                amount=Decimal('500.00'),
                 bank_name='Bank',
                 account_number=f'123{i}',
                 account_name='User'
             )
             refs.add(payout.reference)
             # Refund for next iteration
-            self.wallet.credit(Decimal('100.00'))
+            self.wallet.credit(Decimal('500.00'))
         
         # All references should be unique
         self.assertEqual(len(refs), 5)

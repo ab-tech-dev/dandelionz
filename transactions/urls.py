@@ -9,7 +9,11 @@ from .views import (
     CustomerWalletView, WalletTransactionListView, AdminWalletListView,
     InstallmentCheckoutView, InstallmentPlanListView, InstallmentPlanDetailView,
     InstallmentPaymentListView, InitializeInstallmentPaymentView, VerifyInstallmentPaymentView, InstallmentWebhookView,
-    CustomerCancelOrderView, PaystackMobileReturnView
+    CustomerCancelOrderView, PaystackMobileReturnView,
+    InitializeWalletDepositView, VerifyWalletDepositView, WalletDepositListView,
+    DepositRefundView, DepositRefundListView,
+    AdminLedgerView, AdminLedgerSummaryView, AdminLedgerExportView,
+    AdminFailedPaymentsView
 )
 from .delivery_views import CalculateDeliveryFeeView, CalculateMultipleFeesView
 
@@ -48,7 +52,25 @@ urlpatterns = [
     # Wallet endpoints
     path('wallet/', CustomerWalletView.as_view(), name='customer-wallet'),
     path('wallet/transactions/', WalletTransactionListView.as_view(), name='wallet-transactions'),
+
+    # Wallet top-ups
+    path('wallet/deposit/', InitializeWalletDepositView.as_view(), name='wallet-deposit-init'),
+    path('wallet/deposit/verify/', VerifyWalletDepositView.as_view(), name='wallet-deposit-verify'),
+    path('wallet/deposits/', WalletDepositListView.as_view(), name='wallet-deposit-list'),
+
+    # Refunding deposits to source - the only way deposited funds leave the wallet
+    # without being spent, since they are never withdrawable to a bank.
+    path('wallet/deposit/refund/', DepositRefundView.as_view(), name='wallet-deposit-refund'),
+    path('wallet/deposit/refunds/', DepositRefundListView.as_view(), name='wallet-deposit-refund-list'),
     path('admin/wallets/', AdminWalletListView.as_view(), name='admin-wallet-list'),
+
+    # Finance ledger. The list, summary and export share one filter implementation, so an
+    # export always contains exactly the rows the operator was looking at.
+    path('admin/ledger/', AdminLedgerView.as_view(), name='admin-ledger'),
+    path('admin/ledger/summary/', AdminLedgerSummaryView.as_view(), name='admin-ledger-summary'),
+    path('admin/ledger/export/', AdminLedgerExportView.as_view(), name='admin-ledger-export'),
+    # Deliberately separate from the ledger: these never moved any money.
+    path('admin/failed-payments/', AdminFailedPaymentsView.as_view(), name='admin-failed-payments'),
 
     # Delivery fee endpoints
     path('delivery/calculate-fee/', CalculateDeliveryFeeView.as_view(), name='calculate-delivery-fee'),

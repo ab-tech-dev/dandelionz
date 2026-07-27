@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from .models import (
-    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund, 
-    Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory
+    Order, OrderItem, Payment, ShippingAddress, TransactionLog, Refund,
+    Wallet, WalletTransaction, InstallmentPlan, InstallmentPayment, OrderStatusHistory,
+    WalletDeposit, DepositRefund, LedgerEntry, PaystackEvent
 )
 from store.models import Product
 from decimal import Decimal
@@ -557,3 +558,137 @@ class CommissionAnalyticsResponseSerializer(serializers.Serializer):
     by_vendor = serializers.ListField(child=serializers.DictField())
     top_vendors = serializers.ListField(child=serializers.DictField())
     commission_rate = serializers.CharField()
+
+
+class WalletDepositInitSerializer(serializers.Serializer):
+    """Request body for starting a wallet top-up."""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def validate_amount(self, value):
+        from django.conf import settings
+
+        minimum = getattr(settings, 'MIN_DEPOSIT_NGN', Decimal('100'))
+        maximum = getattr(settings, 'MAX_DEPOSIT_NGN', Decimal('500000'))
+
+        if value <= 0:
+            raise serializers.ValidationError("Deposit amount must be greater than zero.")
+        if value < minimum:
+            raise serializers.ValidationError(
+                f"The minimum deposit is NGN {minimum:,.2f}."
+            )
+        if value > maximum:
+            raise serializers.ValidationError(
+                f"The maximum deposit is NGN {maximum:,.2f}."
+            )
+        return value
+
+
+class WalletDepositSerializer(serializers.ModelSerializer):
+    """A wallet top-up record."""
+
+    class Meta:
+        model = WalletDeposit
+        fields = [
+            'id', 'reference', 'amount', 'status', 'authorization_url',
+            'paid_at', 'created_at',
+        ]
+        read_only_fields = fields
+
+
+class DepositRefundRequestSerializer(serializers.Serializer):
+    """Request body for returning deposited funds to their original card."""
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Refund amount must be greater than zero.")
+        return value
+
+
+class DepositRefundSerializer(serializers.ModelSerializer):
+    """A refund of deposited funds back to source."""
+    deposit_reference = serializers.CharField(source='deposit.reference', read_only=True)
+
+    class Meta:
+        model = DepositRefund
+        fields = [
+            'id', 'reference', 'deposit_reference', 'amount', 'status',
+            'failure_reason', 'created_at', 'settled_at',
+        ]
+        read_only_fields = fields
+
+
+class CheckoutOptionsSerializer(serializers.Serializer):
+    """
+    How the customer wants to pay. Both fields optional, so the existing card-only
+    checkout body (which is empty) stays valid.
+    """
+    use_wallet = serializers.BooleanField(required=False, default=False)
+    wallet_amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, allow_null=True,
+        help_text="Omit to put as much of the wallet towards the order as it can cover.",
+    )
+
+    def validate_wallet_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError("Wallet amount must be greater than zero.")
+        return value
+
+    def validate(self, data):
+        if data.get('wallet_amount') is not None and not data.get('use_wallet'):
+            raise serializers.ValidationError(
+                "Set use_wallet to true to pay with your wallet balance."
+            )
+        return data
+
+
+class LedgerEntrySerializer(serializers.ModelSerializer):
+    """
+    One movement of money, as the admin finance ledger shows it.
+
+    Flattens the wallet owner and the linked order/payout onto the row: the ledger is read
+    as a table, and an operator chasing a figure should not have to make another request to
+    find out whose money it was.
+    """
+    user_email = serializers.EmailField(source='wallet.user.email', read_only=True)
+    user_name = serializers.CharField(source='wallet.user.full_name', read_only=True)
+    entry_type_display = serializers.CharField(source='get_entry_type_display', read_only=True)
+    order_id = serializers.CharField(source='order.order_id', read_only=True, default=None)
+    payout_reference = serializers.CharField(
+        source='payout_request.reference', read_only=True, default=None
+    )
+
+    # Deliberately no signed_amount: `direction` already carries the sign and both clients
+    # apply it themselves for display. Serving a pre-signed copy meant a third place
+    # decided what sign a debit has - alongside the two clients and the export - which is
+    # the drift this module exists to avoid. The export computes its own in _row_values
+    # because a spreadsheet column has to sum without a formula.
+    class Meta:
+        model = LedgerEntry
+        fields = [
+            'id', 'created_at', 'user_email', 'user_name',
+            'direction', 'bucket', 'entry_type', 'entry_type_display',
+            'amount', 'balance_after',
+            'reference', 'description', 'order_id', 'payout_reference',
+            'operation_key',
+        ]
+        read_only_fields = fields
+
+
+class PaystackEventSerializer(serializers.ModelSerializer):
+    """
+    A webhook delivery that did not produce a ledger entry.
+
+    This is the failed-payments view: money that Paystack told us about but which never
+    landed anywhere. It is deliberately separate from the ledger rather than mixed into it -
+    the ledger is what actually happened to balances, and putting failures in it would make
+    every total wrong.
+    """
+
+    class Meta:
+        model = PaystackEvent
+        fields = [
+            'id', 'event_id', 'event_type', 'reference', 'status',
+            'error_message', 'signature_valid', 'received_at', 'processed_at',
+        ]
+        read_only_fields = fields
