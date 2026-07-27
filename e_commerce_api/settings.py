@@ -240,6 +240,10 @@ REST_FRAMEWORK = {
         # Full financial history plus every user's email, in one file. Deliberately
         # tighter than checkout: it is a bulk data export, not an interactive action.
         'ledger_export': '6/min',
+        # Interaction tracking fires once per product a shopper opens, so it
+        # needs far more headroom than the default 'anon'/'user' rates.
+        'interaction_event': '120/min',  # Interaction tracking (authenticated)
+        'interaction_event_anon': '120/min',  # Interaction tracking (anonymous)
     }
 }
 

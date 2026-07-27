@@ -7,8 +7,10 @@ from .views import (
     PendingProductsListView, ApproveProductView, RejectProductView, ApprovalStatsView,
     VendorDraftProductsView, VendorDraftProductDetailView, SubmitDraftProductView, UpdateDraftProductView, DeleteDraftProductView,
     CategoryListCreateView, CategoryDetailView, ProductStatsView, ProductFilteredView,
+    ProductSearchSuggestionsView,
     ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
-    VendorProductsListView, VendorProductDetailView
+    VendorProductsListView, VendorProductDetailView,
+    RecommendationsView, RecordInteractionView
 )
 
 urlpatterns = [
@@ -24,6 +26,7 @@ urlpatterns = [
     path('products/stats/', ProductStatsView.as_view(), name='product-stats'),
     path('products/summary/', ProductSummaryView.as_view(), name='product-summary'),
     path('products/filtered/', ProductFilteredView.as_view(), name='product-filtered'),
+    path('products/suggestions/', ProductSearchSuggestionsView.as_view(), name='product-search-suggestions'),
     
     # ==================
     # PRODUCTS - CRUD
@@ -33,6 +36,12 @@ urlpatterns = [
     path('products/<slug:slug>/', ProductDetailView.as_view(), name='product-detail'),
     path('products/<slug:slug>/patch/', PatchProductView.as_view(), name='patch-product'),
     path("products/<slug:slug>/delete/", ProductDeleteView.as_view(), name="product-delete"),
+
+    # ==================
+    # RECOMMENDATIONS & INTERACTION TRACKING
+    # ==================
+    path('recommendations/', RecommendationsView.as_view(), name='recommendations'),
+    path('events/', RecordInteractionView.as_view(), name='record-interaction'),
 
     # ==================
     # CART

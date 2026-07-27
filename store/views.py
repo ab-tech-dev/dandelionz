@@ -1,9 +1,12 @@
 import logging
 import json
+import hashlib
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework.exceptions import PermissionDenied
 from .models import Product, Category
+from .search import search_products
+from .recommendations import MAX_LIMIT, RECOMMENDATION_TYPES, clamp_limit, recommend
 from authentication.core.base_view import BaseAPIView
 from .serializers import ProductSerializer, CategorySerializer
 from authentication.core.response import standardized_response
@@ -12,8 +15,10 @@ from rest_framework import generics
 from django_filters.rest_framework import DjangoFilterBackend
 from django_filters import FilterSet, NumberFilter, CharFilter
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiExample, OpenApiResponse
 from django.utils import timezone
+from django.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +74,11 @@ class ProductFilterSet(FilterSet):
 class ProductListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = ProductSerializer
-    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    # SearchFilter is deliberately absent: `search` is handled by
+    # store.search.search_products, which ranks by relevance and also covers
+    # brand, tags and category name. See filter_queryset below.
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
     filterset_class = ProductFilterSet
-    search_fields = ['name', 'description']
     ordering_fields = ['price', 'name']
 
     def get_queryset(self):
@@ -79,7 +86,17 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
         return Product.objects.filter(
             approval_status='approved',
             publish_status='submitted'
-        ).all()
+        ).select_related('category').all()
+
+    def filter_queryset(self, queryset):
+        queryset = super().filter_queryset(queryset)
+        # An explicit ?ordering= wins; relevance ordering only fills the gap.
+        explicit_ordering = self.request.query_params.get('ordering')
+        return search_products(
+            queryset,
+            self.request.query_params.get('search'),
+            apply_ordering=not explicit_ordering,
+        )
 
     @extend_schema(
         parameters=[
@@ -88,11 +105,11 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
             OpenApiParameter(name='min_price', description='Filter by minimum price', required=False, type=float),
             OpenApiParameter(name='max_price', description='Filter by maximum price', required=False, type=float),
             OpenApiParameter(name='category', description='Filter by category', required=False, type=str),
-            OpenApiParameter(name='search', description='Search by name or description', required=False, type=str),
-            OpenApiParameter(name='ordering', description='Order by price or name', required=False, type=str),
+            OpenApiParameter(name='search', description='Search across name, brand, tags, category and description. Results are ranked by relevance.', required=False, type=str),
+            OpenApiParameter(name='ordering', description='Order by price or name. Overrides relevance ordering when searching.', required=False, type=str),
         ],
         responses={200: ProductSerializer(many=True)},
-        description="Retrieve a list of products. Supports filtering by exact price or price range, search, and ordering. Only shows approved products."
+        description="Retrieve a list of products. Supports filtering by exact price or price range, relevance-ranked search, and ordering. Only shows approved products."
     )
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
@@ -102,6 +119,81 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
             return self.get_paginated_response(standardized_response(data=serializer.data))
         serializer = self.get_serializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))
+
+
+class ProductSearchSuggestionsView(BaseAPIView):
+    """Typeahead suggestions for the search page. Intentionally lightweight."""
+    permission_classes = [AllowAny]
+
+    PRODUCT_LIMIT = 8
+    CATEGORY_LIMIT = 4
+    MIN_QUERY_LENGTH = 2
+    CACHE_SECONDS = 300
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(name='q', description='Partial search query (minimum 2 characters)', required=True, type=str),
+        ],
+        description="Return product and category name suggestions for search-as-you-type."
+    )
+    def get(self, request):
+        query = (request.query_params.get('q') or '').strip()
+
+        # Single characters match nearly everything, so they cost a lot and
+        # suggest nothing useful.
+        if len(query) < self.MIN_QUERY_LENGTH:
+            return Response(standardized_response(data={'products': [], 'categories': []}))
+
+        # Hash rather than interpolate: raw query text can exceed Django's 250
+        # character key limit and may contain spaces or control characters,
+        # which are invalid keys on some cache backends.
+        query_digest = hashlib.sha256(query.lower().encode('utf-8')).hexdigest()
+        cache_key = f'search:suggest:{query_digest}'
+
+        # Cache ids, not the rendered payload, and re-resolve them through the
+        # visibility filters below on every hit. Caching names and slugs
+        # directly would keep suggesting a product for the rest of the TTL after
+        # it was rejected or unpublished.
+        cached_ids = cache.get(cache_key)
+        if cached_ids is not None:
+            product_ids, category_ids = cached_ids
+        else:
+            product_ids = list(
+                search_products(
+                    self._visible_products(), query
+                ).values_list('id', flat=True)[:self.PRODUCT_LIMIT]
+            )
+            category_ids = list(
+                self._visible_categories(query).values_list('id', flat=True)[:self.CATEGORY_LIMIT]
+            )
+            cache.set(cache_key, (product_ids, category_ids), self.CACHE_SECONDS)
+
+        return Response(standardized_response(data={
+            'products': self._as_suggestions(self._visible_products(), product_ids),
+            'categories': self._as_suggestions(self._visible_categories(query), category_ids),
+        }))
+
+    @staticmethod
+    def _visible_products():
+        return Product.objects.filter(
+            approval_status='approved',
+            publish_status='submitted'
+        ).select_related('category')
+
+    @staticmethod
+    def _visible_categories(query):
+        return Category.objects.filter(is_active=True, name__icontains=query)
+
+    @staticmethod
+    def _as_suggestions(queryset, ids):
+        """Resolve cached ids back to name/slug pairs, preserving rank order."""
+        if not ids:
+            return []
+        by_id = {row.id: row for row in queryset.filter(id__in=ids)}
+        return [
+            {'name': by_id[i].name, 'slug': by_id[i].slug}
+            for i in ids if i in by_id
+        ]
 
 
 class ProductDetailView(BaseAPIView):
@@ -2535,3 +2627,233 @@ class VendorProductDetailView(BaseAPIView):
             ),
             status=status.HTTP_200_OK
         )
+
+
+# ======================================================
+# RECOMMENDATIONS & INTERACTION TRACKING
+# ======================================================
+class InteractionEventAnonThrottle(AnonRateThrottle):
+    """
+    Rate limit for anonymous interaction tracking.
+
+    The default 'anon' rate (100/hour) is tuned for meaningful writes; a view
+    event fires on every product a visitor opens, so ordinary browsing would
+    trip it. Limits: 120 requests per minute per IP.
+    """
+    scope = 'interaction_event_anon'
+
+
+class InteractionEventUserThrottle(UserRateThrottle):
+    """
+    Rate limit for authenticated interaction tracking.
+    Limits: 120 requests per minute per user.
+    """
+    scope = 'interaction_event'
+
+
+@extend_schema(
+    tags=["Recommendations"],
+    description=(
+        "Record a lightweight product interaction (view or cart add). Fire-and-forget: "
+        "clients should not wait on or retry this call."
+    ),
+    request={
+        "application/json": {
+            "type": "object",
+            "properties": {
+                "product": {"type": "string", "description": "Product slug"},
+                "event_type": {"type": "string", "enum": ["view", "cart_add"]},
+            },
+            "required": ["product", "event_type"],
+        }
+    },
+    examples=[
+        OpenApiExample(
+            "Record a product view",
+            summary="Track that a product page was opened",
+            value={"product": "wireless-headphones", "event_type": "view"}
+        )
+    ],
+    responses={
+        202: OpenApiResponse(description="Event accepted"),
+        400: OpenApiResponse(description="Unknown product or invalid event type"),
+    },
+)
+class RecordInteractionView(BaseAPIView):
+    """
+    Accept one interaction event and return immediately.
+
+    Deliberately cheap: one validated INSERT, no serializer, no fan-out. A bad
+    slug is a 400 rather than an exception, and an unexpected write failure is
+    swallowed into a 202 -- losing an analytics row must never surface as an
+    error on the client's critical path.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [InteractionEventAnonThrottle, InteractionEventUserThrottle]
+
+    def _session_key(self, request):
+        """
+        Session key used to group anonymous activity.
+
+        Creates a session only when the visitor does not already have one, so
+        this costs one extra write per visitor rather than one per event.
+        """
+        session = getattr(request, 'session', None)
+        if session is None:
+            return ''
+
+        try:
+            if not session.session_key:
+                session.create()
+            return session.session_key or ''
+        except Exception:
+            # Session storage problems must not fail an analytics write.
+            logger.warning("Could not resolve session key for interaction event", exc_info=True)
+            return ''
+
+    def post(self, request):
+        from .models import InteractionEvent
+
+        slug = request.data.get('product')
+        event_type = request.data.get('event_type')
+
+        valid_types = [choice[0] for choice in InteractionEvent.EVENT_TYPES]
+        if event_type not in valid_types:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"event_type must be one of: {', '.join(valid_types)}"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not slug:
+            return Response(
+                standardized_response(success=False, error="Product slug is required"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Scoped to publicly visible products, and deliberately indistinguishable
+        # from a slug that does not exist: responding differently would let a
+        # caller enumerate unpublished products by probing likely slugs.
+        # values_list avoids loading a whole Product row just to get its id.
+        product_id = (
+            Product.objects
+            .filter(slug=slug, approval_status='approved', publish_status='submitted')
+            .values_list('id', flat=True)
+            .first()
+        )
+        if product_id is None:
+            return Response(
+                standardized_response(success=False, error="Product not found"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        session_key = '' if user else self._session_key(request)
+
+        try:
+            InteractionEvent.objects.create(
+                product_id=product_id,
+                user=user,
+                session_key=session_key,
+                event_type=event_type,
+            )
+        except Exception:
+            # Accepted-but-dropped is the right trade here: the caller is not
+            # waiting on this and cannot act on the failure.
+            logger.warning("Failed to record interaction event for product %s", slug, exc_info=True)
+
+        return Response(
+            standardized_response(message="Event recorded"),
+            status=status.HTTP_202_ACCEPTED
+        )
+
+
+@extend_schema(
+    tags=["Recommendations"],
+    description=(
+        "Product recommendations. 'related' needs a product slug; 'for-you' personalizes for the "
+        "authenticated user and falls back to trending for anonymous callers; 'trending' works with "
+        "no personalization data and is the fallback for everything else."
+    ),
+    parameters=[
+        OpenApiParameter(name='type', description="One of: related, for-you, trending", required=True, type=str),
+        OpenApiParameter(name='product', description="Product slug (required when type=related)", required=False, type=str),
+        OpenApiParameter(name='category', description="Category slug (optional, only used when type=trending)", required=False, type=str),
+        OpenApiParameter(name='limit', description="Number of products to return, 1-24 (default 8)", required=False, type=int),
+    ],
+    responses={
+        200: ProductSerializer(many=True),
+        400: OpenApiResponse(description="Invalid type, limit, or product slug"),
+    },
+)
+class RecommendationsView(BaseAPIView):
+    """Read-only recommendations, serialized identically to /store/products/."""
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        kind = (request.query_params.get('type') or '').strip()
+        if kind not in RECOMMENDATION_TYPES:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"type must be one of: {', '.join(RECOMMENDATION_TYPES)}"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        limit = clamp_limit(request.query_params.get('limit'))
+        if limit is None:
+            return Response(
+                standardized_response(
+                    success=False,
+                    error=f"limit must be a positive integer (maximum {MAX_LIMIT})"
+                ),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        product = None
+        if kind == 'related':
+            slug = (request.query_params.get('product') or '').strip()
+            if not slug:
+                return Response(
+                    standardized_response(success=False, error="product slug is required when type=related"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            # Scoped to publicly visible products, and deliberately
+            # indistinguishable from a slug that does not exist: responding
+            # differently would let a caller enumerate unpublished products by
+            # probing likely slugs.
+            product = (
+                Product.objects
+                .filter(slug=slug, approval_status='approved', publish_status='submitted')
+                .select_related('category')
+                .first()
+            )
+            if product is None:
+                return Response(
+                    standardized_response(success=False, error="Product not found"),
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        user = request.user if request.user and request.user.is_authenticated else None
+        try:
+            products = recommend(
+                kind,
+                user=user,
+                product=product,
+                category=(request.query_params.get('category') or '').strip() or None,
+                limit=limit,
+            )
+        except ValueError as exc:
+            # recommend() rejects argument combinations it cannot honour, such as
+            # a category on a type that does not support one. Those are caller
+            # mistakes, not server faults.
+            return Response(
+                standardized_response(success=False, error=str(exc)),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = ProductSerializer(products, many=True)
+        return Response(standardized_response(data=serializer.data))
