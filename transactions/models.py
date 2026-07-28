@@ -1264,7 +1264,7 @@ class LedgerEntry(models.Model):
         ordering = ['-created_at', '-id']
         verbose_name_plural = 'Ledger entries'
         constraints = [
-            models.CheckConstraint(check=models.Q(amount__gt=0), name='ledger_amount_positive'),
+            models.CheckConstraint(condition=models.Q(amount__gt=0), name='ledger_amount_positive'),
         ]
         indexes = [
             models.Index(fields=['wallet', '-created_at']),
