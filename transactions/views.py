@@ -1241,7 +1241,8 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
 
                 # 6. Create individual installment payment records
                 current_date = timezone.now()
-                interval = timedelta(days=30)  # 30 days between each installment
+                interval_days = InstallmentPlan.DURATION_INTERVAL_DAYS.get(duration, 30)
+                interval = timedelta(days=interval_days)
 
                 for i in range(1, num_installments + 1):
                     due_date = current_date + (interval * i)
@@ -1257,11 +1258,20 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
 
                 # 7. Initialize the first payment as a charge against the plan's running balance.
                 # The advisory schedule rows above just describe the plan; the money moves through
-                # InstallmentCharge, applied to amount_paid on verify.
+                # InstallmentCharge, applied to amount_paid on verify. The customer may choose to
+                # pay more (or less) than the advisory monthly amount right away - only capped at
+                # the plan total, same as follow-up payments.
+                requested_amount = serializer.validated_data.get('amount')
+                if requested_amount is not None and requested_amount > order.total_price:
+                    raise ValueError(
+                        f"That is more than the ₦{order.total_price:,.2f} order total."
+                    )
+                first_payment_amount = requested_amount if requested_amount is not None else base_amount
+
                 first_charge = InstallmentCharge.objects.create(
                     plan=installment_plan,
                     reference=references.new_installment_reference(installment_plan.id),
-                    amount=base_amount,
+                    amount=first_payment_amount,
                     method=InstallmentCharge.Method.CARD,
                 )
                 paystack = Paystack()
@@ -1332,6 +1342,11 @@ class InstallmentPlanListView(generics.ListAPIView):
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        response.data = standardized_response(data=response.data)
+        return response
+
     def get_queryset(self):
         user = self.request.user
         if _is_platform_admin(user):
@@ -1360,6 +1375,11 @@ class InstallmentPlanDetailView(generics.RetrieveAPIView):
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
 
+    def retrieve(self, request, *args, **kwargs):
+        response = super().retrieve(request, *args, **kwargs)
+        response.data = standardized_response(data=response.data)
+        return response
+
     def get_queryset(self):
         user = self.request.user
         if _is_platform_admin(user):
@@ -1387,15 +1407,20 @@ class InstallmentPaymentListView(generics.ListAPIView):
     def get(self, request, *args, **kwargs):
         return super().get(request, *args, **kwargs)
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        response.data = standardized_response(data=response.data)
+        return response
+
     def get_queryset(self):
         plan_id = self.kwargs.get("plan_id")
         user = self.request.user
-        
+
         if _is_platform_admin(user):
             return InstallmentPayment.objects.filter(
                 installment_plan_id=plan_id
             ).order_by("payment_number")
-        
+
         return InstallmentPayment.objects.filter(
             installment_plan_id=plan_id,
             installment_plan__order__customer=user

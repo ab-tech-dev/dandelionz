@@ -481,19 +481,8 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
         from datetime import timedelta
         
         current_date = timezone.now()
-        
-        # Determine interval based on duration
-        if duration == '1_month':
-            interval = timedelta(days=30)
-        elif duration == '3_months':
-            interval = timedelta(days=30)
-        elif duration == '6_months':
-            interval = timedelta(days=30)
-        elif duration == '8_months':
-            interval = timedelta(days=30)
-        else:
-            interval = timedelta(days=30)
-        
+        interval = timedelta(days=InstallmentPlan.DURATION_INTERVAL_DAYS.get(duration, 30))
+
         for i in range(1, num_installments + 1):
             due_date = current_date + (interval * i)
             InstallmentPayment.objects.create(
@@ -510,7 +499,12 @@ class InstallmentPlanSerializer(serializers.ModelSerializer):
 class InstallmentCheckoutSerializer(serializers.Serializer):
     """Serializer for creating an order with installment plan"""
     duration = serializers.ChoiceField(choices=InstallmentPlan.DurationChoice.choices)
-    
+    # Optional: how much the customer wants to pay right now. Falls back to the plan's
+    # advisory per-month amount (total / number_of_installments) when omitted.
+    amount = serializers.DecimalField(
+        max_digits=12, decimal_places=2, required=False, min_value=Decimal('0.01'),
+    )
+
     def validate_duration(self, value):
         if value not in InstallmentPlan.DURATION_INSTALLMENTS:
             raise serializers.ValidationError("Invalid installment duration.")

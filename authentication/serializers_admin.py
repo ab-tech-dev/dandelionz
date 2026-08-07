@@ -101,19 +101,36 @@ class AdminDashboardOrderStatusHistorySerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'changed_at']
 
 
+def _installment_plan_summary(obj):
+    """Lean, read-only installment progress for admin order views. None when not on a plan."""
+    plan = getattr(obj, 'installment_plan', None)
+    if not plan:
+        return None
+    return {
+        'id': plan.id,
+        'status': plan.status,
+        'total_amount': float(plan.total_amount),
+        'amount_paid': float(plan.amount_paid),
+        'balance_remaining': float(plan.balance_remaining),
+        'paid_fraction': float(round(plan.paid_fraction, 4)),
+    }
+
+
 class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
     """Lightweight order info for admin list views"""
     customer = serializers.SerializerMethodField()
     current_status = serializers.CharField(source='status', read_only=True)
-    
+    installment_plan = serializers.SerializerMethodField()
+
     class Meta:
         model = Order
         fields = [
             'order_id', 'customer', 'current_status', 'total_price',
-            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at', 'status'
+            'delivery_fee', 'payment_status', 'ordered_at', 'updated_at', 'status',
+            'installment_plan',
         ]
         read_only_fields = fields
-    
+
     def get_customer(self, obj):
         """Return customer object with necessary details"""
         if obj.customer:
@@ -124,6 +141,9 @@ class AdminDashboardOrderListSerializer(serializers.ModelSerializer):
             }
         return None
 
+    def get_installment_plan(self, obj):
+        return _installment_plan_summary(obj)
+
 
 class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     """Full order details for admin inspection"""
@@ -131,7 +151,9 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
     order_items = AdminDashboardOrderItemSerializer(many=True, read_only=True)
     status_history = AdminDashboardOrderStatusHistorySerializer(many=True, read_only=True)
     current_status = serializers.CharField(source='status', read_only=True)
-    
+    installment_plan = serializers.SerializerMethodField()
+    shipping_address = serializers.SerializerMethodField()
+
     class Meta:
         model = Order
         fields = [
@@ -139,9 +161,29 @@ class AdminDashboardOrderDetailSerializer(serializers.ModelSerializer):
             'total_price', 'delivery_fee', 'delivery_fee_paid', 'discount', 'payment_status',
             'expected_delivery_earliest', 'expected_delivery_latest',
             'tracking_number', 'ordered_at', 'updated_at', 'status',
-            'order_items', 'status_history'
+            'order_items', 'status_history', 'installment_plan',
+            'shipping_address', 'customer_lat', 'customer_lng',
         ]
         read_only_fields = fields
+
+    def get_shipping_address(self, obj):
+        """The customer's delivery destination - needed to know where to ship and to make
+        sense of the calculated delivery fee. Was never exposed here; admins saw nothing."""
+        address = getattr(obj, 'shipping_address', None)
+        if not address:
+            return None
+        return {
+            'full_name': address.full_name,
+            'address': address.address,
+            'city': address.city,
+            'state': address.state,
+            'country': address.country,
+            'postal_code': address.postal_code,
+            'phone_number': address.phone_number,
+        }
+
+    def get_installment_plan(self, obj):
+        return _installment_plan_summary(obj)
     
     def get_customer(self, obj):
         """Return customer object with all necessary details"""
