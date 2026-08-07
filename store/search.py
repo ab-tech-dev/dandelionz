@@ -17,7 +17,7 @@ constructs, and trigram support is detected at runtime -- to enable it, run
 import logging
 
 from django.db import connection
-from django.db.models import Case, F, FloatField, Q, Value, When
+from django.db.models import Case, F, FloatField, Q, TextField, Value, When
 from django.db.models.functions import Coalesce
 
 logger = logging.getLogger(__name__)
@@ -132,12 +132,18 @@ def _postgres_search(queryset, query, apply_ordering):
 
     # Coalesce every nullable field: concatenating a NULL into a SearchVector
     # would blank out the whole vector for that row.
+    # Coalesce needs an explicit output_field: brand/name/category__name are
+    # CharField but tags/description are TextField, and Value("") alone resolves
+    # to CharField - combining a TextField source with that guess raises
+    # "Expression contains mixed types" on Postgres (SQLite doesn't check this,
+    # which is why _portable_search, used by the test suite, never caught it).
+    text = TextField()
     vector = (
         SearchVector("name", weight="A")
-        + SearchVector(Coalesce("brand", Value("")), weight="B")
-        + SearchVector(Coalesce("tags", Value("")), weight="B")
-        + SearchVector(Coalesce("category__name", Value("")), weight="C")
-        + SearchVector(Coalesce("description", Value("")), weight="D")
+        + SearchVector(Coalesce("brand", Value("", output_field=text)), weight="B")
+        + SearchVector(Coalesce("tags", Value("", output_field=text)), weight="B")
+        + SearchVector(Coalesce("category__name", Value("", output_field=text)), weight="C")
+        + SearchVector(Coalesce("description", Value("", output_field=text)), weight="D")
     )
     # 'websearch' tolerates whatever users type -- unbalanced quotes, stray
     # operators -- instead of raising the way 'raw' would.

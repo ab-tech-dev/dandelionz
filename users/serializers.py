@@ -627,6 +627,23 @@ class VendorOrderDetailSerializer(serializers.Serializer):
     shipping_address = serializers.CharField()
     created_at = serializers.DateTimeField(source='ordered_at')
     updated_at = serializers.DateTimeField()
+    installment_plan = serializers.SerializerMethodField()
+
+    def get_installment_plan(self, obj):
+        """
+        Read-only progress summary so vendors know payment is still running and they are only
+        credited once the plan hits 100% - never the fields needed to act on the plan itself.
+        """
+        plan = getattr(obj, 'installment_plan', None)
+        if not plan:
+            return None
+        return {
+            'status': plan.status,
+            'total_amount': float(plan.total_amount),
+            'amount_paid': float(plan.amount_paid),
+            'balance_remaining': float(plan.balance_remaining),
+            'paid_fraction': float(round(plan.paid_fraction, 4)),
+        }
 
 
 class VendorOrderSummarySerializer(serializers.Serializer):

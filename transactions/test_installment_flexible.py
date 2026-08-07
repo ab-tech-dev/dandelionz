@@ -131,11 +131,23 @@ class FlexibleInstallmentTests(TestCase):
         resp = self._init(plan, amount='300')
         self.assertEqual(resp.status_code, 201)
 
-    def test_ship_threshold_releases_fulfillment(self, Paystack):
-        plan = self._make_plan()  # total 6000, threshold 0.5 -> 3000
+    def test_partial_payment_does_not_release_fulfillment(self, Paystack):
+        """Ship threshold is 100% - a half-paid plan must not become fulfillment-eligible."""
+        plan = self._make_plan()  # total 6000
         self._mock_init(Paystack)
         resp = self._init(plan, amount='3000')
         self._mock_verify(Paystack, Decimal('3000'))
+        self.client.get(reverse('verify-installment-payment'), {'reference': resp.data['data']['reference']})
+        plan.refresh_from_db()
+        self.assertFalse(plan.fulfillment_released)
+        plan.order.refresh_from_db()
+        self.assertEqual(plan.order.status, Order.Status.PENDING)
+
+    def test_ship_threshold_releases_fulfillment(self, Paystack):
+        plan = self._make_plan()  # total 6000, threshold 1.0 -> full amount
+        self._mock_init(Paystack)
+        resp = self._init(plan, amount='6000')
+        self._mock_verify(Paystack, Decimal('6000'))
         self.client.get(reverse('verify-installment-payment'), {'reference': resp.data['data']['reference']})
         plan.refresh_from_db()
         self.assertTrue(plan.fulfillment_released)
@@ -154,13 +166,13 @@ class FlexibleInstallmentTests(TestCase):
 
     @patch('authentication.views_admin.send_order_notification', lambda *a, **k: True)
     @patch('transactions.delivery_payment.Paystack')
-    def test_installment_order_enters_the_delivery_flow_at_50_percent(self, DeliveryPaystack, Paystack):
-        """At 50% the order must satisfy the delivery flow's payment_status/status gates so the
-        admin can schedule delivery and the customer can pay the fee - while installments run."""
-        plan = self._make_plan()  # total 6000, threshold 0.5 -> 3000
+    def test_installment_order_enters_the_delivery_flow_at_full_payment(self, DeliveryPaystack, Paystack):
+        """Once fully paid the order must satisfy the delivery flow's payment_status/status gates
+        so the admin can schedule delivery and the customer can pay the fee."""
+        plan = self._make_plan()  # total 6000, threshold 1.0 -> full amount
         self._mock_init(Paystack)
-        r = self._init(plan, amount='3000')
-        self._mock_verify(Paystack, Decimal('3000'))
+        r = self._init(plan, amount='6000')
+        self._mock_verify(Paystack, Decimal('6000'))
         self.client.get(reverse('verify-installment-payment'), {'reference': r.data['data']['reference']})
 
         order = plan.order
@@ -168,7 +180,7 @@ class FlexibleInstallmentTests(TestCase):
         self.assertEqual(order.status, Order.Status.PAID)
         self.assertEqual(order.payment_status, 'PAID')
 
-        # Admin can now schedule delivery on the half-paid installment order.
+        # Admin can now schedule delivery on the fully-paid installment order.
         admin = User.objects.create_user(email='dadm@test.com', password='pass12345', role=User.Role.BUSINESS_ADMIN)
         self.client.force_authenticate(user=admin)
         dresp = self.client.patch(

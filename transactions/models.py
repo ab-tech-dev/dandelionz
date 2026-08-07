@@ -731,12 +731,22 @@ class InstallmentPlan(models.Model):
         SIX_MONTHS = '6_months', '6 Months'
         EIGHT_MONTHS = '8_months', '8 Months'
 
-    # Mapping of duration to number of installments
+    # Mapping of duration to number of installments. The 1-month plan uses weekly checkpoints
+    # (a single 30-day checkpoint is just a delayed lump sum, not an installment plan); the
+    # longer plans keep one checkpoint per month.
     DURATION_INSTALLMENTS = {
-        '1_month': 1,
+        '1_month': 4,
         '3_months': 3,
         '6_months': 6,
         '8_months': 8,
+    }
+
+    # Days between successive advisory checkpoints, per duration.
+    DURATION_INTERVAL_DAYS = {
+        '1_month': 7,
+        '3_months': 30,
+        '6_months': 30,
+        '8_months': 30,
     }
 
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name='installment_plan')
@@ -857,7 +867,7 @@ class InstallmentPlan(models.Model):
         if self.fulfillment_released:
             return
         from django.conf import settings
-        threshold = Decimal(str(getattr(settings, 'INSTALLMENT_SHIP_THRESHOLD', '0.50')))
+        threshold = Decimal(str(getattr(settings, 'INSTALLMENT_SHIP_THRESHOLD', '1.00')))
         if self.paid_fraction < threshold:
             return
         order = self.order
