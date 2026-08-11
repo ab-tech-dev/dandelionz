@@ -117,6 +117,41 @@ class SearchRankingContractTests(TestCase):
         self.assertEqual(len(self._search('   ')), 2)
 
 
+class PostgresVectorConstructionTests(TestCase):
+    """
+    Regression coverage for a bug that _portable_search structurally cannot
+    catch: Django raises FieldError when a Coalesce()'s branches resolve to
+    mismatched types (CharField vs TextField) and no output_field is set on
+    the Coalesce itself -- only on an inner Value() doesn't count.
+
+    brand/category__name are CharField and tags/description are TextField, so
+    any single guessed type for the fallback Value satisfies one pair and
+    breaks the other. This surfaced in production as every Postgres search
+    request 500ing, while store.test_search passed cleanly, because SQLite
+    doesn't perform this type check.
+
+    Deliberately NOT gated behind @skipUnless(connection.vendor ==
+    'postgresql', ...): the FieldError is raised while Django resolves the
+    expression tree's types, before any backend-specific SQL is generated, so
+    this runs -- and catches the regression -- on SQLite too. Don't move this
+    into PostgresFullTextSearchTests below; that would make it silently skip
+    everywhere except a real Postgres CI run.
+    """
+
+    def test_search_vector_construction_does_not_raise(self):
+        from .search import _postgres_search
+
+        # No products need to exist, and the query must not actually be
+        # executed: the generated SQL is Postgres-only (to_tsvector, @@, ...)
+        # and would fail on SQLite for an unrelated, expected reason. Forcing
+        # str() on the query compiles it to SQL text -- which is exactly
+        # where output_field resolution happens -- without running it.
+        try:
+            str(_postgres_search(Product.objects.all(), 'microwave', True).query)
+        except Exception as exc:  # noqa: BLE001 - we want to name *any* failure here
+            self.fail(f'_postgres_search raised while compiling: {exc!r}')
+
+
 def _items(response):
     """
     Unwrap the product list payload.
