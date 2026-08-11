@@ -132,18 +132,23 @@ def _postgres_search(queryset, query, apply_ordering):
 
     # Coalesce every nullable field: concatenating a NULL into a SearchVector
     # would blank out the whole vector for that row.
-    # Coalesce needs an explicit output_field: brand/name/category__name are
-    # CharField but tags/description are TextField, and Value("") alone resolves
-    # to CharField - combining a TextField source with that guess raises
-    # "Expression contains mixed types" on Postgres (SQLite doesn't check this,
-    # which is why _portable_search, used by the test suite, never caught it).
+    # Coalesce needs an explicit output_field ON THE COALESCE ITSELF, not just
+    # on the inner Value: brand/category__name are CharField while tags/
+    # description are TextField, so whichever type the Value guesses (or is
+    # typed as) will always mismatch one side or the other and raise
+    # "Expression contains mixed types" on Postgres the moment the queryset is
+    # evaluated. Passing output_field=text to Coalesce() forces every branch to
+    # resolve to TextField regardless of the source column's real type.
+    # SQLite doesn't do this type check, which is why _portable_search (used by
+    # the test suite) never caught it, and why store.test_search all passed
+    # while every real search 500'd in production.
     text = TextField()
     vector = (
         SearchVector("name", weight="A")
-        + SearchVector(Coalesce("brand", Value("", output_field=text)), weight="B")
-        + SearchVector(Coalesce("tags", Value("", output_field=text)), weight="B")
-        + SearchVector(Coalesce("category__name", Value("", output_field=text)), weight="C")
-        + SearchVector(Coalesce("description", Value("", output_field=text)), weight="D")
+        + SearchVector(Coalesce("brand", Value("", output_field=text), output_field=text), weight="B")
+        + SearchVector(Coalesce("tags", Value("", output_field=text), output_field=text), weight="B")
+        + SearchVector(Coalesce("category__name", Value("", output_field=text), output_field=text), weight="C")
+        + SearchVector(Coalesce("description", Value("", output_field=text), output_field=text), weight="D")
     )
     # 'websearch' tolerates whatever users type -- unbalanced quotes, stray
     # operators -- instead of raising the way 'raw' would.
