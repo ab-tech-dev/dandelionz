@@ -41,6 +41,7 @@ from authentication.core.response import standardized_response
 from authentication.core.permissions import IsAdminOrVendor, IsAdmin, IsVendor
 from authentication.core.exceptions import PurchaseRequiredException
 from authentication.core.task_dispatch import dispatch_task
+from authentication.core.authentication import OptionalJWTAuthentication
 
 # ---------------------------
 # Products FilterSet
@@ -73,6 +74,7 @@ class ProductFilterSet(FilterSet):
 # ---------------------------
 class ProductListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
     serializer_class = ProductSerializer
     # SearchFilter is deliberately absent: `search` is handled by
     # store.search.search_products, which ranks by relevance and also covers
@@ -124,6 +126,7 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
 class ProductSearchSuggestionsView(BaseAPIView):
     """Typeahead suggestions for the search page. Intentionally lightweight."""
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
 
     PRODUCT_LIMIT = 8
     CATEGORY_LIMIT = 4
@@ -198,6 +201,7 @@ class ProductSearchSuggestionsView(BaseAPIView):
 
 class ProductDetailView(BaseAPIView):
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
 
     @extend_schema(
         parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
@@ -947,6 +951,7 @@ class RemoveFavouriteView(BaseAPIView):
 )
 class ProductReviewListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
     serializer_class = ReviewSerializer
 
     def get_queryset(self):
@@ -1755,6 +1760,7 @@ class CategoryListCreateView(BaseAPIView, generics.ListCreateAPIView):
     queryset = Category.objects.filter(is_active=True)
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]  # GET is public, POST requires admin check
+    authentication_classes = [OptionalJWTAuthentication]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_class = CategoryFilterSet
     search_fields = ['name', 'description']
@@ -1862,6 +1868,7 @@ class CategoryDetailView(BaseAPIView, generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
     lookup_field = 'slug'
 
     def get_permissions(self):
@@ -1979,6 +1986,7 @@ class ProductStatsView(BaseAPIView):
     - draftCount: Draft products (admin/vendor only)
     """
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
 
     @extend_schema(
         summary="Get product statistics",
@@ -2030,6 +2038,7 @@ class ProductFilteredView(BaseAPIView, generics.ListAPIView):
     - ordering: Sort by price, name, created_at, etc.
     """
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
     serializer_class = ProductSerializer
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['category', 'store', 'approval_status']
@@ -2104,6 +2113,7 @@ class ProductSummaryView(BaseAPIView):
     Main endpoint for dashboard card data.
     """
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
 
     def get(self, request):
         """Get product summary statistics"""
@@ -2689,6 +2699,7 @@ class RecordInteractionView(BaseAPIView):
     error on the client's critical path.
     """
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
     throttle_classes = [InteractionEventAnonThrottle, InteractionEventUserThrottle]
 
     def _session_key(self, request):
@@ -2791,6 +2802,7 @@ class RecordInteractionView(BaseAPIView):
 class RecommendationsView(BaseAPIView):
     """Read-only recommendations, serialized identically to /store/products/."""
     permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
 
     def get(self, request):
         kind = (request.query_params.get('type') or '').strip()
