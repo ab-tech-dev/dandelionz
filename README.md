@@ -4048,7 +4048,7 @@ This project is proprietary and not for distribution.
 
 For issues, feature requests, or questions:
 
-- **Email**: support@dandelionz.net
+- **Email**: dandelionsuperglobal.ltd@gmail.com
 - **Documentation**: https://dandelionz.net/docs/
 - **Terms**: https://dandelionz.net/terms/
 
