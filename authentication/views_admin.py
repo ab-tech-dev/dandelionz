@@ -7,6 +7,7 @@ All admin actions are automatically logged for audit trail.
 """
 
 from rest_framework import generics, status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -70,6 +71,13 @@ def invalidate_user_sessions(user):
 # USER MANAGEMENT VIEWS
 # =====================================================
 
+class AdminUserListPagination(PageNumberPagination):
+    """Pagination for the admin platform-wide user list."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class AdminUserListView(generics.ListAPIView):
     """
     List all platform users with basic info.
@@ -81,6 +89,7 @@ class AdminUserListView(generics.ListAPIView):
     """
     permission_classes = [IsAuthenticated, IsBusinessAdmin]
     serializer_class = AdminDashboardUserListSerializer
+    pagination_class = AdminUserListPagination
     
     def get_queryset(self):
         queryset = CustomUser.objects.exclude(role='ADMIN')
@@ -110,9 +119,14 @@ class AdminUserListView(generics.ListAPIView):
         
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(
-                standardized_response(data=serializer.data)
-            )
+            # get_paginated_response already wraps its argument as `results`
+            # in {count, next, previous, results}. Wrapping serializer.data
+            # in standardized_response() first (as this used to do) nested
+            # {success, data: [...]} *inside* `results` instead of `results`
+            # being the plain array - harmless while pagination_class was
+            # unset (this branch was never reached), but wrong now that it
+            # actually runs.
+            return self.get_paginated_response(serializer.data)
         
         serializer = self.get_serializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))

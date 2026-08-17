@@ -1391,7 +1391,7 @@ class VendorViewSet(viewsets.ViewSet):
     )
     def list_orders(self, request):
         """Get paginated list of vendor's orders - same pattern as admin"""
-        from rest_framework.pagination import LimitOffsetPagination
+        from rest_framework.pagination import PageNumberPagination
         from transactions.models import Order
 
         vendor = self.get_vendor(request)
@@ -1414,8 +1414,16 @@ class VendorViewSet(viewsets.ViewSet):
         # Order by most recent first
         queryset = queryset.order_by('-ordered_at')
 
-        # Paginate
-        paginator = LimitOffsetPagination()
+        # Paginate. Was LimitOffsetPagination with no default_limit set,
+        # which silently fell through to unpaginated for any client that
+        # doesn't send ?limit=. Standardized to ?page= to match every other
+        # list endpoint in this project (ProductListView, AdminUserListView,
+        # NotificationPagination, FinancePagination) and what the mobile/web
+        # infinite-scroll hooks send.
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 50
         page = paginator.paginate_queryset(queryset, request)
 
         if page is not None:
