@@ -13,9 +13,19 @@ CLOUDINARY_BASE_URL = "https://res.cloudinary.com/dhpny4uce/"
 # Base Serializer with Cloudinary helper
 # ---------------------------
 class CloudinarySerializer(serializers.ModelSerializer):
-    def get_cloudinary_url(self, field_value):
+    def get_cloudinary_url(self, field_value, transformation="q_auto,f_auto"):
+        """
+        Build a Cloudinary delivery URL, applying an on-the-fly transformation.
+
+        Previously this was a raw passthrough with no transformation, so every
+        image - a 48px grid thumbnail or a full-screen product hero - served
+        the vendor's original upload at full resolution. `q_auto,f_auto` (safe
+        everywhere: no dimension change, just format/quality optimization) is
+        the default; callers serving a fixed-size thumbnail context pass an
+        explicit width/height crop on top, e.g. "w_300,h_300,c_fill,q_auto,f_auto".
+        """
         if field_value:
-            return f"{CLOUDINARY_BASE_URL}{field_value}"
+            return f"{CLOUDINARY_BASE_URL}{transformation}/{field_value}"
         return None
 
 
@@ -266,10 +276,15 @@ class ProductSerializer(CloudinarySerializer):
         ref_name = "StoreProductSerializer"
 
     def get_image(self, obj):
-        # Return main image if available, otherwise first image
+        # Return main image if available, otherwise first image.
+        # This field feeds product grids/cards throughout both apps (never
+        # a full-bleed hero - see ProductImageSerializer.get_image_url for
+        # that), so it's capped to a size that matches how it's displayed.
         main_image = obj.main_image
         if main_image:
-            return self.get_cloudinary_url(main_image.image)
+            return self.get_cloudinary_url(
+                main_image.image, transformation="w_400,h_400,c_fill,q_auto,f_auto"
+            )
         return None
 
     def get_rating(self, obj):

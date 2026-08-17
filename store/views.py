@@ -72,10 +72,18 @@ class ProductFilterSet(FilterSet):
 # ---------------------------
 # Products List & Filtering
 # ---------------------------
+class StoreListPagination(PageNumberPagination):
+    """Pagination for storefront product listings."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class ProductListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
     authentication_classes = [OptionalJWTAuthentication]
     serializer_class = ProductSerializer
+    pagination_class = StoreListPagination
     # SearchFilter is deliberately absent: `search` is handled by
     # store.search.search_products, which ranks by relevance and also covers
     # brand, tags and category name. See filter_queryset below.
