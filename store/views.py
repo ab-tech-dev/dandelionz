@@ -126,7 +126,11 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(standardized_response(data=serializer.data))
+            # Build the paginated dict first, then wrap in standardized_response so
+            # the final shape is {success, data: {count, next, previous, results: [...]}}
+            # which is what both web and mobile frontends expect via selectStandardEnvelope.
+            paginated_data = self.paginator.get_paginated_response(serializer.data).data
+            return Response(standardized_response(data=paginated_data))
         serializer = self.get_serializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))
 
