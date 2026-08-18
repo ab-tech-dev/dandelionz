@@ -1428,9 +1428,12 @@ class VendorViewSet(viewsets.ViewSet):
 
         if page is not None:
             serializer = VendorOrderListItemSerializer(page, many=True)
-            return paginator.get_paginated_response(
-                standardized_response(data=serializer.data)
-            )
+            # Build the paginated dict first, then wrap in standardized_response.
+            # Passing standardized_response into get_paginated_response() nests
+            # {success, data} inside `results`, producing the wrong shape.
+            # Frontend (getVendorOrdersList) reads data?.data?.results.
+            paginated_data = paginator.get_paginated_response(serializer.data).data
+            return Response(standardized_response(data=paginated_data))
 
         serializer = VendorOrderListItemSerializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))
