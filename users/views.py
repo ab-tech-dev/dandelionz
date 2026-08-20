@@ -1148,10 +1148,33 @@ class VendorViewSet(viewsets.ViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Only return submitted products (not drafts)
-        products = Product.objects.filter(store=vendor, publish_status='submitted')
-        serializer = ProductSerializer(products, many=True)
+        from rest_framework.pagination import PageNumberPagination
 
+        # Only return submitted products (not drafts)
+        queryset = Product.objects.filter(
+            store=vendor, publish_status='submitted'
+        ).order_by('-uploaded_date')
+
+        search_param = request.query_params.get('search')
+        if search_param:
+            queryset = queryset.filter(name__icontains=search_param)
+
+        # Was unpaginated: every submitted product for this vendor, in one
+        # response, growing with their catalog. Same fix as admin's
+        # list_products - bounded to one vendor's own products rather than
+        # the whole marketplace, but still unbounded growth over time.
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(queryset, request)
+
+        if page is not None:
+            serializer = ProductSerializer(page, many=True)
+            paginated_data = paginator.get_paginated_response(serializer.data).data
+            return Response({"success": True, "data": paginated_data})
+
+        serializer = ProductSerializer(queryset, many=True)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
@@ -2179,7 +2202,34 @@ class AdminVendorViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        vendors = Vendor.objects.select_related("user").all()
+        from rest_framework.pagination import PageNumberPagination
+
+        vendors = Vendor.objects.select_related("user").all().order_by('-user__created_at')
+
+        search_param = request.query_params.get('search')
+        if search_param:
+            vendors = vendors.filter(store_name__icontains=search_param)
+
+        # Used by the Active/Suspended stat cards, which moved to backend
+        # counts once this endpoint became paginated (they used to count
+        # over the fully-loaded array).
+        is_active_param = request.query_params.get('is_active')
+        if is_active_param is not None:
+            vendors = vendors.filter(user__is_active=is_active_param.lower() == 'true')
+
+        # Was unpaginated: every vendor on the platform, in one response,
+        # growing with signups. Same fix as admin/vendor list_products.
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(vendors, request)
+
+        if page is not None:
+            serializer = AdminVendorListSerializer(page, many=True)
+            paginated_data = paginator.get_paginated_response(serializer.data).data
+            return Response({"success": True, "data": paginated_data})
+
         serializer = AdminVendorListSerializer(vendors, many=True)
         return Response({"success": True, "data": serializer.data})
 
@@ -2741,8 +2791,58 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        products = Product.objects.select_related("store").all()
-        serializer = AdminProductListSerializer(products, many=True)
+        from rest_framework.pagination import PageNumberPagination
+
+        queryset = Product.objects.select_related("store").all().order_by('-uploaded_date')
+
+        # `status` as the frontend/serializer knows it (APPROVED/REJECTED/
+        # PENDING/DRAFT) isn't a real column - AdminProductListSerializer's
+        # get_status() computes it: 'DRAFT' when publish_status is draft,
+        # otherwise approval_status uppercased. Filter has to mirror that
+        # exactly or ?status=APPROVED silently returns nothing.
+        status_param = request.query_params.get('status')
+        if status_param:
+            if status_param.upper() == 'DRAFT':
+                queryset = queryset.filter(publish_status='draft')
+            else:
+                queryset = queryset.exclude(publish_status='draft').filter(
+                    approval_status__iexact=status_param
+                )
+
+        category_param = request.query_params.get('category')
+        if category_param:
+            queryset = queryset.filter(category__slug=category_param)
+
+        # Client-side filtering only searched the loaded page once this
+        # endpoint became paginated - same gap already fixed for admin
+        # users. Search server-side instead.
+        search_param = request.query_params.get('search')
+        if search_param:
+            queryset = queryset.filter(name__icontains=search_param)
+
+        # Was unpaginated: every product across every vendor and status,
+        # returned in one response, growing with the catalog on every
+        # upload. Standardized to ?page= to match every other list
+        # endpoint in this project.
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(queryset, request)
+
+        if page is not None:
+            serializer = AdminProductListSerializer(page, many=True)
+            # Build the paginated dict first via paginator.get_paginated_response,
+            # then wrap in {success, data: ...}. Passing {success, data} into
+            # get_paginated_response() directly nests it inside `results`,
+            # producing {count, next, previous, results: {success, data}} -
+            # the exact bug already fixed for ProductListView and list_orders
+            # (commits c200db9, 07455cf). Frontend (useGetAllProductsQuery via
+            # useInfiniteList/selectStandardEnvelope) reads data?.data?.results.
+            paginated_data = paginator.get_paginated_response(serializer.data).data
+            return Response({"success": True, "data": paginated_data})
+
+        serializer = AdminProductListSerializer(queryset, many=True)
         return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
@@ -3337,8 +3437,8 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
+        from rest_framework.pagination import PageNumberPagination
         from transactions.models import Refund
-        from transactions.serializers import RefundSerializer
 
         refunds = Refund.objects.select_related(
             'payment__order__customer'
@@ -3348,8 +3448,23 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         if status_filter:
             refunds = refunds.filter(status=status_filter.upper())
 
+        # pending_count has to come from a DB aggregate over the full
+        # filtered queryset, not from the paginated page - it was
+        # previously computed from `data` (every matching row, since this
+        # was unpaginated), which stayed accidentally correct only because
+        # `data` held everything. Once paginated, counting within one page
+        # would silently undercount.
+        pending_count = refunds.filter(status='PENDING').count()
+
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(refunds, request)
+        page_refunds = page if page is not None else refunds
+
         data = []
-        for r in refunds:
+        for r in page_refunds:
             order = r.payment.order
             customer = order.customer
             data.append({
@@ -3365,12 +3480,19 @@ class AdminFinanceViewSet(AdminBaseViewSet):
                 "payment_reference": r.payment.reference,
             })
 
-        return Response({
+        response = {
             "success": True,
             "data": data,
-            "count": len(data),
-            "pending_count": sum(1 for d in data if d["status"] == "PENDING"),
-        })
+            # True total across all matching rows, not just this page - was
+            # previously len(data), which was only correct because
+            # unpaginated `data` held every row.
+            "count": refunds.count(),
+            "pending_count": pending_count,
+        }
+        if page is not None:
+            response["next"] = paginator.get_next_link()
+            response["previous"] = paginator.get_previous_link()
+        return Response(response)
 
     @action(detail=False, methods=["post"])
     def process_refund(self, request):
@@ -3428,7 +3550,29 @@ class AdminFinanceViewSet(AdminBaseViewSet):
         if not admin:
             return Response({"message": "Access denied"}, status=403)
 
-        payments = Payment.objects.select_related("order", "order__customer").all()
+        from rest_framework.pagination import PageNumberPagination
+
+        payments = Payment.objects.select_related(
+            "order", "order__customer"
+        ).all().order_by('-created_at')
+
+        status_param = request.query_params.get('status')
+        if status_param:
+            payments = payments.filter(status=status_param)
+
+        # Was unpaginated: every payment ever processed on the platform, in
+        # one response. Likely the worst of these - this table only grows.
+        paginator = PageNumberPagination()
+        paginator.page_size = 20
+        paginator.page_size_query_param = 'page_size'
+        paginator.max_page_size = 100
+        page = paginator.paginate_queryset(payments, request)
+
+        if page is not None:
+            serializer = AdminFinancePaymentSerializer(page, many=True)
+            paginated_data = paginator.get_paginated_response(serializer.data).data
+            return Response({"success": True, "data": paginated_data})
+
         serializer = AdminFinancePaymentSerializer(payments, many=True)
         return Response({"success": True, "data": serializer.data})
 
