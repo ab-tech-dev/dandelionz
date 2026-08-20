@@ -1153,7 +1153,7 @@ class VendorViewSet(viewsets.ViewSet):
         # Only return submitted products (not drafts)
         queryset = Product.objects.filter(
             store=vendor, publish_status='submitted'
-        ).order_by('-uploaded_date')
+        ).order_by('-created_at')
 
         search_param = request.query_params.get('search')
         if search_param:
@@ -2793,7 +2793,7 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
 
         from rest_framework.pagination import PageNumberPagination
 
-        queryset = Product.objects.select_related("store").all().order_by('-uploaded_date')
+        queryset = Product.objects.select_related("store").all().order_by('-created_at')
 
         # `status` as the frontend/serializer knows it (APPROVED/REJECTED/
         # PENDING/DRAFT) isn't a real column - AdminProductListSerializer's
