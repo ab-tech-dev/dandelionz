@@ -1772,16 +1772,27 @@ class VendorWalletViewSet(viewsets.ViewSet):
         if txn_type and txn_type.upper() in ['CREDIT', 'DEBIT']:
             transactions = transactions.filter(transaction_type=txn_type.upper())
         
-        # Paginate
+        # Paginate. default_limit + a fallback branch are both required:
+        # without default_limit, a caller that omits ?limit= (like the
+        # withdrawal receipt screen, which calls this with {}) gets
+        # paginate_queryset() returning None, and passing None into
+        # get_paginated_response() crashes with a 500 rather than
+        # returning anything.
         paginator = LimitOffsetPagination()
+        paginator.default_limit = 20
         paginated_txns = paginator.paginate_queryset(
             transactions.order_by('-created_at'),
             request
         )
-        
-        serializer = WalletTransactionListSerializer(paginated_txns, many=True)
-        
-        return paginator.get_paginated_response(serializer.data)
+
+        if paginated_txns is not None:
+            serializer = WalletTransactionListSerializer(paginated_txns, many=True)
+            return paginator.get_paginated_response(serializer.data)
+
+        serializer = WalletTransactionListSerializer(
+            transactions.order_by('-created_at'), many=True
+        )
+        return Response({"count": transactions.count(), "next": None, "previous": None, "results": serializer.data})
 
     @swagger_auto_schema(
         operation_id="vendor_request_withdrawal",

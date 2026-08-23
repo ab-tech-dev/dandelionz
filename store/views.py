@@ -965,11 +965,16 @@ class ProductReviewListView(BaseAPIView, generics.ListAPIView):
     permission_classes = [AllowAny]
     authentication_classes = [OptionalJWTAuthentication]
     serializer_class = ReviewSerializer
+    # Same pagination as the storefront product grid - a popular product can
+    # accumulate hundreds of reviews, and both frontends render this list
+    # eagerly (reviews.map() inside the page's own scroll container, no
+    # virtualization), unpaginated.
+    pagination_class = StoreListPagination
 
     def get_queryset(self):
         product_slug = self.kwargs.get('slug')
         product = get_object_or_404(Product, slug=product_slug)
-        return Review.objects.filter(product=product)
+        return Review.objects.filter(product=product).order_by('-created_at')
 
 
 @extend_schema(

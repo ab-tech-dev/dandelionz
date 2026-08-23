@@ -1324,10 +1324,18 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
 # ----------------------
 # Installment Plan Views
 # ----------------------
+class InstallmentPlanListPagination(PageNumberPagination):
+    """Pagination for the platform-wide installment plans list (admin)."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class InstallmentPlanListView(generics.ListAPIView):
     """List all installment plans for authenticated user or all for admin"""
     serializer_class = InstallmentPlanSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = InstallmentPlanListPagination
 
     @swagger_auto_schema(
         operation_id="list_installment_plans",
@@ -1350,8 +1358,17 @@ class InstallmentPlanListView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
         if _is_platform_admin(user):
-            return InstallmentPlan.objects.all().order_by("-created_at")
-        return InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
+            queryset = InstallmentPlan.objects.all().order_by("-created_at")
+        else:
+            queryset = InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
+
+        # Lets the admin order-detail page ask for just the one plan tied
+        # to the order it's showing, instead of fetching every installment
+        # plan on the platform and finding the match client-side.
+        order_id = self.request.query_params.get('order_id')
+        if order_id:
+            queryset = queryset.filter(order__order_id=order_id)
+        return queryset
 
 
 class InstallmentPlanDetailView(generics.RetrieveAPIView):
