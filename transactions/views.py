@@ -31,6 +31,7 @@ from users.notification_helpers import (
     send_payment_notification,
     notify_admin,
 )
+from transactions.notification_text import format_product_names
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +193,15 @@ def _notify_checkout(
     except Exception:
         total_amount = None
 
+    # Build a human-readable list of product names for use in notification messages.
+    # Falls back gracefully to the order UUID if no names can be resolved.
+    product_names = format_product_names(cart_items, fallback=f"order {order.order_id}")
+
     # Customer notification
     send_order_notification(
         user,
         "Order Created",
-        f"Your order {order.order_id} has been created successfully.",
+        f"Your order for {product_names} has been created successfully.",
         order_id=str(order.order_id),
         action_url=f"/orders/{order.order_id}",
         total_amount=total_amount,
@@ -210,7 +215,7 @@ def _notify_checkout(
         send_payment_notification(
             user,
             "Payment Initialized",
-            f"Payment has been initialized for order {order.order_id}. Complete payment to confirm your order.",
+            f"Payment has been initialized for your order for {product_names}. Complete payment to confirm your order.",
             transaction_id=payment_reference,
             amount=total_amount,
             action_url=f"/orders/{order.order_id}",
@@ -233,7 +238,7 @@ def _notify_checkout(
         send_order_notification(
             vendor_user,
             "New Order Placed",
-            f"A new order {order.order_id} includes your products.",
+            f"A new order for {product_names} includes your products.",
             order_id=str(order.order_id),
             action_url=f"/vendor/orders/{order.order_id}",
             item_count=item_count,
@@ -243,7 +248,7 @@ def _notify_checkout(
     # Admin notification
     notify_admin(
         "New Order Created",
-        f"Order {order.order_id} created by {user.email}.",
+        f"Order for {product_names} created by {user.email}.",
         action_url=f"/admin/orders/{order.order_id}",
         order_id=str(order.order_id),
         total_amount=total_amount,
@@ -534,10 +539,15 @@ class OrderListCreateView(generics.ListCreateAPIView):
         order.update_total()
         vendors = {item.vendor for item in order.order_items.all() if item.vendor}
         for vendor in vendors:
+            vendor_items = order.order_items.filter(vendor=vendor)
+            vendor_product_names = format_product_names(
+                vendor_items,
+                fallback=f"order {order.order_id}",
+            )
             send_order_notification(
                 vendor,
                 "New Order Received",
-                f"You received a new order {order.order_id}.",
+                f"You received a new order for {vendor_product_names}.",
                 order_id=order.order_id
             )
 
@@ -1324,10 +1334,18 @@ Duration options: 1_month, 3_months, 6_months, 8_months""",
 # ----------------------
 # Installment Plan Views
 # ----------------------
+class InstallmentPlanListPagination(PageNumberPagination):
+    """Pagination for the platform-wide installment plans list (admin)."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class InstallmentPlanListView(generics.ListAPIView):
     """List all installment plans for authenticated user or all for admin"""
     serializer_class = InstallmentPlanSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = InstallmentPlanListPagination
 
     @swagger_auto_schema(
         operation_id="list_installment_plans",
@@ -1350,8 +1368,17 @@ class InstallmentPlanListView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
         if _is_platform_admin(user):
-            return InstallmentPlan.objects.all().order_by("-created_at")
-        return InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
+            queryset = InstallmentPlan.objects.all().order_by("-created_at")
+        else:
+            queryset = InstallmentPlan.objects.filter(order__customer=user).order_by("-created_at")
+
+        # Lets the admin order-detail page ask for just the one plan tied
+        # to the order it's showing, instead of fetching every installment
+        # plan on the platform and finding the match client-side.
+        order_id = self.request.query_params.get('order_id')
+        if order_id:
+            queryset = queryset.filter(order__order_id=order_id)
+        return queryset
 
 
 class InstallmentPlanDetailView(generics.RetrieveAPIView):

@@ -47,7 +47,7 @@ class NotificationService:
         scheduled_for: Optional[timezone.datetime] = None,
         send_websocket: bool = True,
         send_email: bool = False,
-        send_push: bool = False,
+        send_push: bool = True,
     ) -> Optional[Notification]:
         """
         Create and send a notification

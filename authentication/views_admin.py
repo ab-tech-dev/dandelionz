@@ -290,6 +290,13 @@ class AdminUserActivateView(generics.GenericAPIView):
 # ORDER MANAGEMENT VIEWS
 # =====================================================
 
+class AdminOrderListPagination(PageNumberPagination):
+    """Pagination for the admin all-orders list."""
+    page_size = 20
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
+
 class AdminOrderListView(generics.ListAPIView):
     """
     List all orders with basic info.
@@ -301,6 +308,7 @@ class AdminOrderListView(generics.ListAPIView):
     """
     permission_classes = [IsAuthenticated, IsBusinessAdmin]
     serializer_class = AdminDashboardOrderListSerializer
+    pagination_class = AdminOrderListPagination
     
     def get_queryset(self):
         queryset = Order.objects.all()
@@ -328,9 +336,16 @@ class AdminOrderListView(generics.ListAPIView):
         
         if page is not None:
             serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(
-                standardized_response(data=serializer.data)
-            )
+            # pagination_class was never set here, so paginate_queryset()
+            # always returned None and this branch never ran - every call
+            # returned the entire orders table (else branch below), which
+            # is why the frontend type still expects that flat shape.
+            # get_paginated_response already wraps its argument as
+            # `results`; wrapping serializer.data in standardized_response
+            # first (as this used to do) would nest {success, data: [...]}
+            # *inside* `results` instead of `results` being the plain
+            # array - the same bug already fixed for AdminUserListView.
+            return self.get_paginated_response(serializer.data)
         
         serializer = self.get_serializer(queryset, many=True)
         return Response(standardized_response(data=serializer.data))
