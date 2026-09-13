@@ -270,7 +270,14 @@ def notify_stakeholders_order_paid(self, order_id):
         notifications_created = 0
         vendor_details = []
         admin_notified = 0
-        
+
+        # Build a human-readable list of product names once.
+        from transactions.notification_text import format_product_names
+        product_names = format_product_names(
+            order.order_items.all(),
+            fallback=f"order {order.order_id}",
+        )
+
         # Notify each vendor
         if vendors:
             for vendor in vendors:
@@ -278,11 +285,15 @@ def notify_stakeholders_order_paid(self, order_id):
                     # Get items from this vendor in the order
                     vendor_items = order.order_items.filter(product__store=vendor)
                     items_count = vendor_items.count()
+                    vendor_product_names = format_product_names(
+                        vendor_items,
+                        fallback=f"order {order.order_id}",
+                    )
                     
                     send_order_notification(
                         vendor,
                         f"Payment Verified - Order Ready for Preparation",
-                        f"Payment confirmed for order {order.order_id}. "
+                        f"Payment confirmed for {vendor_product_names}. "
                         f"You have {items_count} item(s) to prepare. "
                         f"Customer: {order.customer.email}. "
                         f"Please mark as SHIPPED once items are dispatched.",
@@ -317,7 +328,7 @@ def notify_stakeholders_order_paid(self, order_id):
             vendor_names = ', '.join([v.user.email for v in vendors]) if vendors else 'Unknown'
             notify_admin(
                 "New Paid Order - Requires Fulfillment",
-                f"Order {order.order_id} payment verified (NGN {order.total_price}). "
+                f"Payment verified for {product_names} (NGN {order.total_price}). "
                 f"Customer: {order.customer.email}. "
                 f"Vendors involved: {vendor_names}. "
                 f"Status: Ready for shipment. Monitor fulfillment progress.",
@@ -338,7 +349,7 @@ def notify_stakeholders_order_paid(self, order_id):
             send_order_notification(
                 order.customer,
                 "Payment Confirmed",
-                f"Your payment for order {order.order_id} was successful. Your order is now being prepared.",
+                f"Your payment for {product_names} was successful. Your order is now being prepared.",
                 order_id=order.order_id,
                 action_url=f"/receipt?id={order.order_id}"
             )

@@ -42,6 +42,20 @@ def send_scheduled_notification(self, notification_id: int):
         NotificationService.send_websocket_notification(notification)
         NotificationService.send_email_notification(notification)
 
+        # Honour the push intent that was recorded at creation time.  The
+        # _requested_push flag is set by AdminNotificationViewSet.create for
+        # both broadcast and single-recipient notifications so it survives the
+        # scheduling delay.  Default to True so older notifications (created
+        # before this field existed) still get a push attempt.
+        requested_push = notification.metadata.get('_requested_push', True) if notification.metadata else True
+        if requested_push and not notification.was_sent_push:
+            try:
+                NotificationService.send_push_notification(notification)
+            except Exception:
+                logger.exception(
+                    "[NotificationTask] Push failed for scheduled notification %s", notification.id
+                )
+
         return {"status": "success", "notification_id": notification_id}
 
     except Notification.DoesNotExist:
@@ -119,3 +133,55 @@ def cleanup_old_notifications(self):
     except Exception as e:
         logger.error(f"[CleanupTask] Error cleaning up notifications: {str(e)}", exc_info=True)
         raise self.retry(exc=e, countdown=60)
+
+
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_kwargs={
+        'max_retries': 5,
+        'countdown': 60,
+    },
+    retry_backoff=True,
+    retry_backoff_max=300,
+    retry_jitter=True,
+    name="users.send_bulk_push_notifications",
+)
+def send_bulk_push_notifications(self, notification_ids: list):
+    """
+    Send push notifications for a batch of already-created Notification rows.
+
+    Used for admin group broadcasts: the notifications themselves are created
+    synchronously (so the admin panel can show them immediately), but the
+    Expo round-trip per recipient is deferred here so a broadcast to a large
+    group can't hang or time out the admin's request.
+
+    Per-recipient failures (missing token, disabled preference, a single bad
+    Expo response) are caught and logged individually and do not stop the rest
+    of the batch or trigger a task-level retry; only an unexpected error
+    iterating the batch itself does.
+    """
+    notifications = Notification.objects.filter(
+        id__in=notification_ids,
+        is_draft=False,
+        was_sent_push=False,
+    )
+    sent = 0
+    failed = 0
+    for notification in notifications:
+        try:
+            if NotificationService.send_push_notification(notification):
+                sent += 1
+            else:
+                failed += 1
+        except Exception:
+            logger.exception(
+                "[NotificationTask] Push failed for notification %s", notification.id
+            )
+            failed += 1
+
+    logger.info(
+        "[NotificationTask] Bulk push complete: %d sent, %d failed, %d total",
+        sent, failed, len(notification_ids),
+    )
+    return {"status": "success", "sent": sent, "failed": failed, "total": len(notification_ids)}

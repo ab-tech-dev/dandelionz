@@ -5485,6 +5485,14 @@ class AdminNotificationViewSet(AdminBaseViewSet):
         # Create notifications
         created_notifications = []
         if user:
+            # Single-recipient path: push fires inline (no scale issue).
+            # For scheduled notifications we stash the push intent so
+            # send_scheduled_notification can honour it when it fires.
+            meta = data.get('metadata', {})
+            if not isinstance(meta, dict):
+                meta = {}
+            if scheduled_for:
+                meta['_requested_push'] = send_push
             notification = NotificationService.create_notification(
                 user=user,
                 title=data.get('title'),
@@ -5495,7 +5503,7 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                 description=data.get('description', ''),
                 action_url=data.get('action_url', ''),
                 action_text=data.get('action_text', ''),
-                metadata=data.get('metadata', {}),
+                metadata=meta,
                 related_object_type=data.get('related_object_type', ''),
                 related_object_id=data.get('related_object_id', ''),
                 expires_at=data.get('expires_at'),
@@ -5508,7 +5516,13 @@ class AdminNotificationViewSet(AdminBaseViewSet):
             if notification:
                 created_notifications.append(notification)
         else:
-            # Broadcast to group
+            # Broadcast to group.
+            # Push is always created with send_push=False here: hitting the Expo
+            # API synchronously for every user in the group would hang or time out
+            # the request for large audiences. Instead we gather the notification
+            # IDs and hand them to a Celery worker in one shot after the loop.
+            # _requested_push in metadata lets send_scheduled_notification honour
+            # the admin's intent when a scheduled broadcast fires later.
             group = recipient_group or 'all'
             if group not in ['admin', 'vendor', 'customer', 'all']:
                 return Response({"message": "Invalid recipient_group"}, status=400)
@@ -5529,6 +5543,8 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                 meta = {}
             meta['recipient_group'] = group
             meta['recipient_type'] = data.get('recipient_type', '')
+            # Stash push intent so scheduled tasks can fire it when the time comes.
+            meta['_requested_push'] = send_push
 
             for u in users:
                 notification = NotificationService.create_notification(
@@ -5549,10 +5565,34 @@ class AdminNotificationViewSet(AdminBaseViewSet):
                     scheduled_for=scheduled_for,
                     send_websocket=send_websocket,
                     send_email=send_email,
-                    send_push=send_push,
+                    # Always False here — push is dispatched asynchronously below.
+                    send_push=False,
                 )
                 if notification:
                     created_notifications.append(notification)
+
+            # Dispatch push to Celery now that all DB rows exist, but only if:
+            # - the admin actually wanted push
+            # - it's not a draft (drafts don't send anything)
+            # - it's not scheduled for the future (send_scheduled_notification
+            #   will call send_bulk_push_notifications when it fires instead)
+            if send_push and not is_draft and not scheduled_for and created_notifications:
+                try:
+                    from users.tasks import send_bulk_push_notifications
+                    notification_ids = [str(n.id) for n in created_notifications]
+                    try:
+                        send_bulk_push_notifications.apply_async(
+                            args=[notification_ids],
+                            queue="notifications",
+                        )
+                    except Exception:
+                        # Fall back to default queue if notifications queue isn't configured.
+                        send_bulk_push_notifications.delay(notification_ids)
+                except Exception:
+                    logger.exception(
+                        "Could not dispatch send_bulk_push_notifications for %d notification(s)",
+                        len(created_notifications),
+                    )
 
         # Schedule if needed.
         #
