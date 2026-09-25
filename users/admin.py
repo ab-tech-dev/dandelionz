@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Vendor, Customer, BusinessAdmin, DeliveryAgent, PaymentPIN, PayoutRequest, AdminPayoutProfile
+from .models import Vendor, Customer, BusinessAdmin, DeliveryAgent, PaymentPIN, PayoutRequest, AdminPayoutProfile, BlockedVendor
 from .notification_models import Notification
 
 
@@ -298,3 +298,10 @@ class AdminPayoutProfileAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+@admin.register(BlockedVendor)
+class BlockedVendorAdmin(admin.ModelAdmin):
+    list_display = ('customer', 'vendor', 'created_at')
+    list_filter = ('created_at',)
+    search_fields = ('customer__email', 'vendor__store_name')

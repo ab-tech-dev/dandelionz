@@ -76,6 +76,11 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Set at registration once the user accepts the Terms of Use, which
+    # includes the zero-tolerance-for-objectionable-content clause required
+    # by Apple App Review Guideline 1.2. Null means never accepted.
+    terms_accepted_at = models.DateTimeField(null=True, blank=True)
+
     # Manager
     objects = UserManager()
 

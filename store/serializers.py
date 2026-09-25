@@ -2,7 +2,7 @@ import json
 import re
 import ast
 from rest_framework import serializers
-from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
+from .models import Product, Cart, CartItem, Favourite, Review, Report, Category, ProductImage, ProductVideo
 from authentication.models import CustomUser
 from users.models import Vendor
 
@@ -238,6 +238,40 @@ class ReviewSerializer(CloudinarySerializer):
             return has_purchased
         except Exception:
             return False
+
+
+class ReportSerializer(CloudinarySerializer):
+    """Serializer for a customer submitting a report against a product listing."""
+    reporter = serializers.PrimaryKeyRelatedField(read_only=True)
+    product = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = Report
+        fields = ['id', 'product', 'reporter', 'reason', 'details', 'status', 'created_at']
+        read_only_fields = ['id', 'product', 'reporter', 'status', 'created_at']
+
+    def validate_details(self, value):
+        if value and len(value) > 1000:
+            raise serializers.ValidationError("Details cannot exceed 1000 characters")
+        return value
+
+
+class AdminReportSerializer(CloudinarySerializer):
+    """Serializer for admins reviewing submitted reports, with product/reporter context."""
+    product_name = serializers.CharField(source='product.name', read_only=True)
+    product_slug = serializers.CharField(source='product.slug', read_only=True)
+    vendor_name = serializers.CharField(source='product.store.store_name', read_only=True)
+    reporter_email = serializers.CharField(source='reporter.email', read_only=True)
+    reviewed_by_email = serializers.CharField(source='reviewed_by.email', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Report
+        fields = [
+            'id', 'product', 'product_name', 'product_slug', 'vendor_name',
+            'reporter', 'reporter_email', 'reason', 'details', 'status',
+            'created_at', 'reviewed_at', 'reviewed_by', 'reviewed_by_email'
+        ]
+        read_only_fields = fields
 
 
 # ---------------------------

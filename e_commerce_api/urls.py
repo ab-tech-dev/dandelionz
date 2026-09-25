@@ -15,7 +15,7 @@ schema_view = get_schema_view(
         title="Dandelionz Ecommerce API",
         default_version='v1',
         description="API documentation for Multi-Vendor Ecommerce Platform",
-        terms_of_service="https://dandelionz.com.ng/terms/",
+        terms_of_service="https://app.dandelionz.com.ng/terms/",
         contact=openapi.Contact(email="dandelionsuperglobal.ltd@gmail.com"),
         license=openapi.License(name="BSD License"),
     ),

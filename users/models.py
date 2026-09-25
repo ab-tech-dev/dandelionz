@@ -262,3 +262,21 @@ class AdminPayoutProfile(models.Model):
 
     def __str__(self):
         return f"Admin Payout Settings - {self.user.email}"
+
+
+class BlockedVendor(models.Model):
+    """
+    A customer blocking a vendor's listings (Apple App Review Guideline 1.2 -
+    users must be able to block abusive users). Reversible: deleting the row
+    unblocks.
+    """
+    customer = models.ForeignKey(User, on_delete=models.CASCADE, related_name='blocked_vendors')
+    vendor = models.ForeignKey(Vendor, on_delete=models.CASCADE, related_name='blocked_by')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('customer', 'vendor')
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.customer.email} blocked {self.vendor.store_name}"

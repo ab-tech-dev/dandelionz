@@ -138,6 +138,14 @@ urlpatterns = [
     path("customer/change-password/", customer_change_password, name="customer-change-password"),
     path("customer/account/", customer_close_account, name="customer-close-account"),
     path("customer/account/photo/", customer_upload_photo, name="customer-account-photo"),
+
+    # CUSTOMER BLOCKED VENDORS (Apple App Review Guideline 1.2)
+    path("customer/blocked-vendors/", CustomerProfileViewSet.as_view({"get": "blocked_vendors"}), name="customer-blocked-vendors"),
+    path(
+        "customer/vendors/<int:pk>/block/",
+        CustomerProfileViewSet.as_view({"post": "block_vendor", "delete": "unblock_vendor"}),
+        name="customer-block-vendor",
+    ),
     
     # CUSTOMER WALLET & PAYMENT
     path("customer/wallet/", CustomerProfileViewSet.as_view({"get": "wallet_balance"}), name="customer-wallet-balance"),
