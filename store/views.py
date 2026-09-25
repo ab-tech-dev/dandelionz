@@ -28,11 +28,11 @@ from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 
-from .models import Product, Cart, CartItem, Favourite, Review, Category
+from .models import Product, Cart, CartItem, Favourite, Review, Report, Category
 from .serializers import (
     ProductSerializer, CreateProductSerializer, CartSerializer, CartItemSerializer,
     FavouriteSerializer, ReviewSerializer, ProductApprovalSerializer, PendingProductsSerializer,
-    CategorySerializer, VendorAdminProductDetailSerializer
+    CategorySerializer, VendorAdminProductDetailSerializer, ReportSerializer, AdminReportSerializer
 )
 
 from rest_framework import serializers
@@ -93,10 +93,21 @@ class ProductListView(BaseAPIView, generics.ListAPIView):
 
     def get_queryset(self):
         """Only show approved products that have been submitted"""
-        return Product.objects.filter(
+        queryset = Product.objects.filter(
             approval_status='approved',
             publish_status='submitted'
         ).select_related('category').all()
+
+        # Apple App Review Guideline 1.2: once a customer blocks a vendor,
+        # that vendor's listings stop appearing in their feed.
+        user = self.request.user
+        if user and user.is_authenticated:
+            from users.models import BlockedVendor
+            blocked_vendor_ids = BlockedVendor.objects.filter(customer=user).values_list('vendor_id', flat=True)
+            if blocked_vendor_ids:
+                queryset = queryset.exclude(store_id__in=blocked_vendor_ids)
+
+        return queryset
 
     def filter_queryset(self, queryset):
         queryset = super().filter_queryset(queryset)
@@ -2886,3 +2897,165 @@ class RecommendationsView(BaseAPIView):
 
         serializer = ProductSerializer(products, many=True)
         return Response(standardized_response(data=serializer.data))
+
+# ======================================================
+# REPORT VIEWS (Apple App Review Guideline 1.2 - UGC)
+# ======================================================
+@extend_schema(
+    tags=["Reports"],
+    description="Report a product listing as fraudulent, counterfeit, inappropriate, or otherwise objectionable.",
+    parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
+    request=ReportSerializer,
+    responses={201: ReportSerializer, 200: ReportSerializer, 400: OpenApiResponse(description="Invalid reason")},
+)
+class ReportProductView(BaseAPIView):
+    """
+    Customer endpoint to report a product listing. One report per user per
+    product - resubmitting returns the existing report instead of erroring.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, slug):
+        product = get_object_or_404(Product, slug=slug)
+
+        reason = request.data.get('reason')
+        valid_reasons = [choice[0] for choice in Report.REASON_CHOICES]
+        if reason not in valid_reasons:
+            return Response(
+                standardized_response(success=False, error=f"reason must be one of: {', '.join(valid_reasons)}"),
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        details = request.data.get('details', '')
+
+        report, created = Report.objects.get_or_create(
+            reporter=request.user,
+            product=product,
+            defaults={'reason': reason, 'details': details}
+        )
+
+        serializer = ReportSerializer(report)
+        if not created:
+            return Response(
+                standardized_response(
+                    data=serializer.data,
+                    message="You've already reported this listing. Our team is reviewing it."
+                ),
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            standardized_response(
+                data=serializer.data,
+                message="Report submitted. Thank you - our team will review it."
+            ),
+            status=status.HTTP_201_CREATED
+        )
+
+
+@extend_schema(
+    tags=["Admin - Reports"],
+    description="List submitted product reports (Admin only). Filter with ?status=pending|reviewed|dismissed.",
+    responses={200: AdminReportSerializer(many=True)}
+)
+class AdminReportListView(BaseAPIView, generics.ListAPIView):
+    """Admin endpoint listing all reported products, newest first."""
+    permission_classes = [IsAdmin]
+    serializer_class = AdminReportSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['status', 'reason', 'product']
+    ordering_fields = ['created_at']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        return Report.objects.all().select_related('product', 'product__store', 'reporter', 'reviewed_by')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(
+                standardized_response(data=serializer.data, message=f"Found {queryset.count()} reports")
+            )
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(standardized_response(data=serializer.data, message=f"Found {queryset.count()} reports"))
+
+
+@extend_schema(
+    tags=["Admin - Reports"],
+    description="List reports filed against a specific product, for admins reviewing that listing (Admin only).",
+    parameters=[OpenApiParameter(name='slug', description='Product slug', required=True, type=str)],
+    responses={200: AdminReportSerializer(many=True)}
+)
+class ProductReportsView(BaseAPIView, generics.ListAPIView):
+    """Admin endpoint: reports for one product, surfaced on the admin product detail screen."""
+    permission_classes = [IsAdmin]
+    serializer_class = AdminReportSerializer
+
+    def get_queryset(self):
+        slug = self.kwargs.get('slug')
+        return Report.objects.filter(product__slug=slug).select_related('reporter', 'reviewed_by').order_by('-created_at')
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(standardized_response(data=serializer.data, message=f"Found {queryset.count()} reports"))
+
+
+@extend_schema(
+    tags=["Admin - Reports"],
+    description="Dismiss a report as not requiring action (Admin only).",
+    parameters=[OpenApiParameter(name='report_id', description='Report ID', required=True, type=int)],
+    responses={200: AdminReportSerializer}
+)
+class DismissReportView(BaseAPIView):
+    """Admin endpoint: mark a report as reviewed with no action taken against the listing."""
+    permission_classes = [IsAdmin]
+
+    def post(self, request, report_id):
+        report = get_object_or_404(Report, id=report_id)
+        report.status = 'dismissed'
+        report.reviewed_at = timezone.now()
+        report.reviewed_by = request.user
+        report.save()
+
+        serializer = AdminReportSerializer(report)
+        return Response(standardized_response(data=serializer.data, message="Report dismissed"))
+
+
+@extend_schema(
+    tags=["Admin - Reports"],
+    description="Take down the reported product listing and mark the report reviewed (Admin only). "
+                "Reuses the same rejection mechanism as normal product moderation.",
+    parameters=[OpenApiParameter(name='report_id', description='Report ID', required=True, type=int)],
+    responses={200: AdminReportSerializer}
+)
+class TakedownReportedProductView(BaseAPIView):
+    """Admin endpoint: remove the reported listing (Apple App Review Guideline 1.2 -
+    admins must be able to remove objectionable UGC)."""
+    permission_classes = [IsAdmin]
+
+    def post(self, request, report_id):
+        report = get_object_or_404(Report, id=report_id)
+
+        product = report.product
+        product.approval_status = 'rejected'
+        product.approved_by = request.user
+        product.approval_date = timezone.now()
+        product.rejection_reason = f"Removed following a user report: {report.get_reason_display()}"
+        product.save()
+
+        # Every other open report on this same product is resolved too - the
+        # listing is down, so they no longer need separate action.
+        Report.objects.filter(product=product, status='pending').update(
+            status='reviewed', reviewed_at=timezone.now(), reviewed_by=request.user
+        )
+
+        from store.tasks import send_product_rejection_email_task
+        dispatch_task(send_product_rejection_email_task, product.id, product.rejection_reason)
+
+        report.refresh_from_db()
+        serializer = AdminReportSerializer(report)
+        return Response(
+            standardized_response(data=serializer.data, message=f"Product '{product.name}' taken down")
+        )

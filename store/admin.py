@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import Product, Cart, CartItem, Favourite, Review, Category, ProductImage, ProductVideo
+from .models import Product, Cart, CartItem, Favourite, Review, Report, Category, ProductImage, ProductVideo
 
 
 # Inline admins for Product relationships
@@ -108,6 +108,14 @@ class ReviewAdmin(admin.ModelAdmin):
     list_display = ('product', 'customer', 'rating', 'created_at')
     list_filter = ('rating', 'created_at')
     search_fields = ('product__name', 'customer__email')
+    readonly_fields = ('created_at',)
+
+
+@admin.register(Report)
+class ReportAdmin(admin.ModelAdmin):
+    list_display = ('product', 'reporter', 'reason', 'status', 'created_at', 'reviewed_by')
+    list_filter = ('status', 'reason', 'created_at')
+    search_fields = ('product__name', 'reporter__email', 'details')
     readonly_fields = ('created_at',)
 
 

@@ -81,6 +81,15 @@ class UserRegistrationSerializer(serializers.Serializer):
         allow_blank=True,
         help_text="Referral code from an existing user for affiliate tracking"
     )
+    terms_accepted = serializers.BooleanField(
+        required=True,
+        help_text="Must be true. Confirms the user has read and accepted the Terms of Use."
+    )
+
+    def validate_terms_accepted(self, value):
+        if not value:
+            raise serializers.ValidationError("You must accept the Terms of Use to create an account.")
+        return value
 
     def validate_email(self, value):
         """Validate email format and ensure it's a complete email address"""

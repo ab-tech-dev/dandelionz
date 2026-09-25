@@ -11,7 +11,8 @@ from .models import (
     Vendor,
     Customer,
     BusinessAdmin,
-    DeliveryAgent
+    DeliveryAgent,
+    BlockedVendor
 )
 from .notification_models import Notification
 
@@ -259,6 +260,16 @@ class ProfilePhotoUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['profile_picture']
+
+
+class BlockedVendorSerializer(serializers.ModelSerializer):
+    """A vendor a customer has blocked (Apple App Review Guideline 1.2)."""
+    store_name = serializers.CharField(source='vendor.store_name', read_only=True)
+
+    class Meta:
+        model = BlockedVendor
+        fields = ['id', 'vendor', 'store_name', 'created_at']
+        read_only_fields = ['id', 'created_at']
 
 # Example of serializer for vendor payout request (you need a model for this)
 class VendorPayoutRequestSerializer(serializers.Serializer):
@@ -919,6 +930,12 @@ class AdminVendorDetailSerializer(serializers.Serializer):
                   "Null = platform default.",
     )
     created_at = serializers.DateTimeField(source='user.date_joined', read_only=True)
+    blocked_by_count = serializers.SerializerMethodField(
+        help_text="Number of customers who have blocked this vendor (Apple App Review Guideline 1.2 signal)."
+    )
+
+    def get_blocked_by_count(self, obj):
+        return obj.blocked_by.count()
 
 class AdminVendorApprovalSerializer(serializers.Serializer):
     user_uuid = serializers.UUIDField()

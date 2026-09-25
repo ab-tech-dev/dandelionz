@@ -10,7 +10,8 @@ from .views import (
     ProductSearchSuggestionsView,
     ProductSummaryView, ProductReviewView, VendorAdminProductDetailView,
     VendorProductsListView, VendorProductDetailView,
-    RecommendationsView, RecordInteractionView
+    RecommendationsView, RecordInteractionView,
+    ReportProductView, AdminReportListView, ProductReportsView, DismissReportView, TakedownReportedProductView
 )
 
 urlpatterns = [
@@ -57,6 +58,15 @@ urlpatterns = [
     path('favourites/', FavouriteListView.as_view(), name='favourites-list'),
     path('favourites/add/', AddFavouriteView.as_view(), name='add-favourite'),
     path('favourites/remove/<slug:slug>/', RemoveFavouriteView.as_view(), name='remove-favourite'),
+
+    # ==================
+    # REPORTS
+    # ==================
+    path('products/<slug:slug>/report/', ReportProductView.as_view(), name='report-product'),
+    path('admin/reports/', AdminReportListView.as_view(), name='admin-reports-list'),
+    path('admin/products/<slug:slug>/reports/', ProductReportsView.as_view(), name='product-reports'),
+    path('admin/reports/<int:report_id>/dismiss/', DismissReportView.as_view(), name='admin-report-dismiss'),
+    path('admin/reports/<int:report_id>/takedown/', TakedownReportedProductView.as_view(), name='admin-report-takedown'),
 
     # ==================
     # REVIEWS

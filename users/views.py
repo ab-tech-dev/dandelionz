@@ -6,7 +6,9 @@ from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 from django.utils import timezone
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from users.notification_service import NotificationService
+from users.models import Vendor, BlockedVendor
 
 from store.serializers import ProductSerializer, CreateProductSerializer
 
@@ -67,6 +69,7 @@ from users.serializers import (
     ProfilePhotoUploadSerializer,
     BankVerificationSerializer,
     BankListSerializer,
+    BlockedVendorSerializer,
 )
 from transactions.serializers import PaymentSerializer
 from transactions.paystack import Paystack
@@ -286,6 +289,78 @@ class CustomerProfileViewSet(viewsets.ViewSet):
             {"message": "Password changed successfully"},
             status=status.HTTP_200_OK,
         )
+
+    @swagger_auto_schema(
+        operation_id="customer_block_vendor",
+        operation_summary="Block a Vendor",
+        operation_description="Block a vendor so their listings no longer appear in this customer's product feed. "
+                               "Reversible via the unblock endpoint. (Apple App Review Guideline 1.2)",
+        tags=["Customer Profile"],
+        responses={
+            201: openapi.Response("Vendor blocked", BlockedVendorSerializer),
+            200: openapi.Response("Vendor already blocked", BlockedVendorSerializer),
+            403: openapi.Response("Customer access only"),
+            404: openapi.Response("Vendor not found"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=True, methods=["post"], url_path="block")
+    def block_vendor(self, request, pk=None):
+        customer = self.get_customer(request)
+        if not customer:
+            return Response({"detail": "Customer access only"}, status=status.HTTP_403_FORBIDDEN)
+
+        vendor = get_object_or_404(Vendor, id=pk)
+        blocked, created = BlockedVendor.objects.get_or_create(customer=request.user, vendor=vendor)
+
+        serializer = BlockedVendorSerializer(blocked)
+        return Response(
+            {"success": True, "data": serializer.data,
+             "message": "Vendor blocked" if created else "Vendor already blocked"},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
+    @swagger_auto_schema(
+        operation_id="customer_unblock_vendor",
+        operation_summary="Unblock a Vendor",
+        operation_description="Reverse a previous block, restoring this vendor's listings to the customer's feed.",
+        tags=["Customer Profile"],
+        responses={
+            200: openapi.Response("Vendor unblocked"),
+            403: openapi.Response("Customer access only"),
+            404: openapi.Response("Vendor was not blocked"),
+        },
+        security=[{"Bearer": []}],
+    )
+    @action(detail=True, methods=["delete"], url_path="block")
+    def unblock_vendor(self, request, pk=None):
+        customer = self.get_customer(request)
+        if not customer:
+            return Response({"detail": "Customer access only"}, status=status.HTTP_403_FORBIDDEN)
+
+        deleted, _ = BlockedVendor.objects.filter(customer=request.user, vendor_id=pk).delete()
+        if not deleted:
+            return Response({"success": False, "error": "Vendor was not blocked"}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response({"success": True, "message": "Vendor unblocked"}, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_id="customer_list_blocked_vendors",
+        operation_summary="List Blocked Vendors",
+        operation_description="List every vendor this customer has blocked.",
+        tags=["Customer Profile"],
+        responses={200: openapi.Response("Blocked vendors", BlockedVendorSerializer(many=True))},
+        security=[{"Bearer": []}],
+    )
+    @action(detail=False, methods=["get"], url_path="blocked-vendors")
+    def blocked_vendors(self, request):
+        customer = self.get_customer(request)
+        if not customer:
+            return Response({"detail": "Customer access only"}, status=status.HTTP_403_FORBIDDEN)
+
+        blocked = BlockedVendor.objects.filter(customer=request.user).select_related("vendor")
+        serializer = BlockedVendorSerializer(blocked, many=True)
+        return Response({"success": True, "data": serializer.data})
 
     @swagger_auto_schema(
         operation_id="customer_close_account",

@@ -77,6 +77,7 @@ Optionally accepts referral_code for affiliate tracking.""",
             full_name = validated_data.get('full_name', '')
             role = validated_data.get('role', 'CUSTOMER').upper()
             referral_code = validated_data.get('referral_code', '')
+            terms_accepted = validated_data.get('terms_accepted', False)
 
             logger.debug(f"Extracted data - email: {email}, role: {role}")
 
@@ -95,6 +96,7 @@ Optionally accepts referral_code for affiliate tracking.""",
                 full_name=full_name,
                 role=role,
                 referral_code=referral_code,
+                terms_accepted=terms_accepted,
                 request_meta=request.META,
                 request=request
             )

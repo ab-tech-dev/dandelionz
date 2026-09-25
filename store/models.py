@@ -369,6 +369,48 @@ class Review(models.Model):
         return f"Review for {self.product.name} by {self.customer.email}"
 
 
+class Report(models.Model):
+    """
+    A customer-submitted report flagging a product listing as fraudulent,
+    counterfeit, inappropriate, or otherwise objectionable (Apple App Review
+    Guideline 1.2 - user-generated content must be reportable).
+    """
+    REASON_CHOICES = [
+        ('fraudulent', 'Fraudulent'),
+        ('counterfeit', 'Counterfeit'),
+        ('inappropriate', 'Inappropriate'),
+        ('other', 'Other'),
+    ]
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('reviewed', 'Reviewed'),
+        ('dismissed', 'Dismissed'),
+    ]
+
+    reporter = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reports')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reports')
+    reason = models.CharField(max_length=20, choices=REASON_CHOICES)
+    details = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='reviewed_reports'
+    )
+
+    class Meta:
+        # One open report per user per product - resubmitting just confirms
+        # the existing one rather than piling up duplicates.
+        constraints = [
+            models.UniqueConstraint(fields=['reporter', 'product'], name='one_report_per_reporter_per_product')
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.reporter.email} reported {self.product.name} ({self.reason})"
+
+
 # ==========================================
 # Product Media Helper Functions
 # ==========================================

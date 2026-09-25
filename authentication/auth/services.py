@@ -23,12 +23,18 @@ class AuthenticationService:
 
     @staticmethod
     def register(email, password, phone_number=None, full_name=None, role='CUSTOMER',
-                 referral_code=None, request_meta=None, request=None):
+                 referral_code=None, terms_accepted=False, request_meta=None, request=None):
         """Handle user registration with email and password"""
         if not email or not password:
             return False, {
                 "success": False,
                 "error": "Email and password are required."
+            }, 400
+
+        if not terms_accepted:
+            return False, {
+                "success": False,
+                "error": "You must accept the Terms of Use to create an account."
             }, 400
 
         if request_meta:
@@ -48,7 +54,8 @@ class AuthenticationService:
                 email=email,
                 role=role,
                 password=password,
-                is_verified=False
+                is_verified=False,
+                terms_accepted_at=timezone.now()
             )
 
             if full_name:
