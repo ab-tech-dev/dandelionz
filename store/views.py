@@ -29,6 +29,7 @@ from rest_framework.pagination import PageNumberPagination
 from django.shortcuts import get_object_or_404
 
 from .models import Product, Cart, CartItem, Favourite, Review, Report, Category
+from users.services.account_closure import exclude_closed_vendors
 from .serializers import (
     ProductSerializer, CreateProductSerializer, CartSerializer, CartItemSerializer,
     FavouriteSerializer, ReviewSerializer, ProductApprovalSerializer, PendingProductsSerializer,
@@ -233,8 +234,16 @@ class ProductDetailView(BaseAPIView):
     )
     def get(self, request, slug):
         try:
-            product = Product.objects.get(slug=slug)
+            product = exclude_closed_vendors(Product.objects).get(slug=slug)
         except Product.DoesNotExist:
+            return Response(
+                standardized_response(success=False, error="Product not found"),
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Draft, pending and rejected products are only for their vendor and for admins.
+        # Without this the slug alone was enough for any visitor to open one.
+        if not self._is_public(product) and not self._can_see_unlisted(request.user, product):
             return Response(
                 standardized_response(success=False, error="Product not found"),
                 status=status.HTTP_404_NOT_FOUND
@@ -242,6 +251,22 @@ class ProductDetailView(BaseAPIView):
 
         serializer = ProductSerializer(product)
         return Response(standardized_response(data=serializer.data))
+
+    @staticmethod
+    def _is_public(product):
+        return product.approval_status == 'approved' and product.publish_status == 'submitted'
+
+    @staticmethod
+    def _can_see_unlisted(user, product):
+        if not getattr(user, 'is_authenticated', False):
+            return False
+        if (
+            user.is_superuser or user.is_staff or user.is_admin or user.is_business_admin
+            or hasattr(user, 'business_admin_profile')
+        ):
+            return True
+        vendor = getattr(user, 'vendor_profile', None)
+        return vendor is not None and product.store_id == vendor.pk
 
 
 
@@ -758,7 +783,9 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
             if quantity < 1:
                 return Response(standardized_response(success=False, error="Quantity must be at least 1"), status=400)
             
-            product = get_object_or_404(Product, slug=slug)
+            product = get_object_or_404(
+                Product, slug=slug, approval_status='approved', publish_status='submitted'
+            )
             selected_variants = self._parse_selected_variants(request.data.get('selected_variants'))
             self._validate_selected_variants(product, selected_variants)
 
@@ -833,8 +860,11 @@ class AddToCartView(BaseAPIView, generics.CreateAPIView):
                     return Response(standardized_response(message="Item removed from cart"), status=200)
                 return Response(standardized_response(success=False, error="Item not in cart"), status=404)
 
-            # Create or update item when quantity > 0
+            # Create or update item when quantity > 0. Only a listed product can be newly
+            # added; an item already in the cart can still be changed or removed above.
             if not cart_item:
+                if not (product.approval_status == 'approved' and product.publish_status == 'submitted'):
+                    return Response(standardized_response(success=False, error="Product not found"), status=404)
                 cart_item = CartItem.objects.create(
                     cart=cart,
                     product=product,
@@ -930,7 +960,9 @@ class AddFavouriteView(BaseAPIView, generics.CreateAPIView):
         if not slug:
             return Response(standardized_response(success=False, error="Product slug is required"), status=400)
         
-        product = get_object_or_404(Product, slug=slug)
+        product = get_object_or_404(
+            Product, slug=slug, approval_status='approved', publish_status='submitted'
+        )
 
         fav, created = Favourite.objects.get_or_create(customer=request.user, product=product)
         if not created:
@@ -1245,7 +1277,7 @@ class PendingProductsListView(BaseAPIView, generics.ListAPIView):
 
     def get_queryset(self):
         """Get all products with optional filtering by approval status"""
-        return Product.objects.all().select_related('store', 'approved_by')
+        return exclude_closed_vendors(Product.objects.all()).select_related('store', 'approved_by')
 
     @extend_schema(
         responses={200: PendingProductsSerializer(many=True)}
@@ -1292,7 +1324,7 @@ class ApproveProductView(BaseAPIView):
 
     def post(self, request, slug):
         try:
-            product = Product.objects.get(slug=slug)
+            product = exclude_closed_vendors(Product.objects).get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -1342,7 +1374,7 @@ class RejectProductView(BaseAPIView):
 
     def post(self, request, slug):
         try:
-            product = Product.objects.get(slug=slug)
+            product = exclude_closed_vendors(Product.objects).get(slug=slug)
         except Product.DoesNotExist:
             return Response(
                 standardized_response(success=False, error="Product not found"),
@@ -1407,9 +1439,9 @@ class ApprovalStatsView(BaseAPIView):
 
     def get(self, request):
         stats = {
-            'pending': Product.objects.filter(approval_status='pending').count(),
-            'approved': Product.objects.filter(approval_status='approved').count(),
-            'rejected': Product.objects.filter(approval_status='rejected').count(),
+            'pending': exclude_closed_vendors(Product.objects).filter(approval_status='pending').count(),
+            'approved': exclude_closed_vendors(Product.objects).filter(approval_status='approved').count(),
+            'rejected': exclude_closed_vendors(Product.objects).filter(approval_status='rejected').count(),
         }
         stats['total'] = sum(stats.values())
 
@@ -2035,14 +2067,14 @@ class ProductStatsView(BaseAPIView):
     def get(self, request):
         """Get product statistics"""
         stats = {
-            'total_products': Product.objects.filter(
+            'total_products': exclude_closed_vendors(Product.objects).filter(
                 approval_status='approved',
                 publish_status='submitted'
             ).count(),
-            'approved_count': Product.objects.filter(approval_status='approved').count(),
-            'rejected_count': Product.objects.filter(approval_status='rejected').count(),
-            'pending_count': Product.objects.filter(approval_status='pending').count(),
-            'draft_count': Product.objects.filter(publish_status='draft').count(),
+            'approved_count': exclude_closed_vendors(Product.objects).filter(approval_status='approved').count(),
+            'rejected_count': exclude_closed_vendors(Product.objects).filter(approval_status='rejected').count(),
+            'pending_count': exclude_closed_vendors(Product.objects).filter(approval_status='pending').count(),
+            'draft_count': exclude_closed_vendors(Product.objects).filter(publish_status='draft').count(),
         }
         
         return Response(
@@ -2079,7 +2111,7 @@ class ProductFilteredView(BaseAPIView, generics.ListAPIView):
         Return products based on filters.
         Default shows only approved products.
         """
-        queryset = Product.objects.all()
+        queryset = exclude_closed_vendors(Product.objects.all())
         
         # Check if user is admin
         from authentication.core.permissions import IsAdmin
@@ -2146,13 +2178,13 @@ class ProductSummaryView(BaseAPIView):
     def get(self, request):
         """Get product summary statistics"""
         summary = {
-            'total': Product.objects.filter(
+            'total': exclude_closed_vendors(Product.objects).filter(
                 approval_status='approved',
                 publish_status='submitted'
             ).count(),
-            'approved': Product.objects.filter(approval_status='approved').count(),
-            'rejected': Product.objects.filter(approval_status='rejected').count(),
-            'pending': Product.objects.filter(approval_status='pending').count(),
+            'approved': exclude_closed_vendors(Product.objects).filter(approval_status='approved').count(),
+            'rejected': exclude_closed_vendors(Product.objects).filter(approval_status='rejected').count(),
+            'pending': exclude_closed_vendors(Product.objects).filter(approval_status='pending').count(),
         }
         
         return Response(

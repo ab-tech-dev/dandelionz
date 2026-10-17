@@ -445,3 +445,321 @@ class VendorStoreClosureTests(TestCase):
 
         product.refresh_from_db()
         self.assertEqual(product.publish_status, 'draft')
+
+
+class AccountClosureOrderGuardTests(TestCase):
+    """A closure must not strand money or fulfilment that is already in motion."""
+
+    def setUp(self):
+        from users.models import Customer
+
+        self.user = User.objects.create_user(
+            email='buyer@test.com', password='test123', full_name='Buyer',
+        )
+        Customer.objects.get_or_create(user=self.user)
+        Wallet.objects.get_or_create(user=self.user)
+
+    def _order(self, status):
+        from transactions.models import Order
+
+        return Order.objects.create(customer=self.user, status=status)
+
+    def test_paid_undelivered_order_blocks_closure(self):
+        from transactions.models import Order
+
+        self._order(Order.Status.PAID)
+        allowed, blocker = check_can_close(self.user)
+
+        self.assertFalse(allowed)
+        self.assertEqual(blocker['reason'], 'open_order')
+        self.assertIn('Cancel it', blocker['message'])
+
+    def test_shipped_order_blocks_closure(self):
+        from transactions.models import Order
+
+        self._order(Order.Status.SHIPPED)
+        allowed, blocker = check_can_close(self.user)
+
+        self.assertFalse(allowed)
+        self.assertEqual(blocker['reason'], 'open_order')
+        self.assertIn('on its way', blocker['message'])
+
+    def test_unpaid_order_does_not_block_and_is_cancelled_on_closure(self):
+        from transactions.models import Order, OrderStatusHistory, Payment
+
+        order = self._order(Order.Status.PENDING)
+        payment = Payment.objects.create(order=order, amount=Decimal('100.00'))
+
+        allowed, _ = check_can_close(self.user)
+        self.assertTrue(allowed)
+
+        close_account(self.user)
+
+        order.refresh_from_db()
+        payment.refresh_from_db()
+        self.assertEqual(order.status, Order.Status.CANCELED)
+        self.assertEqual(payment.status, 'CANCELLED')
+        self.assertTrue(
+            OrderStatusHistory.objects.filter(order=order, status=Order.Status.CANCELED).exists()
+        )
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_paid_order_is_left_alone_when_closure_is_refused(self):
+        from transactions.models import Order
+        from users.services.account_closure import AccountClosureBlocked
+
+        pending = self._order(Order.Status.PENDING)
+        self._order(Order.Status.PAID)
+
+        with self.assertRaises(AccountClosureBlocked):
+            close_account(self.user)
+
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, Order.Status.PENDING)
+
+    def test_pending_refund_blocks_closure(self):
+        from transactions.models import Order, Payment, Refund
+
+        order = self._order(Order.Status.CANCELED)
+        payment = Payment.objects.create(order=order, amount=Decimal('100.00'), verified=True)
+        Refund.objects.create(payment=payment, refunded_amount=Decimal('100.00'))
+
+        allowed, blocker = check_can_close(self.user)
+
+        self.assertFalse(allowed)
+        self.assertEqual(blocker['reason'], 'pending_refund')
+
+    def test_processed_refund_does_not_block_closure(self):
+        from transactions.models import Order, Payment, Refund
+
+        order = self._order(Order.Status.CANCELED)
+        payment = Payment.objects.create(order=order, amount=Decimal('100.00'), verified=True)
+        Refund.objects.create(
+            payment=payment, refunded_amount=Decimal('100.00'), status=Refund.Status.APPROVED,
+        )
+
+        allowed, _ = check_can_close(self.user)
+
+        self.assertTrue(allowed)
+
+    def test_card_refund_in_flight_blocks_closure(self):
+        from transactions.models import Order, OrderPaymentRefund, Payment
+
+        order = self._order(Order.Status.CANCELED)
+        payment = Payment.objects.create(order=order, amount=Decimal('100.00'), verified=True)
+        OrderPaymentRefund.objects.create(
+            payment=payment, order=order, reference='ref-1', amount=Decimal('100.00'),
+            status=OrderPaymentRefund.Status.PROCESSING,
+        )
+
+        allowed, blocker = check_can_close(self.user)
+
+        self.assertFalse(allowed)
+        self.assertEqual(blocker['reason'], 'pending_refund')
+
+    def test_delivered_and_cancelled_orders_do_not_block(self):
+        from transactions.models import Order
+
+        self._order(Order.Status.DELIVERED)
+        self._order(Order.Status.CANCELED)
+        allowed, _ = check_can_close(self.user)
+
+        self.assertTrue(allowed)
+
+    def test_close_account_refuses_with_an_open_order_and_leaves_the_account_alone(self):
+        from transactions.models import Order
+
+        self._order(Order.Status.PAID)
+        from users.services.account_closure import AccountClosureBlocked
+
+        with self.assertRaises(AccountClosureBlocked):
+            close_account(self.user)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertEqual(self.user.email, 'buyer@test.com')
+
+    def test_blocked_error_body_carries_the_keys_the_clients_read(self):
+        from users.services.account_closure import AccountClosureBlocked
+
+        err = AccountClosureBlocked({'reason': 'open_order', 'message': 'Wait.', 'amount': None})
+
+        self.assertEqual(err.status_code, 400)
+        for key in ('error', 'message', 'detail', 'reason'):
+            self.assertEqual(str(err.detail[key]), 'Wait.' if key != 'reason' else 'open_order')
+        self.assertNotIn('amount', err.detail)
+
+
+class VendorClosureTests(TestCase):
+    """What a vendor closing leaves behind for admins and customers."""
+
+    def setUp(self):
+        from store.models import Product
+        from users.models import Customer, Vendor
+
+        self.vendor_user = User.objects.create_user(
+            email='shop@test.com', password='test123', full_name='Shop',
+        )
+        Wallet.objects.get_or_create(user=self.vendor_user)
+        self.vendor, _ = Vendor.objects.get_or_create(user=self.vendor_user)
+        self.product = Product.objects.create(
+            store=self.vendor, name='Lamp', slug='lamp', price=Decimal('5000.00'), stock=5,
+            publish_status='submitted', approval_status='approved',
+        )
+        self.buyer = User.objects.create_user(
+            email='shopper@test.com', password='test123', full_name='Shopper',
+        )
+        Customer.objects.get_or_create(user=self.buyer)
+
+    def test_paid_order_for_the_vendors_product_blocks_closure(self):
+        from transactions.models import Order, OrderItem
+
+        order = Order.objects.create(customer=self.buyer, status=Order.Status.PAID)
+        OrderItem.objects.create(order=order, product=self.product, quantity=1)
+
+        allowed, blocker = check_can_close(self.vendor_user)
+
+        self.assertFalse(allowed)
+        self.assertEqual(blocker['reason'], 'vendor_open_order')
+
+    def test_delivered_order_does_not_block_closure(self):
+        from transactions.models import Order, OrderItem
+
+        order = Order.objects.create(customer=self.buyer, status=Order.Status.DELIVERED)
+        OrderItem.objects.create(order=order, product=self.product, quantity=1)
+
+        allowed, _ = check_can_close(self.vendor_user)
+
+        self.assertTrue(allowed)
+
+    def test_closing_removes_the_product_from_carts_and_favourites(self):
+        from store.models import Cart, CartItem, Favourite
+
+        cart, _ = Cart.objects.get_or_create(customer=self.buyer)
+        CartItem.objects.create(cart=cart, product=self.product, quantity=1)
+        Favourite.objects.create(customer=self.buyer, product=self.product)
+
+        close_account(self.vendor_user)
+
+        self.assertFalse(CartItem.objects.filter(product=self.product).exists())
+        self.assertFalse(Favourite.objects.filter(product=self.product).exists())
+
+    def test_closed_vendors_products_are_hidden_from_the_admin_queryset(self):
+        from store.models import Product
+        from users.services.account_closure import exclude_closed_vendors
+
+        close_account(self.vendor_user)
+
+        self.assertEqual(Product.objects.filter(slug='lamp').count(), 1)
+        self.assertFalse(exclude_closed_vendors(Product.objects.all()).filter(slug='lamp').exists())
+
+    def test_suspended_vendors_products_stay_visible_to_admins(self):
+        from store.models import Product
+        from users.services.account_closure import exclude_closed_vendors
+
+        self.vendor_user.is_active = False
+        self.vendor_user.save(update_fields=['is_active'])
+
+        self.assertTrue(exclude_closed_vendors(Product.objects.all()).filter(slug='lamp').exists())
+
+    def test_admin_cannot_approve_a_closed_vendors_product(self):
+        close_account(self.vendor_user)
+        admin = User.objects.create_user(
+            email='root@test.com', password='test123', full_name='Root', role='ADMIN',
+            is_staff=True, is_superuser=True,
+        )
+
+        from store.views import ApproveProductView
+
+        view = ApproveProductView.as_view()
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        request = APIRequestFactory().post('/x/', {}, format='json')
+        force_authenticate(request, user=admin)
+        response = view(request, slug='lamp')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_public_detail_and_cart_refuse_a_draft_product(self):
+        from store.models import Product
+        from store.views import AddToCartView, ProductDetailView
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        Product.objects.filter(pk=self.product.pk).update(publish_status='draft')
+        factory = APIRequestFactory()
+
+        detail = ProductDetailView.as_view()(factory.get('/x/'), slug='lamp')
+        self.assertEqual(detail.status_code, 404)
+
+        request = factory.post('/x/', {'slug': 'lamp', 'quantity': 1}, format='json')
+        force_authenticate(request, user=self.buyer)
+        added = AddToCartView.as_view()(request)
+        self.assertIn(added.status_code, (400, 404))
+        from store.models import CartItem
+        self.assertFalse(CartItem.objects.filter(product=self.product).exists())
+
+    def test_vendor_can_still_open_their_own_draft(self):
+        from store.models import Product
+        from store.views import ProductDetailView
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        Product.objects.filter(pk=self.product.pk).update(publish_status='draft')
+        request = APIRequestFactory().get('/x/')
+        force_authenticate(request, user=self.vendor_user)
+
+        response = ProductDetailView.as_view()(request, slug='lamp')
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_logged_in_customer_cannot_open_a_draft_product(self):
+        from store.models import Product
+        from store.views import ProductDetailView
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        Product.objects.filter(pk=self.product.pk).update(publish_status='draft')
+        request = APIRequestFactory().get('/x/')
+        force_authenticate(request, user=self.buyer)
+
+        self.assertEqual(ProductDetailView.as_view()(request, slug='lamp').status_code, 404)
+
+    def test_another_vendor_cannot_open_this_vendors_draft(self):
+        from store.models import Product
+        from store.views import ProductDetailView
+        from rest_framework.test import APIRequestFactory, force_authenticate
+        from users.models import Vendor
+
+        Product.objects.filter(pk=self.product.pk).update(publish_status='draft')
+        other = User.objects.create_user(
+            email='rival@test.com', password='test123', full_name='Rival', role='VENDOR',
+        )
+        Vendor.objects.get_or_create(user=other)
+        request = APIRequestFactory().get('/x/')
+        force_authenticate(request, user=other)
+
+        self.assertEqual(ProductDetailView.as_view()(request, slug='lamp').status_code, 404)
+
+    def test_admin_and_business_admin_can_open_a_pending_product(self):
+        from store.models import Product
+        from store.views import ProductDetailView
+        from rest_framework.test import APIRequestFactory, force_authenticate
+
+        Product.objects.filter(pk=self.product.pk).update(
+            publish_status='submitted', approval_status='pending',
+        )
+        for role in ('ADMIN', 'BUSINESS_ADMIN'):
+            staff = User.objects.create_user(
+                email=f'{role.lower()}@test.com', password='test123', full_name=role, role=role,
+            )
+            request = APIRequestFactory().get('/x/')
+            force_authenticate(request, user=staff)
+            self.assertEqual(
+                ProductDetailView.as_view()(request, slug='lamp').status_code, 200, role,
+            )
+
+    def test_listed_product_is_visible_to_everyone(self):
+        from store.views import ProductDetailView
+        from rest_framework.test import APIRequestFactory
+
+        response = ProductDetailView.as_view()(APIRequestFactory().get('/x/'), slug='lamp')
+
+        self.assertEqual(response.status_code, 200)
