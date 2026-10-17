@@ -2879,7 +2879,10 @@ class AdminMarketplaceViewSet(AdminBaseViewSet):
 
         from rest_framework.pagination import PageNumberPagination
 
-        queryset = Product.objects.select_related("store").all().order_by('-created_at')
+        from users.services.account_closure import exclude_closed_vendors
+        queryset = exclude_closed_vendors(
+            Product.objects.select_related("store").all()
+        ).order_by('-created_at')
 
         # `status` as the frontend/serializer knows it (APPROVED/REJECTED/
         # PENDING/DRAFT) isn't a real column - AdminProductListSerializer's

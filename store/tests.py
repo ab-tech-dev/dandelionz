@@ -18,8 +18,18 @@ class AddToCartPatchTests(APITestCase):
             user=self.vendor_user,
             defaults={'store_name': 'Test Shop', 'is_verified_vendor': True},
         )[0]
-        self.product = Product.objects.create(store=self.vendor, name='Test Product', price='10.00', stock=100)
+        # Cart endpoints only accept listed products, so the fixture has to be one.
+        self.product = Product.objects.create(
+            store=self.vendor, name='Test Product', price='10.00', stock=100,
+            approval_status='approved', publish_status='submitted',
+        )
         self.client.force_authenticate(user=self.customer)
+
+    def test_patch_refuses_to_add_an_unlisted_product(self):
+        Product.objects.filter(pk=self.product.pk).update(publish_status='draft')
+        resp = self.client.patch('/store/cart/add/', {'slug': self.product.slug, 'quantity': 1}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(CartItem.objects.filter(product=self.product).exists())
 
     def test_patch_creates_item_when_not_exists(self):
         resp = self.client.patch('/store/cart/add/', {'slug': self.product.slug, 'quantity': 3}, format='json')
