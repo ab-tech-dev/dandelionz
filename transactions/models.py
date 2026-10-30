@@ -617,6 +617,11 @@ class Payment(models.Model):
         self.order.save(update_fields=['payment_status', 'status'])
         self.save(update_fields=['status', 'verified', 'paid_at'])
 
+        # Record the card leg in the finance ledger. A fully wallet-funded order has a zero
+        # card leg and writes nothing. Best-effort and idempotent: it can never fail a payment.
+        from transactions import external_ledger
+        external_ledger.record_order_card_payment(self)
+
         # Trigger stakeholder notification task (async) - notifies vendors AND admins.
         # Dispatched via on_commit so the worker cannot pick the order up before this
         # transaction commits: the verify and webhook paths call this inside an atomic
@@ -1155,6 +1160,12 @@ class LedgerEntry(models.Model):
     class Bucket(models.TextChoices):
         SPENDABLE = 'SPENDABLE', 'Spendable'
         WITHDRAWABLE = 'WITHDRAWABLE', 'Withdrawable'
+        # Not a wallet bucket. Marks money that crossed Paystack without ever entering a
+        # wallet (a card order payment, a card installment, a card refund). Such rows are
+        # attached to the payer's wallet only so they have an owner to show; they never
+        # change a balance, are excluded from wallet reconciliation, and carry
+        # balance_after=0.00. See transactions/external_ledger.py.
+        EXTERNAL = 'EXTERNAL', 'External (card)'
 
     class EntryType(models.TextChoices):
         OPENING_BALANCE = 'OPENING_BALANCE', 'Opening Balance'
@@ -1172,6 +1183,11 @@ class LedgerEntry(models.Model):
         WITHDRAWAL_REVERSAL = 'WITHDRAWAL_REVERSAL', 'Withdrawal Reversal'
         DISPUTE_CREDIT = 'DISPUTE_CREDIT', 'Dispute Refund'
         DISPUTE_DEBIT = 'DISPUTE_DEBIT', 'Dispute Reversal'
+        # Card money that never touched a wallet (bucket EXTERNAL).
+        CARD_ORDER_PAYMENT = 'CARD_ORDER_PAYMENT', 'Card Order Payment'
+        CARD_INSTALLMENT_PAYMENT = 'CARD_INSTALLMENT_PAYMENT', 'Card Installment Payment'
+        CARD_DELIVERY_FEE = 'CARD_DELIVERY_FEE', 'Card Delivery Fee'
+        CARD_REFUND = 'CARD_REFUND', 'Card Refund'
         ADJUSTMENT = 'ADJUSTMENT', 'Manual Adjustment'
         OTHER = 'OTHER', 'Other'
 
@@ -1539,6 +1555,18 @@ class WalletDeposit(models.Model):
             self.save(update_fields=[
                 'status', 'verified', 'paid_at', 'paystack_transaction_id', 'updated_at',
             ])
+
+        from transactions import admin_alerts
+        admin_alerts.alert_admins(
+            title="Wallet top-up received",
+            message=(
+                f"{admin_alerts.naira(self.amount)} added to the wallet of "
+                f"{self.user.email}. Ref {self.reference}."
+            ),
+            dedupe_key=f"deposit-{self.reference}",
+            kind='deposit', amount=str(self.amount), reference=self.reference,
+            customer_email=self.user.email,
+        )
         return True
 
     def mark_as_failed(self, reason=''):
@@ -1642,6 +1670,18 @@ class DepositRefund(models.Model):
         self.save(update_fields=[
             'status', 'settled_at', 'paystack_refund_id', 'updated_at',
         ])
+
+        from transactions import admin_alerts
+        admin_alerts.alert_admins(
+            title="Deposit refund processed",
+            message=(
+                f"{admin_alerts.naira(self.amount)} returned to the card of "
+                f"{self.user.email}. Ref {self.reference}."
+            ),
+            dedupe_key=f"deposit-refund-{self.reference}",
+            kind='refund', amount=str(self.amount), reference=self.reference,
+            customer_email=self.user.email,
+        )
         return True
 
     def mark_as_failed(self, reason=''):
@@ -1744,6 +1784,23 @@ class OrderPaymentRefund(models.Model):
         if paystack_refund_id:
             self.paystack_refund_id = str(paystack_refund_id)
         self.save(update_fields=['status', 'settled_at', 'paystack_refund_id', 'updated_at'])
+
+        # The card leg came in and has now gone back out: record both sides in the finance
+        # ledger (the inbound side was never recorded because settlement was refused).
+        from transactions import admin_alerts, external_ledger
+        external_ledger.record_order_payment_refund(self)
+
+        customer = (self.order or self.payment.order).customer
+        admin_alerts.alert_admins(
+            title="Card refund processed",
+            message=(
+                f"{admin_alerts.naira(self.amount)} returned to the card of {customer.email} "
+                f"({self.reason or 'order could not be completed'}). Ref {self.reference}."
+            ),
+            dedupe_key=f"order-refund-{self.reference}",
+            kind='refund', amount=str(self.amount), reference=self.reference,
+            customer_email=customer.email,
+        )
         return True
 
     def mark_as_failed(self, reason=''):

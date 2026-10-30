@@ -155,6 +155,24 @@ def _settle_locked(charge):
     charge.save(update_fields=['status', 'verified', 'paid_at', 'paystack_transaction_id', 'updated_at'])
     plan = InstallmentPlan.objects.select_for_update().get(pk=charge.plan_id)
     plan.apply_payment(charge.amount)
+    # A card payment moves no wallet, so record it in the finance ledger separately. Wallet
+    # payments already wrote their own ledger row when the wallet was debited.
+    if charge.method == InstallmentCharge.Method.CARD:
+        from transactions import external_ledger
+        external_ledger.record_installment_card_payment(charge)
+
+    from transactions import admin_alerts
+    order = plan.order
+    admin_alerts.alert_admins(
+        title="Installment payment received",
+        message=(
+            f"{admin_alerts.naira(charge.amount)} by {charge.method.lower()} from "
+            f"{order.customer.email} toward order {order.order_id}. Ref {charge.reference}."
+        ),
+        dedupe_key=f"installment-{charge.reference}",
+        kind='installment', amount=str(charge.amount), reference=charge.reference,
+        customer_email=order.customer.email, order_id=str(order.order_id),
+    )
 
 
 def settle_installment_charge(charge, paystack_transaction_id=''):
@@ -194,6 +212,27 @@ def _refund_stranded_installment(charge, paystack_data, reason):
     charge.paystack_refund_id = str((resp.get('data') or {}).get('id') or '')
     charge.save(update_fields=['status', 'paystack_refund_id', 'updated_at'])
     logger.info(f"Refunded stranded installment payment {charge.reference} ({amount}) to source")
+
+    from transactions import external_ledger
+    external_ledger.record_stranded_card_return(
+        user=charge.plan.order.customer, order=charge.plan.order,
+        entry_type=LedgerEntry.EntryType.CARD_INSTALLMENT_PAYMENT,
+        reference=charge.reference, amount=amount, label='installment',
+    )
+
+    from transactions import admin_alerts
+    admin_alerts.alert_admins(
+        title="Payment returned to card",
+        message=(
+            f"{admin_alerts.naira(amount)} installment payment from "
+            f"{charge.plan.order.customer.email} could not be applied ({reason}) and was "
+            f"refunded to their card. Ref {charge.reference}."
+        ),
+        dedupe_key=f"stranded-installment-{charge.reference}",
+        kind='refund', amount=str(amount), reference=charge.reference,
+        customer_email=charge.plan.order.customer.email,
+        order_id=str(charge.plan.order.order_id),
+    )
     return charge
 
 

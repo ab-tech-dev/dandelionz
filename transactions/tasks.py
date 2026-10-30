@@ -380,6 +380,30 @@ def notify_stakeholders_order_paid(self, order_id):
         raise
 
 
+@shared_task(name="transactions.send_admin_payment_alert", ignore_result=True)
+def send_admin_payment_alert(title, message, dedupe_key=None, **metadata):
+    """
+    Push + in-app alert to every admin about a payment or refund. See transactions/admin_alerts.py.
+
+    Email is off: admins already get Paystack's receipts, and one email per payment would bury
+    the ones that matter.
+    """
+    from transactions.admin_alerts import claim_send
+    if dedupe_key and not claim_send(dedupe_key):
+        return  # this payment's alert already went out
+    try:
+        notify_admin(
+            title,
+            message,
+            send_email=False,
+            send_websocket=True,
+            send_push=True,
+            **metadata,
+        )
+    except Exception as e:
+        logger.error(f"[send_admin_payment_alert] Failed to alert admins: {e}", exc_info=True)
+
+
 @shared_task(
     bind=True,
     name="transactions.check_installment_payments_due"
