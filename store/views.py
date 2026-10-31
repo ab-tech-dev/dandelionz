@@ -596,7 +596,18 @@ class PatchProductView(BaseAPIView, generics.UpdateAPIView):
         user = self.request.user
         from users.services.profile_resolver import ProfileResolver
         
-        if user.is_staff or user.is_superuser:
+        # Every admin role may edit any product. This is the same rule ProductDeleteView, the
+        # product view and the submit endpoint already use. Checking only is_staff and
+        # is_superuser locked out BUSINESS_ADMIN accounts, the role both admin dashboards are
+        # built for, even on products they had created themselves.
+        is_admin_user = bool(
+            user.is_staff
+            or user.is_superuser
+            or user.is_admin
+            or user.is_business_admin
+            or hasattr(user, 'business_admin_profile')
+        )
+        if is_admin_user:
             return product
         elif user.is_vendor:
             vendor = ProfileResolver.resolve_vendor(user)
