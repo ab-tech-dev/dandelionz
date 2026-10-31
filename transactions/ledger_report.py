@@ -220,11 +220,26 @@ def summarise(qs):
         .order_by('bucket', 'direction')
     )
 
+    # Card money that bypassed every wallet (bucket EXTERNAL): real Paystack payments in and
+    # refunds out. These rows are ALSO included in total_credits / total_debits above, which
+    # count every ledger row; this block isolates just the non-wallet part of them.
+    external = qs.filter(bucket=LedgerEntry.Bucket.EXTERNAL).aggregate(
+        credits=Sum('amount', filter=Q(direction=LedgerEntry.Direction.CREDIT)),
+        debits=Sum('amount', filter=Q(direction=LedgerEntry.Direction.DEBIT)),
+        count=Count('id'),
+    )
+    external_in = money(external['credits'] or Decimal('0.00'))
+    external_out = money(external['debits'] or Decimal('0.00'))
+
     return {
         'count': totals['count'] or 0,
         'total_credits': str(credits),
         'total_debits': str(debits),
         'net': str(money(credits - debits)),
+        'external_in': str(external_in),
+        'external_out': str(external_out),
+        'external_net': str(money(external_in - external_out)),
+        'external_count': external['count'] or 0,
         'by_type': [
             {
                 'entry_type': row['entry_type'],
@@ -258,7 +273,8 @@ def _row_values(entry):
         'bucket': entry.bucket,
         'amount': entry.amount,
         'signed_amount': signed,
-        'balance_after': entry.balance_after,
+        # A wallet balance is meaningless for card money that never entered a wallet.
+        'balance_after': '' if entry.bucket == LedgerEntry.Bucket.EXTERNAL else entry.balance_after,
         'reference': entry.reference or '',
         'description': entry.description or '',
         'order_id': str(entry.order.order_id) if entry.order_id else '',
@@ -337,7 +353,7 @@ def export_xlsx(qs, filename, limit=100000):
             break
         values = _row_values(entry)
         sheet.append([
-            float(values[key]) if key in numeric else values[key]
+            float(values[key]) if key in numeric and values[key] != '' else values[key]
             for key, _ in EXPORT_COLUMNS
         ])
 

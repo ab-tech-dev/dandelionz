@@ -43,6 +43,12 @@ def all_ledger_totals():
         LedgerEntry.Bucket.WITHDRAWABLE: Decimal('0.00'),
     })
     for row in rows:
+        # EXTERNAL rows record card money that never entered a wallet (see
+        # transactions/external_ledger.py). They have no cached balance to compare against.
+        if row['bucket'] not in (
+            LedgerEntry.Bucket.SPENDABLE, LedgerEntry.Bucket.WITHDRAWABLE
+        ):
+            continue
         amount = row['total'] or Decimal('0.00')
         if row['direction'] == LedgerEntry.Direction.DEBIT:
             amount = -amount

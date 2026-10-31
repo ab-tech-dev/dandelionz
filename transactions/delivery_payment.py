@@ -19,7 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from transactions import references, wallet_checkout
-from transactions.models import DeliveryCharge, Order, WalletHold, money
+from transactions.models import DeliveryCharge, LedgerEntry, Order, WalletHold, money
 from transactions.paystack import Paystack
 
 logger = logging.getLogger(__name__)
@@ -190,6 +190,24 @@ def settle_delivery_charge(charge, paystack_transaction_id=''):
         order.delivery_fee_paid = True
         order.save(update_fields=['delivery_fee_paid', 'updated_at'])
 
+        # The card leg moves no wallet, so it is recorded in the finance ledger separately
+        # (the wallet leg already wrote a wallet row). A wallet-only fee has no card leg.
+        from transactions import external_ledger
+        external_ledger.record_delivery_card_payment(charge)
+
+        from transactions import admin_alerts
+        admin_alerts.alert_admins(
+            title="Delivery fee paid",
+            message=(
+                f"{admin_alerts.naira(charge.amount)} delivery fee from {order.customer.email} "
+                f"for order {order.order_id} (card {admin_alerts.naira(charge.card_amount)}, "
+                f"wallet {admin_alerts.naira(charge.wallet_amount)}). Ref {charge.reference}."
+            ),
+            dedupe_key=f"delivery-{charge.reference}",
+            kind='delivery_fee', amount=str(charge.amount), reference=charge.reference,
+            customer_email=order.customer.email, order_id=str(order.order_id),
+        )
+
     logger.info(f"Delivery fee settled for order {order.order_id} ({charge.reference})")
     try:
         from users.notification_helpers import send_order_notification
@@ -238,6 +256,26 @@ def _refund_stranded_delivery(charge, paystack_data, reason):
     charge.paystack_refund_id = str((resp.get('data') or {}).get('id') or '')
     charge.save(update_fields=['status', 'paystack_refund_id', 'updated_at'])
     logger.info(f"Refunded stranded delivery payment {charge.reference} ({amount}) to source")
+
+    from transactions import external_ledger
+    external_ledger.record_stranded_card_return(
+        user=charge.order.customer, order=charge.order,
+        entry_type=LedgerEntry.EntryType.CARD_DELIVERY_FEE,
+        reference=charge.reference, amount=amount, label='delivery fee',
+    )
+
+    from transactions import admin_alerts
+    admin_alerts.alert_admins(
+        title="Payment returned to card",
+        message=(
+            f"{admin_alerts.naira(amount)} delivery fee payment from {charge.order.customer.email} "
+            f"could not be applied ({reason}) and was refunded to their card. "
+            f"Ref {charge.reference}."
+        ),
+        dedupe_key=f"stranded-delivery-{charge.reference}",
+        kind='refund', amount=str(amount), reference=charge.reference,
+        customer_email=charge.order.customer.email, order_id=str(charge.order.order_id),
+    )
     return charge
 
 

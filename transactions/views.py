@@ -2113,9 +2113,29 @@ No authentication required (webhook signature validation instead)""",
             return Response({"status": "ok"})
 
         if kind == references.INSTALLMENT:
-            # Installments have a dedicated webhook endpoint with its own verification.
-            logger.info(f"Installment reference {reference} received on the order webhook")
-            return Response({"status": "ok", "detail": "installment handled elsewhere"})
+            # Paystack allows one webhook URL per mode, so installment charge events arrive
+            # here, not on installment-webhook/. Re-verify against Paystack, then settle: the
+            # webhook is the backstop for a customer who closes the page before verify runs.
+            # settle_installment_webhook is idempotent, so racing the verify endpoint is safe.
+            try:
+                verify = Paystack().verify_payment(reference)
+            except Exception as e:
+                logger.error(f"Installment webhook verify failed for {reference}: {e}", exc_info=True)
+                return Response({"status": "ok", "detail": "verification deferred"})
+
+            pdata = verify.get("data", {})
+            if pdata.get("status") != "success":
+                return Response({"status": "ok", "detail": "installment payment not successful"})
+            if pdata.get("currency") and pdata.get("currency") != EXPECTED_CURRENCY:
+                return Response({"status": "ok", "detail": "unexpected currency"})
+
+            from transactions import installment_payment as inst_pay
+            handled, detail = inst_pay.settle_installment_webhook(pdata)
+            if not handled:
+                logger.warning(f"Installment charge {reference} not settled at webhook: {detail}")
+                return Response({"status": "ok", "detail": detail or "installment not settled"})
+            logger.info(f"Installment charge {reference} settled via webhook")
+            return Response({"status": "ok"})
 
         if kind == references.DELIVERY:
             # An order's delivery-fee card leg. Re-verify against Paystack, then settle - the
