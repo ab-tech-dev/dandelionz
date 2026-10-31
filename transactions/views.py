@@ -1607,6 +1607,11 @@ If all installments are paid, automatically credits vendor wallets.""",
 class InstallmentWebhookView(APIView):
     """Handle Paystack webhook for installment payments"""
     permission_classes = []
+    # Paystack calls this from three fixed IPs, so the default anonymous throttle (100 requests
+    # an hour per IP) would answer 429 once live traffic passes a few hundred events an hour.
+    # Paystack retries, but payments would confirm late. The HMAC signature authenticates
+    # every request here instead.
+    throttle_classes = []
 
     @swagger_auto_schema(
         operation_id="webhook_installment_payment",
@@ -1905,6 +1910,11 @@ Use the 'reference' or 'trxref' query parameter.""",
 @method_decorator(csrf_exempt, name="dispatch")
 class PaystackWebhookView(APIView):
     permission_classes = []
+    # Paystack calls this from three fixed IPs, so the default anonymous throttle (100 requests
+    # an hour per IP) would answer 429 once live traffic passes a few hundred events an hour.
+    # Paystack retries, but payments would confirm late. The HMAC signature authenticates
+    # every request here instead.
+    throttle_classes = []
 
     @swagger_auto_schema(
         operation_id="webhook_payment",
